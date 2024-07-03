@@ -744,11 +744,13 @@ long gh_vm_init(const char *fw_name, struct gh_vm *vm)
 	long ret = -EINVAL;
 	int nr_vcpus = 0;
 
-	ret = ghd_rm_vm_init(vm->vmid);
-	if (ret) {
-		pr_err("VM_INIT_IMAGE failed for VM:%d %ld\n",
-						vm->vmid, ret);
-		return ret;
+	if (!gh_firmware_is_legacy()) {
+		ret = ghd_rm_vm_init(vm->vmid);
+		if (ret) {
+			pr_err("VM_INIT_IMAGE failed for VM:%d %ld\n",
+							vm->vmid, ret);
+			return ret;
+		}
 	}
 
 	gh_wait_for_vm_status(vm, GH_RM_VM_STATUS_READY);
