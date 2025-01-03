@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-//Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries. */
 
 #ifndef MHI_SM_H
 #define MHI_SM_H
@@ -36,7 +36,6 @@ int mhi_dev_sm_init(struct mhi_dev *dev);
 int mhi_dev_sm_exit(struct mhi_dev *dev);
 int mhi_dev_sm_set_ready(struct mhi_dev *mhi);
 int mhi_dev_notify_sm_event(struct mhi_dev *mhi, enum mhi_dev_event event);
-int mhi_dev_sm_get_mhi_state(struct mhi_dev *mhi, enum mhi_dev_state *state);
 int mhi_dev_sm_syserr(void);
 void mhi_dev_sm_pcie_handler(struct ep_pcie_notify *notify);
 void mhi_dev_virt_linkup_event(struct mhi_dev_ctx *mhictx, int vf_id);
