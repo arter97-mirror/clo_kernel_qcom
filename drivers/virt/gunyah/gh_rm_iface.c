@@ -1220,6 +1220,33 @@ int gh_rm_vm_auth_image(gh_vmid_t vmid, ssize_t n_entries,
 }
 EXPORT_SYMBOL_GPL(gh_rm_vm_auth_image);
 
+/*
+ * gh_firmware_is_legacy: Determine whether the kernel is running
+ * on latest or legacy gunyah.
+ */
+
+bool gh_firmware_is_legacy(void)
+{
+	int ret;
+	static bool gh_legacy_firmware, gh_detected_firmware;
+	static DEFINE_MUTEX(gh_firmware_detection_mutex);
+
+	mutex_lock(&gh_firmware_detection_mutex);
+	if (!gh_detected_firmware) {
+		ret = gh_rm_vm_auth_image(VMID_HLOS, 0, NULL);
+		pr_err("Ignore previous errors about failed auth call\n");
+		gh_legacy_firmware = (ret == -EOPNOTSUPP);
+		gh_detected_firmware = true;
+
+		if (gh_legacy_firmware)
+			pr_info("Detected legacy gunyah\n");
+	}
+	mutex_unlock(&gh_firmware_detection_mutex);
+
+	return gh_legacy_firmware;
+}
+EXPORT_SYMBOL_GPL(gh_firmware_is_legacy);
+
 /**
  * ghd_rm_vm_init: Request to allocate resources of the VM
  * @vmid: The vmid of VM to initialize.
@@ -1930,6 +1957,14 @@ static u8 gh_rm_mem_accept_sanitize_policy(u8 mem_type,
 	int i;
 	gh_vmid_t this_vmid;
 
+	/*
+	 * On legacy targets sanitize policy is not supported.
+	 * Also on certain hypervisors, GH_RM_RPC_MSG_ID_CALL_VM_GET_VMID call loops
+	 * indefinetly instead of returning an error.
+	 */
+	if (gh_firmware_is_legacy())
+		return 0;
+
 	if (flags & GH_RM_MEM_ACCEPT_NO_SANITIZE_ON_RELEASE)
 		return 0;
 
@@ -2001,7 +2036,11 @@ gh_rm_mem_accept_prepare_request(gh_memparcel_handle_t handle, u8 mem_type,
 	req_payload_hdr->memparcel_handle = handle;
 	req_payload_hdr->mem_type = mem_type;
 	req_payload_hdr->trans_type = trans_type;
-	req_payload_hdr->flags = flags & GH_RM_MEM_ACCEPT_VALID_GH_FLAGS;
+	if (gh_firmware_is_legacy())
+		req_payload_hdr->flags = flags;
+	else
+		req_payload_hdr->flags = flags & GH_RM_MEM_ACCEPT_VALID_GH_FLAGS;
+
 	req_payload_hdr->flags |= gh_rm_mem_accept_sanitize_policy(mem_type,
 						trans_type, flags, acl_desc);
 	if (flags & GH_RM_MEM_ACCEPT_VALIDATE_LABEL)
@@ -2071,6 +2110,9 @@ struct gh_sgl_desc *gh_rm_mem_accept(gh_memparcel_handle_t handle, u8 mem_type,
 						map_vmid, &req_payload_size);
 	if (IS_ERR(req_payload))
 		return ERR_CAST(req_payload);
+
+	if (gh_firmware_is_legacy())
+		flags |= GH_RM_MEM_ACCEPT_MAP_IPA_CONTIGUOUS;
 
 	/* Send DONE flag only after all sgl_desc fragments are received */
 	if (flags & GH_RM_MEM_ACCEPT_MAP_IPA_CONTIGUOUS || sgl_desc) {
@@ -2424,6 +2466,13 @@ int gh_rm_mem_donate(u8 mem_type, u8 flags, gh_label_t label,
 
 	trace_gh_rm_mem_donate(mem_type, flags, label, acl_desc, sgl_desc,
 			       mem_attr_desc, handle, 0, DONATE);
+
+	if (gh_firmware_is_legacy()) {
+		if (sgl_desc->n_sgl_entries != 1) {
+			pr_err("%s: Physically contiguous memory required\n", __func__);
+			return -EINVAL;
+		}
+	}
 
 	if (acl_desc->n_acl_entries != 1) {
 		pr_err("%s: Donate requires single destination VM\n", __func__);
@@ -2940,17 +2989,6 @@ int gh_rm_vm_set_debug(gh_vmid_t vmid)
 }
 EXPORT_SYMBOL_GPL(gh_rm_vm_set_debug);
 
-#ifdef CONFIG_GUNYAH_LEGACY
-/*
- * On certain hypervisors, GH_RM_RPC_MSG_ID_CALL_VM_GET_VMID call loops
- * indefinetly instead of returning an error.
- */
-static int __gh_rm_setup_feature_scm_assign(void)
-{
-	gh_feature_use_scm_assign = true;
-	return 0;
-}
-#else
 static struct notifier_block gh_rm_scm_assign_nb;
 static struct notifier_block gh_rm_hyp_assign_nb;
 
@@ -2963,6 +3001,15 @@ static int __gh_rm_setup_feature_scm_assign(void)
 	struct gh_acl_desc *gh_acl;
 	struct gh_sgl_desc *gh_sgl;
 	gh_memparcel_handle_t handle;
+
+	/*
+	 * On certain hypervisors, GH_RM_RPC_MSG_ID_CALL_VM_GET_VMID call loops
+	 * indefinetly instead of returning an error.
+	 */
+	if (gh_firmware_is_legacy()) {
+		gh_feature_use_scm_assign = true;
+		return 0;
+	}
 
 	ret = gh_rm_get_this_vmid(&self_vmid);
 	if (ret)
@@ -3016,7 +3063,6 @@ static int __gh_rm_setup_feature_scm_assign(void)
 	kfree(gh_acl);
 	return 0;
 }
-#endif
 
 int gh_rm_setup_feature_scm_assign(void)
 {
