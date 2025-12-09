@@ -191,6 +191,8 @@ def register_modules(registry):
             "drivers/phy/qualcomm/phy-qcom-qmp-dp-phy-v4.h",
             "drivers/phy/qualcomm/phy-qcom-qmp-dp-phy-v5.h",
             "drivers/phy/qualcomm/phy-qcom-qmp-dp-phy-v6.h",
+            "drivers/phy/qualcomm/phy-qcom-qmp-dp-phy-v8.h",
+            "drivers/phy/qualcomm/phy-qcom-qmp-dp-qserdes-com-v8.h",
             "drivers/phy/qualcomm/phy-qcom-qmp-qserdes-com.h",
             "drivers/phy/qualcomm/phy-qcom-qmp-qserdes-txrx.h",
             "drivers/phy/qualcomm/phy-qcom-qmp-qserdes-com-v3.h",
