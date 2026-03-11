@@ -27,6 +27,14 @@ enum walt_adaptive_cgroup_states {
 	WACG_STATE_DEAD
 };
 
+enum walt_adaptive_cgrp_features {
+	WACG_FEATURE_MVP = 0,
+	WACG_MAX_FEATURES,
+};
+
+/* prototype of callback function to apply features to tasks in an adaptive cgroup */
+typedef void (*wacg_apply_feature_cb)(struct walt_task_struct *wts, bool enable);
+
 /* Lock to synchronize tunable updates for adapative cgroups */
 DEFINE_MUTEX(wacg_tunables_update_lock);
 
@@ -42,8 +50,18 @@ static atomic_t nr_free_workfn_queued = ATOMIC_INIT(0);
  */
 static DECLARE_COMPLETION(wacg_frees_done);
 
+/* callback function to set/unset MVP feature for a task in an adaptive cgroup */
+static inline void wacg_apply_feat_mvp(struct walt_task_struct *wts, bool enable)
+{
+	if (enable)
+		wts->low_latency |= WALT_LOW_LATENCY_PROCFS_BIT;
+	else
+		wts->low_latency &= ~WALT_LOW_LATENCY_PROCFS_BIT;
+}
+
 /* List of callbacks for the features supported by an adaptive cgroup */
 static wacg_apply_feature_cb wacg_features_cb_table[WACG_MAX_FEATURES] = {
+	[WACG_FEATURE_MVP] = wacg_apply_feat_mvp,
 };
 
 /* Apply adaptive cgroup features */
