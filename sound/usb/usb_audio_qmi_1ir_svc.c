@@ -1660,6 +1660,9 @@ static void uaudio_dev_intf_cleanup(struct usb_device *udev,
 	info->xfer_buf_pa = 0;
 
 	info->in_use = false;
+
+	uaudio_dbg("release resources: intf# %d card# %d\n",
+			info->intf_num, info->pcm_card_num);
 }
 
 static void uaudio_event_ring_cleanup_free(struct uaudio_dev *dev)
@@ -1690,8 +1693,6 @@ static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 		if (!dev->info[if_idx].in_use)
 			continue;
 		uaudio_dev_intf_cleanup(dev->udev, &dev->info[if_idx]);
-		uaudio_dbg("release resources: intf# %d card# %d\n",
-				dev->info[if_idx].intf_num, dev->card_num);
 	}
 
 	dev->num_intf = 0;
@@ -2716,8 +2717,6 @@ response:
 			uaudio_dev_intf_cleanup(
 					uadev[pcm_card_num].udev,
 					info);
-			uaudio_dbg("release resources: intf# %d card# %d\n",
-					info->intf_num, pcm_card_num);
 		}
 		if (atomic_dec_and_test(&uadev[pcm_card_num].in_use))
 			uaudio_dev_release(&uadev[pcm_card_num]);
