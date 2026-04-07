@@ -1164,6 +1164,43 @@ static int setup_pseudo_event_ring(int card_num,
 }
 
 /**
+ * uaudio_add_endpoint - Safely add endpoint to xHCI sideband
+ * @card_num: PCM card number
+ * @ep: USB host endpoint to add
+ *
+ * This wrapper safely retrieves the sideband pointer and adds the endpoint.
+ * It handles the case where sideband might change or become invalid.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int uaudio_add_endpoint(int card_num,
+					struct usb_host_endpoint *ep)
+{
+	struct xhci_sideband *sb;
+	int ret;
+
+	if (card_num >= SNDRV_CARDS) {
+		uaudio_err("invalid card number %d\n", card_num);
+		return -EINVAL;
+	}
+
+	sb = uadev[card_num].sb;
+	if (!sb) {
+		dev_err(uaudio_qdev->dev,
+			"sideband not available for card %d\n", card_num);
+		return -ENODEV;
+	}
+
+	ret = xhci_sideband_add_endpoint(sb, ep);
+	if (ret < 0) {
+		dev_err(uaudio_qdev->dev,
+			"failed to add endpoint (ret=%d)\n", ret);
+		return ret;
+	}
+	return 0;
+}
+
+/**
  * prepare_data_endpoint() - Add data EP to sideband and extract its
  *                           transfer ring PA.
  * @subs:        USB audio substream
@@ -1198,10 +1235,10 @@ static int prepare_data_endpoint(struct snd_usb_substream *subs,
 	memcpy(&resp->std_as_data_ep_desc, &ep->desc, sizeof(ep->desc));
 	resp->std_as_data_ep_desc_valid = 1;
 
-	ret = xhci_sideband_add_endpoint(uadev[card_num].sb, ep);
+	ret = uaudio_add_endpoint(card_num, ep);
 	if (ret < 0) {
 		dev_err(uaudio_qdev->dev, "failed to get data ep ring address\n");
-		return -ENODEV;
+		return ret;
 	}
 
 	sgt = xhci_sideband_get_endpoint_buffer(uadev[card_num].sb, ep);
@@ -1256,10 +1293,10 @@ static int prepare_sync_endpoint(struct snd_usb_substream *subs,
 	memcpy(&resp->std_as_sync_ep_desc, &ep->desc, sizeof(ep->desc));
 	resp->std_as_sync_ep_desc_valid = 1;
 
-	ret = xhci_sideband_add_endpoint(uadev[card_num].sb, ep);
+	ret = uaudio_add_endpoint(card_num, ep);
 	if (ret < 0) {
 		dev_err(uaudio_qdev->dev, "failed to get sync ep ring address\n");
-		return -ENODEV;
+		return ret;
 	}
 
 	sgt = xhci_sideband_get_endpoint_buffer(uadev[card_num].sb, ep);
@@ -2791,6 +2828,74 @@ static void uaudio_qmi_disconnect(void)
 	}
 }
 
+static void cleanup_pseudo_event_ring(void)
+{
+	int idx = 0;
+	struct audio_offload_data *offload;
+
+	uaudio_dbg("Starting pseudo event ring and SW ring cleanup\n");
+
+	if (uaudio_qdev->pseudo_evt_ring_mapped) {
+		uaudio_dbg("Unmapping and freeing shared pseudo event ring\n");
+
+		uaudio_iommu_unmap(MEM_PSEUDO_EVT_RING,
+			uaudio_qdev->pseudo_evt_ring_va,
+			PAGE_4K, PAGE_4K);
+		if (uaudio_qdev->pseudo_evt_ring_buffer) {
+			usb_free_coherent(
+				uaudio_qdev->pseudo_evt_ring_udev,
+				PAGE_4K,
+				uaudio_qdev->pseudo_evt_ring_buffer,
+				uaudio_qdev->pseudo_evt_ring_pa);
+		}
+
+		uaudio_qdev->pseudo_evt_ring_buffer = NULL;
+
+		for (idx = 0; idx < SNDRV_CARDS; idx++) {
+			offload = &uadev[idx].offload_data;
+			if (offload->sw_event_ring && offload->sw_event_ring->first_seg) {
+				uaudio_dbg("Freeing SW ring for card %d\n", idx);
+				kfree(offload->sw_event_ring->first_seg);
+				kfree(offload->sw_event_ring);
+				offload->sw_event_ring = NULL;
+				offload->sw_enqueue = NULL;
+				offload->sw_dequeue = NULL;
+				uadev[idx].xhci = NULL;
+			}
+		}
+	}
+
+	uaudio_qdev->poll_active = false;
+	allocate_once = true;
+	uaudio_dbg("Pseudo event ring and SW ring cleanup completed\n");
+}
+
+static void uaudio_handle_bye(void)
+{
+	int idx = 0;
+	bool offload = false;
+
+	for (idx = 0; idx < SNDRV_CARDS; idx++) {
+		if (!atomic_read(&uadev[idx].in_use))
+			continue;
+
+		spin_lock(&uadev[idx].sb->xhci->lock);
+		trace_android_vh_xhci_handle_offload(uadev[idx].xhci,
+					uadev[idx].sb->ir,
+						&offload);
+		spin_unlock(&uadev[idx].sb->xhci->lock);
+
+		unregister_trace_android_vh_xhci_handle_offload
+			(xhci_handle_offload, NULL);
+
+		xhci_sideband_cleanup_sw_event_ring(uadev[idx].sb,
+				&uadev[idx].offload_data);
+	}
+
+	for (idx = 0; idx < 64; idx++)
+		writel(0x0, &uaudio_qdev->qsram->data[idx]);
+}
+
 static void uaudio_qmi_bye_cb(struct qmi_handle *handle, unsigned int node)
 {
 	struct uaudio_qmi_svc *svc = uaudio_svc;
@@ -2802,6 +2907,8 @@ static void uaudio_qmi_bye_cb(struct qmi_handle *handle, unsigned int node)
 
 	if (svc->client_connected && svc->client_sq.sq_node == node) {
 		uaudio_dbg("node: %d\n", node);
+		uaudio_handle_bye();
+		cleanup_pseudo_event_ring();
 		uaudio_qmi_disconnect();
 		svc->client_sq.sq_node = 0;
 		svc->client_sq.sq_port = 0;
@@ -2827,6 +2934,8 @@ static void uaudio_qmi_svc_disconnect_cb(struct qmi_handle *handle,
 	if (svc->client_connected && svc->client_sq.sq_node == node &&
 			svc->client_sq.sq_port == port) {
 		uaudio_dbg("client node:%x port:%x\n", node, port);
+		uaudio_handle_bye();
+		cleanup_pseudo_event_ring();
 		uaudio_qmi_disconnect();
 		svc->client_sq.sq_node = 0;
 		svc->client_sq.sq_port = 0;
