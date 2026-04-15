@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0
+
+menu "USB3 gpio driver"
+
+config PARADA_PD_FL7112
+	tristate "FL7112 DP-IN Bridge"
+	depends on I2C
+	default m
+	help
+	The FL7112 serves as the PD controller, managing signal detection and GPIO control.
+	When an external device is connected to the TYPEC interface,
+	FL7112 is responsible for identifying the input device type,
+	such as DP screen casting device or adb debugging device, and then notifying the SOC.
+endmenu

@@ -3,6 +3,7 @@
 ccflags-y += -I$(src)
 
 # Subdirectories
+obj-y += fl7112/
 obj-y += isl97900_led/
 obj-y += lkdtm/
 
