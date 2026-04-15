@@ -1,4 +1,5 @@
 load(":drivers/usb/dwc3/modules.bzl", register_dwc3 = "register_modules")
+load(":drivers/usb/extcon/modules.bzl", register_typec_extcon = "register_modules")
 load(":drivers/usb/gadget/function/modules.bzl", register_gadget_function = "register_modules")
 load(":drivers/usb/misc/modules.bzl", register_misc = "register_modules")
 load(":drivers/usb/pd/modules.bzl", register_pd = "register_modules")
@@ -10,6 +11,7 @@ load(":drivers/usb/typec/ucsi/modules.bzl", register_typec_ucsi = "register_modu
 
 def register_modules(registry):
     register_dwc3(registry)
+    register_typec_extcon(registry)
     register_gadget_function(registry)
     register_misc(registry)
     register_pd(registry)
