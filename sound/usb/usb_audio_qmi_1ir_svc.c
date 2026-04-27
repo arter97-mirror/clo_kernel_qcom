@@ -972,6 +972,8 @@ static int uaudio_populate_uac_desc(struct snd_usb_substream *subs,
  * @sb: pointer to xhci_sideband
  * @offload_data: pointer to audio_offload_data
  */
+static struct qsram_xhci __iomem *uaudio_get_qsram(struct device *dev);
+
 static void xhci_sideband_init_sw_event_ring(struct xhci_sideband *sb,
 					     struct audio_offload_data *offload_data)
 {
@@ -1029,6 +1031,14 @@ static void xhci_sideband_init_sw_event_ring(struct xhci_sideband *sb,
 	offload_data->sw_dequeue = trbs;
 
 	if (!offload_data->active) {
+		uaudio_qdev->qsram = uaudio_get_qsram(uaudio_qdev->dev);
+		if (IS_ERR(uaudio_qdev->qsram)) {
+			dev_err(uaudio_qdev->dev, "Failed to get qsram\n");
+			kfree(ring);
+			kfree(seg);
+			return;
+		}
+
 		for (i = 0; i < 64; i++)
 			writel(0x0, &uaudio_qdev->qsram->data[i]);
 	}
