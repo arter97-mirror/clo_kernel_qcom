@@ -73,13 +73,6 @@ struct irq_work walt_migration_irq_work;
 bool walt_rotation_enabled;
 bool plenty_giant_tasks;
 
-/*
- * These are to track following cgroups:
- * /dev/cpuctl/apps and /dev/cpuctl/apps/top-app
- */
-struct cgroup *apps_cgroup;
-struct cgroup *apps_topapp_cgroup;
-
 unsigned int __read_mostly sched_ravg_window = 20000000;
 int min_possible_cluster_id;
 int max_possible_cluster_id;
@@ -3101,7 +3094,6 @@ static void init_new_task_load(struct task_struct *p)
 }
 
 int remove_heavy(struct walt_task_struct *wts);
-static int __sched_set_group_id(struct task_struct *p, unsigned int group_id);
 static void walt_task_dead(struct task_struct *p)
 {
 	struct walt_task_struct *wts = (struct walt_task_struct *)android_task_vendor_data(p);
@@ -3850,7 +3842,7 @@ static void add_new_task_to_grp(struct task_struct *new)
 	write_unlock_irqrestore(&related_thread_group_lock, flags);
 }
 
-static int __sched_set_group_id(struct task_struct *p, unsigned int group_id)
+int __sched_set_group_id(struct task_struct *p, unsigned int group_id)
 {
 	int rc = 0;
 	unsigned long flags;
@@ -3933,82 +3925,6 @@ static int create_default_coloc_group(void)
 	return 0;
 }
 
-static void android_rvh_cpu_cgroup_free(void *unused, struct cgroup_subsys_state *css)
-{
-	struct cgroup *cur_cg = css->cgroup;
-
-	get_entry_instr(CPU_CGROUP_FREE);
-	/*
-	 * We are only tracking whether /dev/cpuctl/apps or
-	 * /dev/cpuctl/apps/top-app cgroups are freed
-	 */
-	if (!strcmp(cur_cg->kn->name, "apps") && (cur_cg->level == 1))
-		apps_cgroup = NULL;
-	else if (!strcmp(cur_cg->kn->name, "top-app") && (cur_cg->level == 2))
-		apps_topapp_cgroup = NULL;
-	update_instruction_data(CPU_CGROUP_FREE);
-}
-
-static __always_inline bool is_top_app_cgroup_descendant(struct cgroup *cgroup)
-{
-	if (apps_topapp_cgroup &&
-			cgroup_is_descendant(cgroup, apps_topapp_cgroup) &&
-			(strcmp(cgroup->kn->name, "normal") == 0))
-		return true;
-
-	if (apps_topapp_cgroup &&
-			cgroup_is_descendant(cgroup, apps_topapp_cgroup) &&
-			(strcmp(cgroup->kn->name, "latency-sensitive") == 0))
-		return true;
-
-	return false;
-}
-
-static void walt_update_tg_pointer(struct cgroup_subsys_state *css)
-{
-	struct cgroup *cur_cg = css->cgroup;
-
-	if (!strcmp(cur_cg->kn->name, "apps") && (cur_cg->level == 1)) {
-		apps_cgroup = cur_cg;
-
-	} else if (!strcmp(cur_cg->kn->name, "top-app")) {
-
-		if (cur_cg->level == 1) {
-			/*
-			 * 'top-app' cgroup that is created at the root level is
-			 * considered as top-app group. Example: /dev/cpuctl/top-app
-			 */
-			walt_init_topapp_tg(css_tg(css));
-
-		} else if ((cur_cg->level == 2) && apps_cgroup &&
-				cgroup_is_descendant(cur_cg, apps_cgroup)) {
-			/*
-			 * 'top-app' cgroup that is created in 'apps' cgroup is
-			 * considered as top-app group. Example: /dev/cpuctl/apps/top-app
-			 */
-			apps_topapp_cgroup = cur_cg;
-			walt_init_topapp_tg(css_tg(css));
-
-		} else {
-			/*
-			 * Any other 'top-app' cgroup will not be considered as top-app group
-			 */
-			walt_init_tg(css_tg(css));
-		}
-	} else if (apps_cgroup && is_top_app_cgroup_descendant(cur_cg)) {
-		walt_init_topapp_tg(css_tg(css));
-
-	} else if (!strcmp(cur_cg->kn->name, "foreground")) {
-		walt_init_foreground_tg(css_tg(css));
-
-	} else if (!strcmp(css->cgroup->kn->name, "background")) {
-		walt_init_background_tg(css_tg(css));
-
-	} else {
-		walt_init_tg(css_tg(css));
-	}
-}
-
 void walt_kick_cpu(int cpu)
 {
 	unsigned int flags = NOHZ_KICK_MASK;
@@ -4030,47 +3946,6 @@ void walt_kick_cpu(int cpu)
 	 * will be run before returning from the IPI.
 	 */
 	smp_call_function_single_async(cpu, &cpu_rq(cpu)->nohz_csd);
-}
-
-
-static void android_rvh_cpu_cgroup_online(void *unused, struct cgroup_subsys_state *css)
-{
-	if (unlikely(walt_disabled))
-		return;
-
-	get_entry_instr(CPU_CGROUP_ONLINE);
-	walt_update_tg_pointer(css);
-	update_instruction_data(CPU_CGROUP_ONLINE);
-}
-
-static void android_rvh_cpu_cgroup_attach(void *unused,
-						struct cgroup_taskset *tset)
-{
-	struct task_struct *task;
-	struct cgroup_subsys_state *css;
-	struct task_group *tg;
-	struct walt_task_group *wtg;
-	unsigned int grp_id;
-	int ret;
-
-	if (unlikely(walt_disabled))
-		return;
-
-	get_entry_instr(CPU_CGROUP_ATTACH);
-	cgroup_taskset_first(tset, &css);
-	if (!css)
-		goto out;
-
-	tg = container_of(css, struct task_group, css);
-	wtg = (struct walt_task_group *) tg->android_vendor_data1;
-
-	cgroup_taskset_for_each(task, css, tset) {
-		grp_id = wtg->colocate ? DEFAULT_CGROUP_COLOC_ID : 0;
-		ret = __sched_set_group_id(task, grp_id);
-		trace_sched_cgroup_attach(task, grp_id, ret);
-	}
-out:
-	update_instruction_data(CPU_CGROUP_ATTACH);
 }
 
 static bool is_cluster_hosting_top_app(struct walt_sched_cluster *cluster)
@@ -6065,9 +5940,6 @@ static void register_walt_hooks(void)
 	register_trace_android_rvh_tick_entry(android_rvh_tick_entry, NULL);
 	register_trace_android_vh_scheduler_tick(android_vh_scheduler_tick, NULL);
 	register_trace_android_rvh_schedule(android_rvh_schedule, NULL);
-	register_trace_android_rvh_cpu_cgroup_attach(android_rvh_cpu_cgroup_attach, NULL);
-	register_trace_android_vh_cpu_cgroup_css_free(android_rvh_cpu_cgroup_free, NULL);
-	register_trace_android_rvh_cpu_cgroup_online(android_rvh_cpu_cgroup_online, NULL);
 	register_trace_android_rvh_sched_fork_init(android_rvh_sched_fork_init, NULL);
 	register_trace_android_rvh_ttwu_cond(android_rvh_ttwu_cond, NULL);
 	register_trace_android_rvh_sched_exec(android_rvh_sched_exec, NULL);
@@ -6141,17 +6013,6 @@ static int walt_init_stop_handler(void *data)
 	return 0;
 }
 
-static void walt_init_tg_pointers(void)
-{
-	struct cgroup_subsys_state *css = &root_task_group.css;
-	struct cgroup_subsys_state *top_css = css;
-
-	rcu_read_lock();
-	css_for_each_child(css, top_css)
-		walt_update_tg_pointer(css);
-	rcu_read_unlock();
-}
-
 static void walt_init(struct work_struct *work)
 {
 	static atomic_t already_inited = ATOMIC_INIT(0);
@@ -6174,6 +6035,7 @@ static void walt_init(struct work_struct *work)
 	walt_init_tg_pointers();
 
 	register_walt_hooks();
+	walt_cgroup_init();
 	walt_fixup_init();
 	walt_lb_init();
 	walt_rt_init();

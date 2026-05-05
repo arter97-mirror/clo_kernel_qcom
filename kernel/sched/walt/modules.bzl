@@ -49,6 +49,7 @@ def register_modules(registry):
             "kernel/sched/walt/walt.h",
             "kernel/sched/walt/voter.h",
             "kernel/sched/walt/sysctl_walt_stats.h",
+            "kernel/sched/walt/walt_cgroup.c",
         ],
         conditional_srcs = {
             "CONFIG_SCHED_WALT_STATS": {
