@@ -308,6 +308,130 @@ dma_addr_t xhci_sw_trb_virt_to_dma(struct xhci_segment *seg,
 	return seg->dma + (segment_offset * sizeof(*trb));
 }
 
+/*
+ * Fallback: rebuild event ring dequeue + cycle_state
+ * and apply to ring + HW ERDP.
+ *
+ * Only used when original ERDP is invalid.
+ * Only supports single-segment event ring.
+ */
+static int xhci_rebuild_erdp_cycle(struct xhci_hcd *xhci,
+		struct xhci_interrupter *ir)
+{
+	struct xhci_ring *ring = ir->event_ring;
+	struct xhci_segment *seg;
+	union xhci_trb *trbs;
+	u32 seg_trbs;
+	u32 i;
+
+	dma_addr_t hw_deq_dma;
+	u64 hw_deq;
+	u32 trb_index;
+	unsigned long offset;
+
+	if (!ring || !ring->first_seg) {
+		pr_err("UGMI: rebuild: invalid ring\n");
+		return -EINVAL;
+	}
+
+	if (ring->num_segs != 1) {
+		pr_err("UGMI: rebuild: invalid ring seg %d.\n", ring->num_segs);
+		return -EPERM;
+	}
+
+	seg = ring->first_seg;
+	trbs = seg->trbs;
+	seg_trbs = ir->erst.entries[0].seg_size;
+
+	/* =========================
+	 * Step1: scan 找 boundary
+	 * =========================
+	 */
+	for (i = 0; i + 1 < seg_trbs; i++) {
+		u32 cur_d3  = le32_to_cpu(trbs[i].generic.field[3]);
+		u32 next_d3 = le32_to_cpu(trbs[i + 1].generic.field[3]);
+		u32 cur_cycle = cur_d3 & 1;
+		u32 next_cycle = next_d3 & 1;
+
+		if (next_cycle != cur_cycle) {
+			hw_deq_dma = seg->dma +
+				(i + 1) * sizeof(union xhci_trb);
+			ring->cycle_state = cur_cycle;
+
+			pr_err("UGMI: rebuild: boundary i=%u -> idx=%u dma=%pa cycle=%u\n",
+				   i, i + 1, &hw_deq_dma, cur_cycle);
+			goto apply;
+		}
+	}
+
+	/* =========================
+	 * Step2: all same case
+	 * =========================
+	 */
+	{
+		u32 d3 = le32_to_cpu(trbs[0].generic.field[3]);
+		u32 c0 = d3 & 1;
+
+		hw_deq_dma = seg->dma;
+		ring->cycle_state = c0 ^ 1;
+
+		pr_err("UGMI: rebuild: no boundary all_cycle=%u -> idx=0 dma=%pa cycle=%u\n",
+			   c0, &hw_deq_dma, ring->cycle_state);
+	}
+
+apply:
+	/* =========================
+	 * Step3: offset 修正
+	 * =========================
+	 */
+	hw_deq = (u64)hw_deq_dma;
+
+	if (((hw_deq_dma&0xfff) != 0xff0) && (uaudio_qdev->in_disconnect)) {
+		if (hw_deq_dma >= seg->dma + 4 * sizeof(union xhci_trb)) {
+			hw_deq -= 4 * sizeof(union xhci_trb);
+			hw_deq_dma = (dma_addr_t)(hw_deq & ERST_PTR_MASK);
+		} else if (hw_deq_dma >= seg->dma + 2 * sizeof(union xhci_trb)) {
+			hw_deq -= 2 * sizeof(union xhci_trb);
+			hw_deq_dma = (dma_addr_t)(hw_deq & ERST_PTR_MASK);
+		}
+	}
+
+	/* =========================
+	 * Step4: DMA → VA 映射
+	 * =========================
+	 */
+	if (hw_deq_dma < seg->dma ||
+		hw_deq_dma >= seg->dma + TRB_SEGMENT_SIZE) {
+		pr_err("UGMI: rebuild dma out of range %pa\n", &hw_deq_dma);
+		return -EINVAL;
+	}
+
+	offset = hw_deq_dma - seg->dma;
+	trb_index = offset / sizeof(union xhci_trb);
+
+	ring->deq_seg = seg;
+	ring->dequeue = &seg->trbs[trb_index];
+
+	pr_err("UGMI: rebuild final: idx=%u dma=%pa cycle=%u\n",
+		   trb_index, &hw_deq_dma, ring->cycle_state);
+
+	/* =========================
+	 * Step5: 写 HW ERDP + clear EHB
+	 * =========================
+	 */
+	hw_deq |= ERST_EHB;
+	xhci_write_64(xhci, hw_deq, &ir->ir_set->erst_dequeue);
+
+	return 0;
+}
+
+/**
+ * xhci_sideband_init_sw_event_ring - Initialize SW event ring for offload
+ * @sb: pointer to xhci_sideband
+ * @offload_data: pointer to audio_offload_data
+ */
+static struct qsram_xhci __iomem *uaudio_get_qsram(struct device *dev);
+
 static int xhci_sync_erst_dequeue(struct xhci_hcd *xhci,
 				  struct xhci_interrupter *ir)
 {
@@ -317,17 +441,38 @@ static int xhci_sync_erst_dequeue(struct xhci_hcd *xhci,
 	dma_addr_t hw_deq_dma, seg_dma;
 	unsigned long offset;
 	unsigned int trb_index;
-	u64 hw_deq;
+	u64 hw_deq, hw_deq_erst, hw_deq_qsram10;
+	int i = 0;
 
+	uaudio_qdev->qsram = uaudio_get_qsram(uaudio_qdev->dev);
 	if (!ring || !ring->first_seg)
 		return -EINVAL;
 
 	/* Read hardware dequeue pointer (DMA address) */
-	hw_deq = xhci_read_64(xhci, &ir->ir_set->erst_dequeue);
-	hw_deq_dma = (dma_addr_t)(hw_deq & ERST_PTR_MASK);
+	hw_deq_erst = xhci_read_64(xhci, &ir->ir_set->erst_dequeue);
+	hw_deq = (u64)readl(&uaudio_qdev->qsram->data[3]);
+	hw_deq_qsram10 = (u64)readl(&uaudio_qdev->qsram->data[10]);
+	uaudio_dbg("hw_deq=%llx hw_deq_10=%llx erst=%llx\n", (unsigned long long)hw_deq,
+		(unsigned long long)hw_deq_qsram10, (unsigned long long)hw_deq_erst);
+	if (hw_deq_qsram10 != 0) {
+		hw_deq_dma = (dma_addr_t)(hw_deq_qsram10 & ERST_PTR_MASK);
+		hw_deq = hw_deq_qsram10;
+	} else {
+		hw_deq_dma = (dma_addr_t)(hw_deq & ERST_PTR_MASK);
+	}
+	/* if it's ff0, means cycle state is about to change */
+	if (((hw_deq_dma&0xfff) != 0xff0) && (uaudio_qdev->in_disconnect)) {
+		if (hw_deq_dma >= ring->first_seg->dma + 4 * sizeof(union xhci_trb)) {
+			hw_deq -= 4 * sizeof(union xhci_trb);
+			hw_deq_dma = (dma_addr_t)(hw_deq & ERST_PTR_MASK);
+		} else if (hw_deq_dma >= ring->first_seg->dma + 2 * sizeof(union xhci_trb)) {
+			hw_deq -= 2 * sizeof(union xhci_trb);
+			hw_deq_dma = (dma_addr_t)(hw_deq & ERST_PTR_MASK);
+		}
+	}
 
 	ring->cycle_state = readl(&uaudio_qdev->qsram->data[2]);
-
+	uaudio_dbg("hw_deq=%llx dma=%pa\n", (unsigned long long)hw_deq, &hw_deq_dma);
 	/* Search through all segments in the ring */
 	seg = ring->first_seg;
 	do {
@@ -352,10 +497,13 @@ static int xhci_sync_erst_dequeue(struct xhci_hcd *xhci,
 			/* Update ring pointers with virtual address */
 			ring->deq_seg = seg;
 			ring->dequeue = &seg->trbs[trb_index];
-			/*EHB set to clear */
 
-			hw_deq |= ERST_EHB;
-			xhci_write_64(xhci, hw_deq, &ir->ir_set->erst_dequeue);
+			/*EHB set to clear */
+			if (hw_deq & ERST_EHB) {
+				hw_deq |= ERST_EHB;
+				xhci_write_64(xhci, hw_deq, &ir->ir_set->erst_dequeue);
+			}
+			uaudio_dbg("hw_deq=%llx\n", (unsigned long long)hw_deq);
 			return 0;
 
 		}
@@ -364,34 +512,249 @@ static int xhci_sync_erst_dequeue(struct xhci_hcd *xhci,
 	} while (seg != ring->first_seg);
 
 	/* DMA address not found in any segment */
-	xhci_err(xhci, "Hardware dequeue pointer 0x%llx not in event ring\n",
+	xhci_err(xhci, "Hardware dequeue pointer 0x%llx not in event ring, fallback\n",
 		 (unsigned long long)hw_deq_dma);
-	return -EINVAL;
+
+	for (i = 0; i < 64; i++)
+		writel(0x0, &uaudio_qdev->qsram->data[i]);/*out of sync, reinit all to 0*/
+	return xhci_rebuild_erdp_cycle(xhci, ir);
 }
 
-static bool uaudio_is_ep_stopped_trb(struct xhci_hcd *xhci, union xhci_trb *trb)
+/*
+ * Validate that a TRB pointer is inside [base, end)
+ * Prevents NULL / corrupted / out-of-range pointer dereference
+ */
+static inline bool uaudio_trb_ptr_valid(union xhci_trb *ptr,
+					union xhci_trb *base,
+					union xhci_trb *end)
+{
+	if (unlikely(!ptr || !base || !end))
+		return false;
+
+	if (unlikely(ptr < base || ptr >= end))
+		return false;
+
+	/* Optional: enforce 16-byte TRB alignment */
+	if (unlikely(((unsigned long)ptr & 0xF) != 0))
+		return false;
+
+	return true;
+}
+
+/*
+ * uaudio_should_skip_trb - Decide whether to skip (drop) a TRB event from
+ *                           the ADSP SW event ring.
+ *
+ * Rules:
+ *  1. Non-Transfer TRBs (Port Status Change, Command Completion, etc.) are
+ *     normal AP-owned events and must NOT be skipped.
+ *  2. Transfer Event TRBs whose EP is ISOC (ISOC_OUT_EP or ISOC_IN_EP) are
+ *     owned by the ADSP offload path; AP must NOT process them -> skip.
+ *  3. Transfer Event TRBs whose EP is disabled (device gone) -> skip.
+ *  4. All other Transfer Event TRBs (Bulk, Interrupt, Control) belong to AP
+ *     and must NOT be skipped.
+ *
+ * Returns true if the event should be dropped, false if it should be handled.
+ */
+static bool uaudio_should_skip_trb(struct xhci_hcd *xhci, union xhci_trb *trb)
 {
 	u32 trb_type, slot_id, ep_index;
 	struct xhci_ep_ctx *ep_ctx;
-	u32 ep_state;
+	u32 ep_state, ep_type;
+
+	uaudio_dbg("TRB raw: %08x %08x %08x %08x\n",
+		le32_to_cpu(trb->generic.field[0]),
+		le32_to_cpu(trb->generic.field[1]),
+		le32_to_cpu(trb->generic.field[2]),
+		le32_to_cpu(trb->generic.field[3]));
 
 	trb_type = TRB_FIELD_TO_TYPE(le32_to_cpu(trb->generic.field[3]));
-	if (trb_type != TRB_TRANSFER)
+	if (trb_type != TRB_TRANSFER) {
+		uaudio_dbg("pass non-Transfer TRB: type=%u field3=0x%08x\n",
+			   trb_type, le32_to_cpu(trb->generic.field[3]));
 		return false;
+	}
 
 	/* Extract slot_id and ep_index from Transfer Event TRB */
 	slot_id = TRB_TO_SLOT_ID(le32_to_cpu(trb->generic.field[3]));
 	ep_index = TRB_TO_EP_INDEX(le32_to_cpu(trb->generic.field[3]));
-
-	if (!xhci->devs[slot_id])
-		return true;  /* device gone, skip */
+	/* Rule 3: device gone, skip */
+	if (!xhci->devs[slot_id]) {
+		uaudio_dbg("skip Transfer TRB: device gone slot=%u ep_idx=%u\n",
+			   slot_id, ep_index);
+		return true;
+	}
 
 	ep_ctx = xhci_get_ep_ctx(xhci,
 		 xhci->devs[slot_id]->out_ctx,
 		 ep_index);
 	ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
 
-	return (ep_state == EP_STATE_DISABLED);
+	/* Rule 3: EP disabled (stopped), skip */
+	if (ep_state == EP_STATE_DISABLED) {
+		uaudio_dbg("skip Transfer TRB: EP disabled slot=%u ep_idx=%u\n",
+			   slot_id, ep_index);
+		return true;
+	}
+
+	/* Rule 2: ISOC EP is owned by ADSP offload, AP must not process it */
+	ep_type = CTX_TO_EP_TYPE(le32_to_cpu(ep_ctx->ep_info2));
+	if (ep_type == ISOC_OUT_EP || ep_type == ISOC_IN_EP) {
+		uaudio_dbg("skip ADSP ISOC transfer event: slot=%u ep_idx=%u ep_type=%u\n",
+			   slot_id, ep_index, ep_type);
+		return true;
+	}
+
+	/* Rule 4: non-ISOC Transfer event belongs to AP, do not skip */
+	uaudio_dbg("pass AP non-ISOC transfer event: slot=%u ep_idx=%u ep_type=%u\n",
+		   slot_id, ep_index, ep_type);
+	return false;
+}
+
+/**
+ * uaudio_qsram_reset_all - Reinit all QSRAM data words to 0
+ *
+ * Called on error/out-of-sync paths in xhci_handle_offload() to bring
+ * QSRAM back to a known state.
+ */
+static void uaudio_qsram_reset_all(void)
+{
+	int i;
+
+	for (i = 0; i < 64; i++)
+		writel(0x0, &uaudio_qdev->qsram->data[i]);
+}
+
+/**
+ * uaudio_find_offload_data - Find the active offload_data for this xhci
+ * @xhci: pointer to xhci_hcd
+ *
+ * Returns the active offload_data for this xhci instance, or NULL if no
+ * active offload stream is found.
+ */
+static struct audio_offload_data *uaudio_find_offload_data(struct xhci_hcd *xhci)
+{
+	int card_num;
+
+	for (card_num = 0; card_num < SNDRV_CARDS; card_num++) {
+		if (uadev[card_num].xhci == xhci &&
+		    uadev[card_num].offload_data.active)
+			return &uadev[card_num].offload_data;
+	}
+
+	return NULL;
+}
+
+/**
+ * uaudio_offload_prepare_ring - Snapshot event buffer, compute and validate
+ * SW event ring pointers
+ * @offload_data: offload data for this stream
+ * @dequeue_idx: SW ring dequeue index read from QSRAM
+ * @enqueue_idx: SW ring enqueue index read from QSRAM
+ * @sw_event_ring: set to the base of the SW event ring on success
+ * @sw_event_ring_end: set to the end of the SW event ring on success
+ *
+ * Returns 0 on success, -ENODEV if the event buffer is NULL, or -EINVAL
+ * if the computed ring pointers are invalid.
+ */
+static int uaudio_offload_prepare_ring(struct audio_offload_data *offload_data,
+					u32 dequeue_idx, u32 enqueue_idx,
+					union xhci_trb **sw_event_ring,
+					union xhci_trb **sw_event_ring_end)
+{
+	union xhci_trb *buf;
+
+	/* snapshot buffer pointer once to avoid race */
+	buf = (union xhci_trb *)READ_ONCE(offload_data->event_buffer);
+	if (unlikely(!buf)) {
+		uaudio_err("offload active but event_buffer NULL\n");
+		return -ENODEV;
+	}
+
+	*sw_event_ring = buf;
+	*sw_event_ring_end = buf + SW_EVENT_RING_NUM_TRBS;
+
+	offload_data->sw_dequeue = buf + dequeue_idx;
+	offload_data->sw_enqueue = buf + enqueue_idx;
+
+	/* validate computed pointers BEFORE loop */
+	if (unlikely(!uaudio_trb_ptr_valid(offload_data->sw_dequeue,
+					*sw_event_ring,
+					*sw_event_ring_end) ||
+					!uaudio_trb_ptr_valid(offload_data->sw_enqueue,
+					*sw_event_ring,
+					*sw_event_ring_end))) {
+		uaudio_err("invalid ring ptr: base=%p deq=%p enq=%p\n",
+					*sw_event_ring,
+					offload_data->sw_dequeue,
+					offload_data->sw_enqueue);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/**
+ * uaudio_offload_process_events - Drain pending events from the SW event ring
+ * @xhci: pointer to xhci_hcd
+ * @ir: xhci interrupter
+ * @offload_data: offload data for this stream
+ * @sw_event_ring: base of the SW event ring
+ * @sw_event_ring_end: end of the SW event ring
+ * @qsram: QSRAM pointer to write back the dequeue index
+ * @dequeue_idx: current dequeue index, updated as events are processed
+ *
+ * Returns the number of events processed.
+ */
+static int uaudio_offload_process_events(struct xhci_hcd *xhci,
+					  struct xhci_interrupter *ir,
+					  struct audio_offload_data *offload_data,
+					  union xhci_trb *sw_event_ring,
+					  union xhci_trb *sw_event_ring_end,
+					  struct qsram_xhci __iomem *qsram,
+					  u32 *dequeue_idx)
+{
+	int events_processed = 0;
+	int err = 0;
+
+	/* Process events from SW ring */
+	while (offload_data->sw_enqueue != offload_data->sw_dequeue) {
+		/* critical guard for UAF/corruption */
+		if (unlikely(!uaudio_trb_ptr_valid(offload_data->sw_dequeue,
+				sw_event_ring, sw_event_ring_end))) {
+			uaudio_err("sw_dequeue invalid: %p base=%p\n",
+						offload_data->sw_dequeue,
+						sw_event_ring);
+			break;
+		}
+		/* Process one event using the passed function pointer.
+		 * Skip ADSP-owned ISOC transfer events and stopped-EP events;
+		 * pass through non-Transfer TRBs and AP-owned non-ISOC
+		 * transfer events.
+		 */
+		if (!uaudio_should_skip_trb(xhci, offload_data->sw_dequeue))
+			err = xhci_handle_event_trb(xhci,
+						ir, offload_data->sw_dequeue);
+		events_processed++;
+
+		/* Move to next TRB */
+		offload_data->sw_dequeue++;
+		(*dequeue_idx)++;
+
+		/* Wrap around if at end */
+		if (offload_data->sw_dequeue >= sw_event_ring_end) {
+			offload_data->sw_dequeue = sw_event_ring;
+			*dequeue_idx = 0;
+		}
+
+		/* Write back dequeue index to QSRAM */
+		writel(*dequeue_idx, &qsram->data[1]);
+
+		if (err)
+			break;
+	}
+
+	return events_processed;
 }
 
 /**
@@ -413,11 +776,23 @@ static void xhci_handle_offload(void *unused, struct xhci_hcd *xhci,
 	u32 enqueue_idx;
 	u32 cycle_state;
 	u64 temp;
-	int events_processed = 0;
-	int err = 0;
-	struct audio_offload_data *offload_data = NULL;
+	int events_processed;
+	int ret;
+	struct audio_offload_data *offload_data;
 	struct qsram_xhci __iomem *qsram;
-	int card_num;
+
+	/* Get QSRAM pointer */
+	qsram = uaudio_qdev->qsram;
+	if (!qsram) {
+		uaudio_err("QSRAM not available for audio offload\n");
+		*offload = false;
+		return;
+	}
+
+	/* Read SW event ring state from QSRAM */
+	enqueue_idx = readl(&qsram->data[0]);
+	dequeue_idx = readl(&qsram->data[1]);
+	cycle_state = readl(&qsram->data[2]);
 
 	/* Check if this is the primary interrupter */
 	if (!ir || ir->intr_num != 0) {
@@ -434,6 +809,14 @@ static void xhci_handle_offload(void *unused, struct xhci_hcd *xhci,
 		writel(irq_pending, &ir->ir_set->irq_pending);
 	}
 
+	if (unlikely(enqueue_idx >= SW_EVENT_RING_NUM_TRBS ||
+		dequeue_idx >= SW_EVENT_RING_NUM_TRBS)) {
+		uaudio_err("QSRAM idx invalid: enq=%u deq=%u\n",
+			   enqueue_idx, dequeue_idx);
+		*offload = false;
+		uaudio_qsram_reset_all();
+		return;
+	}
 	/* clear interrupter done */
 
 	if (xhci->xhc_state & XHCI_STATE_DYING ||
@@ -445,19 +828,13 @@ static void xhci_handle_offload(void *unused, struct xhci_hcd *xhci,
 		xhci_write_64(xhci, temp | ERST_EHB,
 					 &ir->ir_set->erst_dequeue);
 		*offload = false;
+		uaudio_qsram_reset_all();
 		return;
 	}
 
 	/* Find the offload data for this xhci instance */
-	for (card_num = 0; card_num < SNDRV_CARDS; card_num++) {
-		if (uadev[card_num].xhci == xhci &&
-		    uadev[card_num].offload_data.active) {
-			offload_data = &uadev[card_num].offload_data;
-			break;
-		}
-	}
-
-	if (!offload_data || (offload_data->active == 0)) {
+	offload_data = uaudio_find_offload_data(xhci);
+	if (!offload_data) {
 		*offload = false;
 		return;
 	}
@@ -466,55 +843,37 @@ static void xhci_handle_offload(void *unused, struct xhci_hcd *xhci,
 		uaudio_err("Invalid offload data: buffer=%p ring=%p\n",
 			offload_data->event_buffer, offload_data->sw_event_ring);
 		*offload = false;
+		uaudio_qsram_reset_all();
 		return;
 	}
-	/* Get QSRAM pointer */
-	qsram = uaudio_qdev->qsram;
-	if (!qsram) {
-		uaudio_err("QSRAM not available for audio offload\n");
+
+	ret = uaudio_offload_prepare_ring(offload_data, dequeue_idx, enqueue_idx,
+					   &sw_event_ring, &sw_event_ring_end);
+	if (ret == -ENODEV) {
 		*offload = false;
 		return;
+	} else if (ret) {
+		uaudio_qsram_reset_all();
+		*offload = true;
+		return;
 	}
 
-	/* Read SW event ring state from QSRAM */
-	enqueue_idx = readl(&qsram->data[0]);
-	dequeue_idx = readl(&qsram->data[1]);
-	cycle_state = readl(&qsram->data[2]);
-
-
-	/* Setup pointers */
-	sw_event_ring = (union xhci_trb *)offload_data->event_buffer;
-	sw_event_ring_end = sw_event_ring + SW_EVENT_RING_NUM_TRBS;
-	offload_data->sw_dequeue = sw_event_ring + dequeue_idx;
-	offload_data->sw_enqueue = sw_event_ring + enqueue_idx;
-
-	/* Process events from SW ring */
-	while (offload_data->sw_enqueue != offload_data->sw_dequeue) {
-		/* Process one event using the passed function pointer */
-		if (!uaudio_is_ep_stopped_trb(xhci, offload_data->sw_dequeue))
-			err = xhci_handle_event_trb(xhci,
-						ir, offload_data->sw_dequeue);
-		events_processed++;
-
-		/* Move to next TRB */
-		offload_data->sw_dequeue++;
-		dequeue_idx++;
-
-		/* Wrap around if at end */
-		if (offload_data->sw_dequeue >= sw_event_ring_end) {
-			offload_data->sw_dequeue = sw_event_ring;
-			dequeue_idx = 0;
+	events_processed = uaudio_offload_process_events(xhci, ir, offload_data,
+							  sw_event_ring, sw_event_ring_end,
+							  qsram, &dequeue_idx);
+	if (events_processed == 0) {
+		if ((le32_to_cpu(ir->event_ring->dequeue->event_cmd.flags) & TRB_CYCLE) ==
+				ir->event_ring->cycle_state) {
+			uaudio_dbg("unhandled event trb, gen %x %x %x %x\n",
+				le32_to_cpu(ir->event_ring->dequeue->generic.field[0]),
+				le32_to_cpu(ir->event_ring->dequeue->generic.field[1]),
+				le32_to_cpu(ir->event_ring->dequeue->generic.field[2]),
+				le32_to_cpu(ir->event_ring->dequeue->generic.field[3]));
 		}
-
-		/* Write back dequeue index to QSRAM */
-		writel(dequeue_idx, &qsram->data[1]);
-
-		if (err)
-			break;
 	}
-
-	uaudio_dbg("Audio offload: processed %d events, deq=%u enq=%u offload=%d\n",
-		   events_processed, dequeue_idx, enqueue_idx, *offload);
+	temp = xhci_read_64(xhci, &ir->ir_set->erst_dequeue);
+	uaudio_dbg("Audio offload: processed %d events, deq=%u enq=%u offload=%d xhc_state 0x%x, temp 0x%llx\n",
+		events_processed, dequeue_idx, enqueue_idx, *offload, xhci->xhc_state, temp);
 
 	*offload = true;
 }
@@ -967,13 +1326,6 @@ static int uaudio_populate_uac_desc(struct snd_usb_substream *subs,
 	return 0;
 }
 
-/**
- * xhci_sideband_init_sw_event_ring - Initialize SW event ring for offload
- * @sb: pointer to xhci_sideband
- * @offload_data: pointer to audio_offload_data
- */
-static struct qsram_xhci __iomem *uaudio_get_qsram(struct device *dev);
-
 static void xhci_sideband_init_sw_event_ring(struct xhci_sideband *sb,
 					     struct audio_offload_data *offload_data)
 {
@@ -987,50 +1339,44 @@ static void xhci_sideband_init_sw_event_ring(struct xhci_sideband *sb,
 		uaudio_err("Invalid event buffer\n");
 		return;
 	}
-
-	/* Allocate the ring structure */
-	ring = kzalloc(sizeof(*ring), GFP_KERNEL);
-	if (!ring)
-		return;
-
-	/* Allocate a single segment for the ring */
-	seg = kzalloc(sizeof(*seg), GFP_KERNEL);
-	if (!seg) {
-		kfree(ring);
-		return;
-	}
-
-	/* Cast event_buffer to TRB array */
-	trbs = (union xhci_trb *)offload_data->event_buffer;
-	dma = (dma_addr_t)offload_data->event_buffer_va;
-
-	/* Initialize segment */
-	seg->trbs = trbs;
-	seg->dma = dma;
-	seg->next = seg;  /* Single segment, points to itself */
-	seg->num = 0;
-
-	/* Initialize ring structure */
-	ring->first_seg = seg;
-	ring->last_seg = seg;
-	ring->type = TYPE_EVENT;
-	ring->num_segs = 1;
-	ring->cycle_state = 1;
-
-	/* Set enqueue and dequeue to start of TRB array */
-	ring->enqueue = trbs;
-	ring->enq_seg = seg;
-	ring->dequeue = trbs;
-	ring->deq_seg = seg;
-
-	INIT_LIST_HEAD(&ring->td_list);
-
-	/* Assign to offload data */
-	offload_data->sw_event_ring = ring;
-	offload_data->sw_enqueue = trbs;
-	offload_data->sw_dequeue = trbs;
-
 	if (!offload_data->active) {
+		/* Allocate the ring structure */
+		ring = kzalloc(sizeof(*ring), GFP_KERNEL);
+		if (!ring)
+			return;
+		/* Allocate a single segment for the ring */
+		seg = kzalloc(sizeof(*seg), GFP_KERNEL);
+		if (!seg) {
+			kfree(ring);
+			return;
+		}
+		/* Cast event_buffer to TRB array */
+		trbs = (union xhci_trb *)offload_data->event_buffer;
+		dma = (dma_addr_t)offload_data->event_buffer_va;
+		/* Initialize segment */
+		seg->trbs = trbs;
+		seg->dma = dma;
+		seg->next = seg;  /* Single segment, points to itself */
+		seg->num = 0;
+
+		/* Initialize ring structure */
+		ring->first_seg = seg;
+		ring->last_seg = seg;
+		ring->type = TYPE_EVENT;
+		ring->num_segs = 1;
+		ring->cycle_state = 1;
+
+		/* Set enqueue and dequeue to start of TRB array */
+		ring->enqueue = trbs;
+		ring->enq_seg = seg;
+		ring->dequeue = trbs;
+		ring->deq_seg = seg;
+
+		INIT_LIST_HEAD(&ring->td_list);
+		/* Assign to offload data */
+		offload_data->sw_event_ring = ring;
+		offload_data->sw_enqueue = trbs;
+		offload_data->sw_dequeue = trbs;
 		uaudio_qdev->qsram = uaudio_get_qsram(uaudio_qdev->dev);
 		if (IS_ERR(uaudio_qdev->qsram)) {
 			dev_err(uaudio_qdev->dev, "Failed to get qsram\n");
@@ -1038,7 +1384,6 @@ static void xhci_sideband_init_sw_event_ring(struct xhci_sideband *sb,
 			kfree(seg);
 			return;
 		}
-
 		for (i = 0; i < 64; i++)
 			writel(0x0, &uaudio_qdev->qsram->data[i]);
 	}
@@ -1076,8 +1421,7 @@ static void uaudio_offload_ready_work(struct work_struct *work)
 		}
 		count++;
 	}
-
-	pr_debug("%s: done count=%d\n", __func__, count);
+	uaudio_dbg("uaudio offload ready work done %d\n", count);
 }
 
 static bool allocate_once = true;
@@ -1515,6 +1859,7 @@ static int prepare_xfer_buffer(struct snd_usb_substream *subs,
 	resp->xhci_mem_info_valid = 1;
 
 	chip = uadev[card_num].chip;
+
 	if (atomic_read(&uadev[card_num].in_use) == 1 && chip) {
 		ret = initialize_uadev_if_in_use(card_num, subs, chip);
 		if (ret < 0) {
@@ -1670,7 +2015,8 @@ static int initialize_uadev_if_in_use(int card_num,
 		sizeof(struct intf_info), GFP_KERNEL);
 	if (!uadev[card_num].info)
 		return -ENOMEM;
-
+	if (!chip)
+		return -ENODEV;
 	mutex_lock(&chip->mutex);
 	uadev[card_num].udev = subs->dev;
 	mutex_unlock(&chip->mutex);
@@ -1762,15 +2108,19 @@ static void uaudio_connect(struct snd_usb_audio *chip)
 		uaudio_err("Invalid card number\n");
 		return;
 	}
-
+	mutex_lock(&chip->mutex);
 	intf = chip->intf[chip->num_interfaces - 1];
 	sb = xhci_sideband_register(intf, XHCI_SIDEBAND_VENDOR,
 						 uaudio_sb_notifier);
-	if (!sb)
+	if (!sb) {
+		mutex_unlock(&chip->mutex);
 		return;
-
+	}
 	uadev[chip->card->number].chip = chip;
 	uadev[chip->card->number].sb = sb;
+	uaudio_info("WA for audio headset!");
+	uadev[chip->card->number].chip->quirk_flags |= QUIRK_FLAG_CTL_MSG_DELAY_5M;
+	mutex_unlock(&chip->mutex);
 }
 
 /*
@@ -1782,7 +2132,7 @@ static int uaudio_send_disconnect_ind(struct snd_usb_audio *chip)
 	struct qmi_uaudio_stream_ind_msg_v01 disconnect_ind = {0};
 	struct uaudio_qmi_svc *svc = uaudio_svc;
 	struct uaudio_dev *dev;
-	int ret = 0;
+	int ret = 0, i = 0;
 
 	dev = &uadev[chip->card->number];
 
@@ -1817,9 +2167,15 @@ static int uaudio_send_disconnect_ind(struct snd_usb_audio *chip)
 
 		mutex_lock(&chip->mutex);
 	}
+	for (i = 0; i < 64; i++)
+		writel(0x0, &uaudio_qdev->qsram->data[i]);
 
 	return ret;
 }
+
+static void xhci_sideband_cleanup_sw_event_ring
+			(struct xhci_sideband *sb,
+			struct audio_offload_data *offload_data);
 
 static void uaudio_disconnect(struct snd_usb_audio *chip)
 {
@@ -1837,6 +2193,7 @@ static void uaudio_disconnect(struct snd_usb_audio *chip)
 		return;
 	}
 
+	mutex_lock(&uadev[card_num].mutex);
 	mutex_lock(&chip->mutex);
 	dev = &uadev[card_num];
 
@@ -1846,13 +2203,19 @@ static void uaudio_disconnect(struct snd_usb_audio *chip)
 		goto done;
 	}
 
+	if (uaudio_qdev->poll_active) {
+		flush_work(&uaudio_qdev->offload_ready_work);
+		uaudio_qdev->poll_active = false;  /* signal worker to stop */
+	}
+	uaudio_qdev->in_disconnect = true;
 	uaudio_send_disconnect_ind(chip);
 	/* Make sure indication does first before dev.*/
 	mb();
+	uaudio_qdev->in_disconnect = false;
+	uaudio_qdev->sw_evt_ring_freed = true;
 	uaudio_dev_cleanup(dev);
 done:
-	if (dev->xhci)
-		unregister_trace_android_vh_xhci_handle_offload(xhci_handle_offload, NULL);
+	uaudio_dbg("sb_sync\n");
 
 	if (dev->sb)
 		xhci_sideband_unregister(dev->sb);
@@ -1889,6 +2252,7 @@ done:
 	uadev[card_num].sb = NULL;
 	uadev[card_num].chip = NULL;
 	mutex_unlock(&chip->mutex);
+	mutex_unlock(&uadev[card_num].mutex);
 }
 
 static unsigned int uaudio_ep_index_to_address(unsigned int ep_index)
@@ -1932,8 +2296,10 @@ static int uaudio_sb_notifier(struct usb_interface *intf,
 
 		for (if_idx = 0; if_idx < dev->num_intf; if_idx++) {
 			if ((dev->info[if_idx].data_ep_idx == ep_addr) ||
-			    (dev->info[if_idx].sync_ep_idx == ep_addr))
+			    (dev->info[if_idx].sync_ep_idx == ep_addr)) {
+				uaudio_qdev->in_disconnect = true;
 				uaudio_send_disconnect_ind(chip);
+			}
 		}
 	}
 
@@ -2155,7 +2521,11 @@ static int enable_audio_stream(struct snd_usb_substream *subs,
 		return -ENODEV;
 
 	pm_runtime_barrier(&chip->intf[0]->dev);
-	snd_usb_autoresume(chip);
+	ret = snd_usb_autoresume(chip);
+	if (ret < 0) {
+		uaudio_err("snd_usb_autoresume failed ret %d\n", ret);
+		return ret;
+	}
 
 	ret = snd_usb_hw_params(subs, &params);
 	if (ret < 0)
@@ -2277,16 +2647,21 @@ static void xhci_sideband_cleanup_sw_event_ring
 {
 	struct xhci_interrupter *ir = sb->ir;
 	struct xhci_ring *sw_event_ring = offload_data->sw_event_ring;
+	unsigned long flags = 0;
 
 	if (!ir || !sw_event_ring)
 		return;
 
 	/* Done using the sw_event_ring, now come back to reality */
-	if (sb->xhci && ir)
+	if (sb->xhci && ir) {
+		spin_lock_irqsave(&sb->xhci->lock, flags);
 		xhci_sync_erst_dequeue(sb->xhci, ir);
+		spin_unlock_irqrestore(&sb->xhci->lock, flags);
+	}
 
 	/* Make sure qsram sync completes.*/
 	mb();
+	uaudio_qdev->sw_evt_ring_freed = true;
 	uaudio_dbg("SW event ring cleaned up\n");
 
 }
@@ -2707,6 +3082,7 @@ static int uaudio_validate_stream_req(
 	return 0;
 }
 
+
 static void handle_uaudio_stream_req(struct qmi_handle *handle,
 			struct sockaddr_qrtr *sq,
 			struct qmi_txn *txn,
@@ -2765,8 +3141,16 @@ response:
 					uadev[pcm_card_num].udev,
 					info);
 		}
-		if (atomic_dec_and_test(&uadev[pcm_card_num].in_use))
-			uaudio_dev_release(&uadev[pcm_card_num]);
+		// uaudio_disable_stream_work could run already and rel dev already,
+		// no need to do it again.
+		if (atomic_read(&uadev[pcm_card_num].in_use) > 0) {
+			if (atomic_dec_and_test(&uadev[pcm_card_num].in_use)) {
+				/* 一定要先唤醒等待 disconnect 的线程 */
+				wake_up(&uadev[pcm_card_num].disconnect_wq);
+				if (!uaudio_qdev->sw_evt_ring_freed)
+					uaudio_dev_release(&uadev[pcm_card_num]);
+			}
+		}
 		mutex_unlock(&chip->mutex);
 	}
 
@@ -2788,7 +3172,7 @@ response:
 static void uaudio_qmi_disconnect(void)
 {
 	struct intf_info *info;
-	int idx, if_idx;
+	int idx, if_idx, i = 0;
 	struct snd_usb_substream *subs;
 	struct snd_usb_audio *chip;
 	struct usb_host_endpoint *ep;
@@ -2836,6 +3220,8 @@ static void uaudio_qmi_disconnect(void)
 		atomic_set(&uadev[idx].in_use, 0);
 		uaudio_dev_cleanup(&uadev[idx]);
 	}
+	for (i = 0; i < 64; i++)
+		writel(0x0, &uaudio_qdev->qsram->data[i]);
 }
 
 static void cleanup_pseudo_event_ring(void)
@@ -2874,7 +3260,10 @@ static void cleanup_pseudo_event_ring(void)
 			}
 		}
 	}
-
+	if (uaudio_qdev->poll_active) {
+		flush_work(&uaudio_qdev->offload_ready_work);
+		uaudio_qdev->poll_active = false;
+	}
 	uaudio_qdev->poll_active = false;
 	allocate_once = true;
 	uaudio_dbg("Pseudo event ring and SW ring cleanup completed\n");
@@ -2897,8 +3286,8 @@ static void uaudio_handle_bye(void)
 
 		unregister_trace_android_vh_xhci_handle_offload
 			(xhci_handle_offload, NULL);
-
-		xhci_sideband_cleanup_sw_event_ring(uadev[idx].sb,
+		if (!uaudio_qdev->sw_evt_ring_freed)
+			xhci_sideband_cleanup_sw_event_ring(uadev[idx].sb,
 				&uadev[idx].offload_data);
 	}
 
