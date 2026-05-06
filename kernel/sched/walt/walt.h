@@ -51,6 +51,12 @@
 
 /* Adaptive cgroups related declarations */
 #define  MAX_ADAPTIVE_CGRP_NODES 5
+typedef void (*wacg_apply_feature_cb)(struct walt_task_struct *wts, bool enable);
+
+enum walt_adaptive_cgrp_features {
+	WACG_MAX_FEATURES,
+};
+
 struct walt_adaptive_cgroup {
 	struct ctl_table_header *header;
 	struct ctl_table table[MAX_ADAPTIVE_CGRP_NODES];

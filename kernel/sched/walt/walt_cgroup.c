@@ -42,6 +42,37 @@ static atomic_t nr_free_workfn_queued = ATOMIC_INIT(0);
  */
 static DECLARE_COMPLETION(wacg_frees_done);
 
+/* List of callbacks for the features supported by an adaptive cgroup */
+static wacg_apply_feature_cb wacg_features_cb_table[WACG_MAX_FEATURES] = {
+};
+
+/* Apply adaptive cgroup features */
+static inline void apply_adaptive_cgroup_features(int features, struct walt_task_struct *wts)
+{
+	bool enable = false;
+
+	/* features = 0 means that we want to reset all the adaptive features for this task */
+	if (!features) {
+		for (int i = 0; i < WACG_MAX_FEATURES; i++) {
+			wacg_apply_feature_cb func = wacg_features_cb_table[i];
+
+			if (func)
+				func(wts, 0);
+		}
+		wts->has_adaptive_features = false;
+		return;
+	}
+
+	for (int i = 0; i < WACG_MAX_FEATURES; i++) {
+		enable = features & BIT(i);
+		wacg_apply_feature_cb func = wacg_features_cb_table[i];
+
+		if (func)
+			func(wts, enable);
+	}
+	wts->has_adaptive_features = true;
+}
+
 static int walt_adaptive_cgroup_updownmigrate_handler(const struct ctl_table *table, int write,
 				void __user *buffer, size_t *lenp,
 				loff_t *ppos)
@@ -113,6 +144,65 @@ static int walt_adaptive_cgroup_updownmigrate_handler(const struct ctl_table *ta
 	return 0;
 }
 
+static int walt_adaptive_cgroup_features_handler(const struct ctl_table *table, int write,
+				void __user *buffer, size_t *lenp,
+				loff_t *ppos)
+{
+
+	struct cgroup_subsys_state *css = NULL;
+	struct walt_adaptive_cgroup *wacg = NULL;
+	struct walt_task_struct *wts;
+	struct css_task_iter it;
+	struct task_struct *p;
+	int user_input = 0;
+	int ret = -EINVAL;
+	int valid_features = GENMASK_TYPE(int, WACG_MAX_FEATURES, 0);
+
+	struct ctl_table tmp_table = {
+		.data	= &user_input,
+		.maxlen	= sizeof(int),
+		.mode	= table->mode,
+	};
+
+	wacg = container_of(table->data, struct walt_adaptive_cgroup, features);
+
+	if (atomic_read(&wacg->state) == WACG_STATE_DEAD)
+		return -EPERM;
+
+	guard(mutex)(&wacg_tunables_update_lock);
+
+	if (!write) {
+		tmp_table.data = table->data;
+		ret = proc_dointvec(&tmp_table, write, buffer, lenp, ppos);
+		return ret;
+	}
+
+	ret = proc_dointvec(&tmp_table, write, buffer, lenp, ppos);
+	if (ret)
+		return ret;
+
+	/* Discard input if any unsupported feature bit is set in input */
+	if (user_input & ~valid_features)
+		return -EINVAL;
+
+	if (user_input == wacg->features)
+		return 0;
+
+	wacg->features = user_input;
+	/*
+	 * Now we are ready to set the features for all the tasks in this cgroup
+	 */
+	css = wacg->css;
+	css_task_iter_start(css, 0, &it);
+	while ((p = css_task_iter_next(&it))) {
+		wts = android_task_vendor_data(p);
+		apply_adaptive_cgroup_features(user_input, wts);
+	}
+	css_task_iter_end(&it);
+
+	return 0;
+}
+
 static inline void walt_adaptive_cgroup_schedule_free(struct walt_adaptive_cgroup *wacg)
 {
 	/*
@@ -172,7 +262,7 @@ static void walt_adaptive_cgroup_create_workfn(struct work_struct *work)
 	wacg->table[0].data             = &wacg->features;
 	wacg->table[0].maxlen           = sizeof(int);
 	wacg->table[0].mode             = 0644;
-	wacg->table[0].proc_handler     = proc_dointvec_minmax;
+	wacg->table[0].proc_handler     = walt_adaptive_cgroup_features_handler;
 	wacg->table[0].extra1           = SYSCTL_ZERO;
 	wacg->table[0].extra2           = SYSCTL_INT_MAX;
 
@@ -430,6 +520,8 @@ static void android_rvh_cpu_cgroup_attach(void *unused,
 	struct walt_task_group *wtg;
 	unsigned int grp_id;
 	int ret;
+	struct walt_adaptive_cgroup *wacg = NULL;
+	struct walt_task_struct *wts = NULL;
 
 	if (unlikely(walt_disabled))
 		return;
@@ -439,14 +531,32 @@ static void android_rvh_cpu_cgroup_attach(void *unused,
 	if (!css)
 		goto out;
 
+	rcu_read_lock();
 	tg = container_of(css, struct task_group, css);
 	wtg = (struct walt_task_group *) tg->android_vendor_data1;
+	wacg = rcu_dereference(wtg->adaptive_cgrp);
 
 	cgroup_taskset_for_each(task, css, tset) {
 		grp_id = wtg->colocate ? DEFAULT_CGROUP_COLOC_ID : 0;
+		wts = (struct walt_task_struct *)android_task_vendor_data(task);
 		ret = __sched_set_group_id(task, grp_id);
+
+		/*
+		 * The destination cgroup for this task may or may not be an adaptive
+		 * cgroup. If it is adaptive and has feature bits set, apply those
+		 * features to the task.
+		 *
+		 * If the destination cgroup is not adaptive, remove any adaptive
+		 * features that were previously applied to the task.
+		 */
+		if (wacg && wacg->features)
+			apply_adaptive_cgroup_features(wacg->features, wts);
+		else if (wts->has_adaptive_features)
+			apply_adaptive_cgroup_features(0, wts);
+
 		trace_sched_cgroup_attach(task, grp_id, ret);
 	}
+	rcu_read_unlock();
 out:
 	update_instruction_data(CPU_CGROUP_ATTACH);
 }

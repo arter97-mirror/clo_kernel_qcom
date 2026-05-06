@@ -181,6 +181,7 @@ struct walt_task_struct {
 	 *              when misfit was first detected under smart_freq limiting.
 	 */
 	u64				sf_misfit_time;
+	bool				has_adaptive_features;
 };
 
 #define wts_to_ts(wts) ({ \
