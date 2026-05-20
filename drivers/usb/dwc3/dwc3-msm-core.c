@@ -4620,7 +4620,8 @@ static void dwc3_msm_suspend_release_wakeup(struct dwc3_msm *mdwc)
 		return;
 	}
 
-	pm_relax(mdwc->dev);
+	if (!mdwc->force_suspend || (dwc3_msm_get_role(mdwc) != USB_ROLE_HOST))
+		pm_relax(mdwc->dev);
 }
 
 static int dwc3_msm_suspend(struct dwc3_msm *mdwc, bool force_power_collapse)
@@ -4681,6 +4682,7 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc, bool force_power_collapse)
 		mutex_unlock(&mdwc->suspend_resume_mutex);
 		return ret;
 	}
+
 	dwc3_msm_suspend_release_wakeup(mdwc);
 
 	atomic_set(&mdwc->in_lpm, 1);
@@ -4785,7 +4787,8 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 		return 0;
 	}
 
-	pm_stay_awake(mdwc->dev);
+	if (!mdwc->force_suspend || (dwc3_msm_get_role(mdwc) != USB_ROLE_HOST))
+		pm_stay_awake(mdwc->dev);
 
 	ret = __dwc3_msm_resume(mdwc);
 	if (ret < 0)
@@ -8401,6 +8404,7 @@ static int dwc3_msm_pm_resume(struct device *dev)
 	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
 	struct generic_pm_domain *genpd;
 	struct dwc3 *dwc = NULL;
+	int ret;
 
 	if (mdwc->dwc3)
 		dwc = platform_get_drvdata(mdwc->dwc3);
@@ -8444,6 +8448,27 @@ static int dwc3_msm_pm_resume(struct device *dev)
 				dev_dbg(dev, "GDSC flags OFF\n");
 			}
 		}
+
+		/*
+		 * The sequence should be acceptable to add here, as:
+		 *   1. If role is DEVICE or NONE - PM suspend is aborted due to
+		 *      in_lpm == 1.
+		 *   2. PM resume is likely only called during host mode use cases.
+		 *
+		 */
+		pm_runtime_disable(dev);
+
+		/* If PM resume fails, let RPM try */
+		ret = pm_runtime_set_active(dev);
+		if (ret)
+			goto runtime_enable;
+
+		ret = dwc3_msm_resume(mdwc);
+		if (ret)
+			pm_runtime_set_suspended(dev);
+
+runtime_enable:
+		pm_runtime_enable(dev);
 	}
 
 out:
