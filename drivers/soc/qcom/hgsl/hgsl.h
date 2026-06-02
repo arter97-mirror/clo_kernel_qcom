@@ -53,6 +53,7 @@
 #define USRPTR(a) u64_to_user_ptr((uint64_t)(a))
 
 #define HGSL_MAX_IOC_SIZE (128)
+#define HGSL_PROCESS_NAME_MAX_LEN (128)
 #define HGSL_IOCTL_FUNC(_cmd, _func) \
 	[_IOC_NR((_cmd))] = \
 		{ .cmd = (_cmd), .func = (_func) }
