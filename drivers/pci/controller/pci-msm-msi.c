@@ -447,6 +447,14 @@ static int msm_msi_snps_irq_setup(struct msm_msi *msi)
 			goto free_irqs;
 		}
 
+		ret = enable_irq_wake(irq);
+		if (ret) {
+			dev_err(msi->dev,
+				"MSI: Unable to set enable_irq_wake for interrupt: %d: %d\n",
+				i, irq);
+			goto free_irqs;
+		}
+
 		msi_grp = &msi->grps[i];
 		msi_grp->int_en_reg = msi->pcie_cfg +
 				PCIE_MSI_CTRL_INT_N_EN_OFFS(i);
@@ -475,6 +483,7 @@ free_irqs:
 		irq = msi->grps[i].irqs[0].hwirq;
 
 		irq_set_chained_handler_and_data(irq, NULL, NULL);
+		disable_irq_wake(irq);
 		irq_dispose_mapping(irq);
 	}
 
@@ -495,6 +504,14 @@ static int msm_msi_qgic_irq_setup(struct msm_msi *msi)
 			dev_err(msi->dev,
 				"MSI: failed to parse/map interrupt\n");
 			ret = -ENODEV;
+			goto free_irqs;
+		}
+
+		ret = enable_irq_wake(irq);
+		if (ret) {
+			dev_err(msi->dev,
+				"MSI: Unable to set enable_irq_wake for interrupt: %d: %d\n",
+				i, irq);
 			goto free_irqs;
 		}
 
@@ -521,6 +538,7 @@ free_irqs:
 		irq = msi->grps[grp].irqs[index].hwirq;
 
 		irq_set_chained_handler_and_data(irq, NULL, NULL);
+		disable_irq_wake(irq);
 		irq_dispose_mapping(irq);
 	}
 
