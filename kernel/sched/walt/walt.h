@@ -47,6 +47,28 @@
 
 /* MAX_MARGIN_LEVELS should be one less than MAX_CLUSTERS */
 #define MAX_MARGIN_LEVELS (MAX_CLUSTERS - 1)
+#define NUM_UPDOWN_SETTINGS 2
+
+/* Adaptive cgroups related declarations */
+#define  MAX_ADAPTIVE_CGRP_NODES 5
+struct walt_adaptive_cgroup {
+	struct ctl_table_header *header;
+	struct ctl_table table[MAX_ADAPTIVE_CGRP_NODES];
+	int features;
+	unsigned int capacity_up_margin[MAX_CLUSTERS];
+	unsigned int capacity_down_margin[MAX_CLUSTERS];
+	unsigned int cluster0_updownmigrate_pct[NUM_UPDOWN_SETTINGS];
+	unsigned int cluster1_updownmigrate_pct[NUM_UPDOWN_SETTINGS];
+	unsigned int cluster2_updownmigrate_pct[NUM_UPDOWN_SETTINGS];
+	unsigned int cluster3_updownmigrate_pct[NUM_UPDOWN_SETTINGS];
+	atomic_t state;
+	/* work function which register sysctl nodes */
+	struct work_struct cgroup_free_work;
+	/* work function which unregister sysctl nodes */
+	struct work_struct cgroup_create_work;
+	struct rcu_head rcu;
+	struct cgroup_subsys_state *css;
+};
 
 extern bool walt_disabled;
 extern bool waltgov_disabled;
@@ -375,7 +397,6 @@ extern int walt_cpufreq_cycle_cntr_driver_register(void);
 extern int walt_gclk_cycle_counter_driver_register(void);
 
 extern int num_sched_clusters;
-#define NUM_UPDOWN_SETTINGS 2
 enum sched_cgroup_type {
 	ANDROID_CGROUP_OTHER,
 	ANDROID_CGROUP_TOPAPP,
@@ -660,6 +681,10 @@ struct walt_task_group {
 	 */
 	bool sched_boost_enable[MAX_NUM_BOOST_TYPE];
 	enum sched_cgroup_type group_type;
+	/*
+	 * If this cgroup is created in /dev/cpuctl/walt/
+	 */
+	struct walt_adaptive_cgroup *adaptive_cgrp;
 };
 
 struct sched_avg_stats {
@@ -1137,8 +1162,9 @@ static inline bool __task_fits_capacity(struct task_struct *p,
 {
 	struct cgroup_subsys_state *css;
 	struct task_group *tg;
-	struct walt_task_group *wtg;
-	unsigned int margin;
+	struct walt_task_group *wtg = NULL;
+	struct walt_adaptive_cgroup *wacg = NULL;
+	unsigned int margin = 0;
 	bool down = check_for_higher_capacity(task_cpu(p), dst_cpu);
 	int id, cgroup_type = 0;
 	unsigned long util = 0;
@@ -1150,6 +1176,16 @@ static inline bool __task_fits_capacity(struct task_struct *p,
 		goto finish;
 	tg = container_of(css, struct task_group, css);
 	wtg = (struct walt_task_group *) tg->android_vendor_data1;
+	wacg = rcu_dereference(wtg->adaptive_cgrp);
+	if (wtg && wacg) {
+		if (down) {
+			id = cpu_cluster(dst_cpu)->id;
+			margin = wacg->capacity_down_margin[id];
+		} else {
+			id = cpu_cluster(task_cpu(p))->id;
+			margin = wacg->capacity_up_margin[id];
+		}
+	}
 	cgroup_type = wtg->group_type;
 
 finish:
@@ -1162,13 +1198,15 @@ finish:
 	 */
 	if (down) {
 		id = cpu_cluster(dst_cpu)->id;
-		margin = sched_capacity_margin_down[cgroup_type][id];
+		if (!margin)
+			margin = sched_capacity_margin_down[cgroup_type][id];
 		if (task_in_related_thread_group(p))
 			margin = max(margin, sched_capacity_margin_down[ANDROID_CGROUP_TOPAPP][id]);
 
 	} else {
 		id = cpu_cluster(task_cpu(p))->id;
-		margin = sched_capacity_margin_up[cgroup_type][id];
+		if (!margin)
+			margin = sched_capacity_margin_up[cgroup_type][id];
 		if (task_in_related_thread_group(p))
 			margin = max(margin, sched_capacity_margin_up[ANDROID_CGROUP_TOPAPP][id]);
 	}
