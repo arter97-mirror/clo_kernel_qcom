@@ -125,6 +125,11 @@ static inline u32 gh_rm_default_trans_type(void)
 		? GH_RM_TRANS_TYPE_LEND
 		: GH_RM_TRANS_TYPE_DONATE;
 }
+
+int mem_buf_dma_buf_set_destructor_smmu_proxy(struct dma_buf *dmabuf,
+					      mem_buf_dma_buf_destructor dtor,
+					      void *dtor_data);
+
 #else
 
 static inline void *mem_buf_alloc(struct mem_buf_allocation_data *alloc_data)
@@ -147,6 +152,14 @@ static inline u32 gh_rm_default_trans_type(void)
 {
 	return GH_RM_TRANS_TYPE_DONATE;
 }
+
+static inline int mem_buf_dma_buf_set_destructor_smmu_proxy(struct dma_buf *dmabuf,
+					      mem_buf_dma_buf_destructor dtor,
+					      void *dtor_data)
+{
+	return -EINVAL;
+}
+
 #endif /* CONFIG_QCOM_MEM_BUF */
 
 
