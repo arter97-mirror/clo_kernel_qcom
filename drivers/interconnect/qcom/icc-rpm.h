@@ -80,6 +80,8 @@ struct qcom_icc_provider {
  * @last_sum_avg: aggregated average bandwidth from previous aggregation
  * @sum_avg: current sum aggregate value of all avg bw requests
  * @max_peak: current max aggregate value of all peak bw requests
+ * @perf_mode: per-context flag set when a perf mode request is active
+ * @perf_mode_mask: bitmask identifying this node's ACV perf mode bit
  * @mas_rpm_id:	RPM id for devices that are bus masters
  * @slv_rpm_id:	RPM id for devices that are bus slaves
  * @rate: current bus clock rate in Hz
@@ -98,6 +100,8 @@ struct qcom_icc_node {
 	u64 last_sum_avg[RPM_NUM_CXT];
 	u64 sum_avg[RPM_NUM_CXT];
 	u64 max_peak[RPM_NUM_CXT];
+	bool perf_mode[RPM_NUM_CXT];
+	u64 perf_mode_mask;
 	int mas_rpm_id;
 	int slv_rpm_id;
 	u64 rate;

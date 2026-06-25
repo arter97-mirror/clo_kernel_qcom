@@ -76,6 +76,7 @@ def register_modules(registry):
             "drivers/interconnect/qcom/icc-rpm.c",
             "drivers/interconnect/qcom/icc-rpm.h",
             "drivers/interconnect/qcom/qnoc-qos-rpm.h",
+            "drivers/interconnect/qcom/rpm-ids.h",
         ],
         deps = [
             # do not sort
