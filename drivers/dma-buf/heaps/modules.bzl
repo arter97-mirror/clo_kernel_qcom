@@ -94,3 +94,14 @@ def register_modules(registry):
             "drivers/dma-buf/heaps/deferred-free-helper.h",
         ],
     )
+    registry.register(
+        name = "drivers/dma-buf/heaps/named_dmabuf",
+        out = "named_dmabuf.ko",
+        config = "CONFIG_QCOM_NAMED_DMABUF",
+        srcs = [
+            # do not sort
+            "drivers/dma-buf/heaps/named_dmabuf.c",
+            "include/uapi/misc/named_dmabuf.h",
+            "include/trace/events/named_dmabuf_trace.h",
+        ],
+    )
