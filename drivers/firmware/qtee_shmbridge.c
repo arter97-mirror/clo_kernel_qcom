@@ -690,7 +690,7 @@ static int qtee_shmbridge_thaw(struct device *dev)
 {
 	pr_debug("shmbridge: Thaw entry\n");
 
-	qtee_shmbridge_enabled = false;
+	qtee_shmbridge_enabled = true;
 
 	pr_debug("shmbridge: Thaw completed\n");
 	return 0;
