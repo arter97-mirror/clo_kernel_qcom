@@ -723,12 +723,25 @@ static irqreturn_t
 __bwmon_intr_handler(int irq, void *dev, enum mon_reg_type type)
 {
 	struct bwmon *m = dev;
+	unsigned long flags;
+	u32 intr_status;
+	int wake;
 
-	m->intr_status = mon_irq_status(m, type);
-	if (!m->intr_status)
+	intr_status = mon_irq_status(m, type);
+	if (!intr_status)
 		return IRQ_NONE;
 
-	if (bw_hwmon_sample_end(&m->hw) > 0)
+	/*
+	 * Assign m->intr_status inside sample_irq_lock to prevent a data
+	 * race with get_zone(), which reads m->intr_status while holding
+	 * the same lock from the workqueue path.
+	 */
+	spin_lock_irqsave(&sample_irq_lock, flags);
+	m->intr_status = intr_status;
+	wake = __bw_hwmon_sample_end(&m->hw);
+	spin_unlock_irqrestore(&sample_irq_lock, flags);
+
+	if (wake > 0)
 		return IRQ_WAKE_THREAD;
 
 	return IRQ_HANDLED;
