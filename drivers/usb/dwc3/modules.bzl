@@ -44,3 +44,13 @@ def register_modules(registry):
             "arch/arm64/gunyah/gh_arm_drv",
         ],
     )
+
+    registry.register(
+        name = "drivers/usb/dwc3/dwc3-qcom-mp",
+        out = "dwc3-qcom-mp.ko",
+        config = "CONFIG_USB_DWC3_QCOM_MP",
+        srcs = [
+            # do not sort
+            "drivers/usb/dwc3/dwc3-qcom-mp.c",
+        ],
+    )
