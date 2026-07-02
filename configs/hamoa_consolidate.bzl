@@ -9,4 +9,5 @@ hamoa_consolidate_config = {
     "CONFIG_SCHED_WALT": "m",
     "CONFIG_SCHED_WALT_DEBUG": "m",
     "CONFIG_TORTURE_TEST": "m",
+    "CONFIG_UFS_DBG": "y",
 }
