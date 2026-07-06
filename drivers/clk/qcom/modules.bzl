@@ -887,6 +887,23 @@ def register_modules(registry):
     )
 
     registry.register(
+        name = "drivers/clk/qcom/debugcc-glymur",
+        out = "debugcc-glymur.ko",
+        config = "CONFIG_CLK_GLYMUR_DEBUGCC",
+        srcs = [
+            # do not sort
+            "drivers/clk/qcom/clk-debug.h",
+            "drivers/clk/qcom/common.h",
+            "drivers/clk/qcom/debugcc-glymur.c",
+        ],
+        deps = [
+            # do not sort
+            "drivers/clk/qcom/clk-dummy",
+            "drivers/clk/qcom/clk-qcom",
+        ],
+    )
+
+    registry.register(
         name = "drivers/clk/qcom/debugcc-khaje",
         out = "debugcc-khaje.ko",
         config = "CONFIG_SM_DEBUGCC_KHAJE",

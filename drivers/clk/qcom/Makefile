@@ -2,6 +2,8 @@
 
 ccflags-y += -I$(src)
 
+obj-$(CONFIG_CLK_GLYMUR_DEBUGCC) += debugcc-glymur.o
+
 obj-$(CONFIG_CLK_SHIKRA_DEBUGCC) += debugcc-shikra.o
 
 obj-$(CONFIG_CLK_SHIKRA_DISPCC) += dispcc-shikra.o
