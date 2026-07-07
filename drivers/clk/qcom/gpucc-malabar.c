@@ -217,21 +217,6 @@ static const struct freq_tbl ftbl_gpu_cc_gx_gfx3d_clk_src[] = {
 	{ }
 };
 
-static const struct freq_tbl ftbl_gpu_cc_gx_gfx3d_clk_src_bourtzi[] = {
-	F(215000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(266000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(328000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(390000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(440000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(490000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(600000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(650000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(770000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(840000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	F(950000000, P_GPU_CC_PLL0_OUT_EVEN, 2, 0, 0),
-	{ }
-};
-
 static struct clk_rcg2 gpu_cc_gx_gfx3d_clk_src = {
 	.cmd_rcgr = 0x906c,
 	.mnd_width = 0,
@@ -484,26 +469,6 @@ static const struct of_device_id gpu_cc_malabar_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, gpu_cc_malabar_match_table);
 
-static void gpu_cc_malabar_fixup_bourtzi(void)
-{
-	gpu_cc_gx_gfx3d_clk_src.freq_tbl = ftbl_gpu_cc_gx_gfx3d_clk_src_bourtzi;
-}
-
-static int gpu_cc_malabar_fixup(struct platform_device *pdev)
-{
-	const char *compat = NULL;
-	int compatlen = 0;
-
-	compat = of_get_property(pdev->dev.of_node, "compatible", &compatlen);
-	if (!compat || (compatlen <= 0))
-		return -EINVAL;
-
-	if (!strcmp(compat, "qcom,bourtzi-gpucc"))
-		gpu_cc_malabar_fixup_bourtzi();
-
-	return 0;
-}
-
 static int gpu_cc_malabar_probe(struct platform_device *pdev)
 {
 	struct regmap *regmap;
@@ -513,10 +478,6 @@ static int gpu_cc_malabar_probe(struct platform_device *pdev)
 	regmap = qcom_cc_map(pdev, &gpu_cc_malabar_desc);
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
-
-	ret = gpu_cc_malabar_fixup(pdev);
-	if (ret)
-		return ret;
 
 	clk_lucid_evo_pll_configure(&gpu_cc_pll0, regmap, &gpu_cc_pll0_config);
 	clk_lucid_evo_pll_configure(&gpu_cc_pll1, regmap, &gpu_cc_pll1_config);
