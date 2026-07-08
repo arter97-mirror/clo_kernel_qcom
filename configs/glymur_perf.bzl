@@ -6,6 +6,7 @@ glymur_perf_config = {
     "CONFIG_ARM_SMMU_DISABLE_BYPASS_BY_DEFAULT": "y",
     "CONFIG_ARM_SMMU_V3": "m",
     "CONFIG_CLK_GLYMUR_CAMCC": "m",
+    "CONFIG_CLK_GLYMUR_DEBUGCC": "m",
     "CONFIG_CLK_GLYMUR_DISPCC": "m",
     "CONFIG_CLK_GLYMUR_EVACC": "m",
     "CONFIG_CLK_GLYMUR_GCC": "m",
