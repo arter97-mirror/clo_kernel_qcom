@@ -265,8 +265,7 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 				DHMS_MEM_PROC_MPSS_V01 &&
 				!memblock[i].guarantee &&
 				!memblock[i].client_request &&
-				memblock[i].allotted &&
-				!memblock[i].alloc_request) {
+				memblock[i].allotted) {
 
 				if (memblock[i].hyp_mapping) {
 					ret = shared_hyp_unmapping(i);
