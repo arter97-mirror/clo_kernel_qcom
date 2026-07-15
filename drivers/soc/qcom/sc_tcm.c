@@ -15,6 +15,7 @@
 #include <linux/genalloc.h>
 #include <linux/of.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/suspend.h>
 
 #include <linux/soc/qcom/llcc-qcom.h>
 #include "sc_tcm_internal.h"
@@ -26,6 +27,20 @@ struct sc_tcm_device {
 	struct mutex lock;
 };
 
+/**
+ * struct sc_tcm_pm_ops - hibernation callbacks for SC TCM
+ * @hibernation_prepare: called on PM_HIBERNATION_PREPARE to unmap TCM
+ *                       before the hibernation image is written
+ * @post_hibernation:    called on PM_POST_HIBERNATION to remap TCM
+ *                       after resume from hibernation
+ */
+struct sc_tcm_pm_ops {
+	int (*hibernation_prepare)(void);
+	int (*post_hibernation)(void);
+};
+
+static struct llcc_tcm_data *sc_tcm_tcm_data;
+static struct notifier_block sc_tcm_pm_nb;
 static struct sc_tcm_device *sc_tcm;
 
 static int sc_tcm_add_mem(struct sc_tcm_device *sc_tcm)
@@ -108,7 +123,7 @@ static int register_sc_tcm_mem(u64 base, u64 size)
 	int ret;
 
 	if (sc_tcm) {
-		pr_err("SC TCM  memory is already registered @base: %lx, size: %lx\n",
+		pr_err("SC TCM memory is already registered @base: %lx, size: %lx\n",
 				sc_tcm->base, sc_tcm->size);
 		return -EEXIST;
 	}
@@ -144,22 +159,98 @@ err_sc_tcm_add:
 	return ret;
 }
 
+static void sc_tcm_unmap_mem(void)
+{
+	unsigned long base, end;
+
+	if (!sc_tcm) {
+		pr_err("sc_tcm is NULL, nothing to unmap\n");
+		return;
+	}
+
+	base = (unsigned long)phys_to_virt(sc_tcm->base);
+	end = base + sc_tcm->size;
+
+	pr_debug("unmapping VA range [%lx - %lx)\n", base, end);
+	__vunmap_range_noflush(base, end);
+}
+
 static int sc_tcm_region(phys_addr_t *base, size_t *size)
 {
-	struct llcc_tcm_data *data;
-
-	data = llcc_tcm_activate();
-	if (!IS_ERR_OR_NULL(data)) {
-		*base = data->phys_addr;
-		*size = data->mem_size;
+	sc_tcm_tcm_data = llcc_tcm_activate();
+	if (!IS_ERR_OR_NULL(sc_tcm_tcm_data)) {
+		*base = sc_tcm_tcm_data->phys_addr;
+		*size = sc_tcm_tcm_data->mem_size;
 
 		return 0;
 	}
 
-	if (IS_ERR(data) && PTR_ERR(data) == -ENODEV)
+	if (IS_ERR(sc_tcm_tcm_data) && PTR_ERR(sc_tcm_tcm_data) == -ENODEV)
 		return -ENODEV;
 
 	return -EINVAL;
+}
+
+/**
+ * sc_tcm_hibernation_prepare - PM_HIBERNATION_PREPARE handler
+ *
+ * Unmap the SC TCM linear mapping before the hibernation snapshot is taken.
+ */
+static int sc_tcm_hibernation_prepare(void)
+{
+	pr_info("hibernation prepare: unmapping TCM\n");
+	sc_tcm_unmap_mem();
+	return NOTIFY_OK;
+}
+
+/**
+ * sc_tcm_post_hibernation - PM_POST_HIBERNATION handler
+ *
+ * Re-establish the SC TCM linear mapping after resume from hibernation.
+ */
+static int sc_tcm_post_hibernation(void)
+{
+	int ret;
+
+	if (!sc_tcm) {
+		pr_err("post-hibernation: sc_tcm is NULL, cannot remap\n");
+		return NOTIFY_BAD;
+	}
+
+	if (IS_ERR_OR_NULL(sc_tcm_tcm_data)) {
+		pr_err("post-hibernation: sc_tcm_tcm_data invalid, cannot remap\n");
+		return NOTIFY_BAD;
+	}
+
+	sc_tcm->base = sc_tcm_tcm_data->phys_addr;
+	sc_tcm->size = sc_tcm_tcm_data->mem_size;
+
+	ret = sc_tcm_add_mem(sc_tcm);
+	if (ret) {
+		pr_err("post-hibernation: failed to remap TCM memory, ret=%d\n", ret);
+		return NOTIFY_BAD;
+	}
+
+	pr_info("post-hibernation: TCM remapped successfully\n");
+	return NOTIFY_OK;
+}
+
+static const struct sc_tcm_pm_ops sc_tcm_pm_ops = {
+	.hibernation_prepare	= sc_tcm_hibernation_prepare,
+	.post_hibernation	= sc_tcm_post_hibernation,
+};
+
+static int sc_tcm_pm_notifier(struct notifier_block *nb,
+			      unsigned long event, void *unused)
+{
+	switch (event) {
+	case PM_HIBERNATION_PREPARE:
+		return sc_tcm_pm_ops.hibernation_prepare();
+	case PM_POST_HIBERNATION:
+		return sc_tcm_pm_ops.post_hibernation();
+	}
+
+	return NOTIFY_OK;
 }
 
 static int __init sc_tcm_module_init(void)
@@ -183,6 +274,9 @@ static int __init sc_tcm_module_init(void)
 		pr_err("Failed to register the sc tcm memory\n");
 		return ret;
 	}
+
+	sc_tcm_pm_nb.notifier_call = sc_tcm_pm_notifier;
+	register_pm_notifier(&sc_tcm_pm_nb);
 
 	pr_info("Registration of sc tcm memory(%llx, %lx) is successful\n", base, size);
 
