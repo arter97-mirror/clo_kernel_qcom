@@ -706,33 +706,43 @@ static const struct config_item_type ls_item_type = {
 
 static void trace_event(void)
 {
-	int i;
-	u32 bus_width = 0;
-	bool ddr_master_enabled = false;
+	int i, j, idx;
+	u32 bus_width = bwprof_data->hw_node[BWPROF_DDR]->bus_width;
+	u32 mem_freq_to_use;
+	int num_samples_to_read = (MAX_NUM_SAMPLES / bwprof_data->sample_ms);
 
-	for (i = 0; i < bwprof_data->num_masters; i++) {
-		if (bwprof_data->masters_list[i] >= DDR_CPU) {
-			ddr_master_enabled = true;
-			break;
-		}
-	}
-
-	if (ddr_master_enabled) {
-		if (bwprof_data->hw_node[BWPROF_DDR])
-			bus_width = bwprof_data->hw_node[BWPROF_DDR]->bus_width;
-	} else {
-		if (bwprof_data->hw_node[BWPROF_LLCC])
-			monitor_data[0].mem_freq = LLCC_FREQ_ZERO;
-	}
+	if (bwprof_data->sample_ms >= SAMPLING_100MS)
+		num_samples_to_read = 1;
 
 	if (!bwprof_data->is_hist_enable) {
-		trace_bwprof_last_sample_meas(dev_name(bwprof_data->dev),
-				monitor_data[0].ts,
-				monitor_data[0].meas_mbps[0],
-				monitor_data[0].meas_mbps[1],
-				monitor_data[0].meas_mbps[2],
-				(monitor_data[0].mem_freq * bus_width),
-				monitor_data[0].mem_freq);
+		for (i = 0; i < num_samples_to_read; i++) {
+			for (j = 0; j < bwprof_data->num_masters; j++) {
+				if (bwprof_data->masters_list[j] >= DDR_CPU)
+					mem_freq_to_use = monitor_data[i].mem_freq;
+				else
+					mem_freq_to_use = LLCC_FREQ_ZERO;
+
+				trace_bwprof_last_sample_meas(dev_name(bwprof_data->dev),
+					bwprof_data->masters_list[j],
+					monitor_data[i].ts,
+					monitor_data[i].meas_mbps[j],
+					(mem_freq_to_use * bus_width),
+					mem_freq_to_use);
+			}
+		}
+	} else {
+		for (i = 0; i < MAX_HIST_SAMPLES; i++) {
+			for (j = 0; j < bwprof_data->num_masters; j++) {
+				idx = (j * MAX_BUCKETS);
+				trace_bwprof_hist_last_sample(dev_name(bwprof_data->dev),
+					bwprof_data->masters_list[j],
+					hist_data[i].ts,
+					hist_data[i].sample[idx + 0],
+					hist_data[i].sample[idx + 1],
+					hist_data[i].sample[idx + 2],
+					hist_data[i].sample[idx + 3]);
+			}
+		}
 	}
 }
 
