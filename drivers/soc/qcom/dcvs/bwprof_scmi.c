@@ -263,14 +263,20 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 			ret = smci_bwprof_license_check(&bwprof_data->oic,
 					bwprof_data->bwprof_profiler,
 					BWMON_FEATURE_HIST, NULL, 0);
+			if (ret) {
+				pr_err("smci_bwprof_license_check failed for histogram sampling: %d\n",
+					ret);
+				return -EIO;
+			}
 		} else {
 			ret = smci_bwprof_license_check(&bwprof_data->oic,
 					bwprof_data->bwprof_profiler,
 					BWMON_FEATURE_1MS, NULL, 0);
-		}
-		if (ret) {
-			pr_err("smci_bwprof_license_check failed : %d\n", ret);
-			return -EIO;
+			if (ret) {
+				pr_err("smci_bwprof_license_check failed for 1ms sampling: %d\n",
+					ret);
+				return -EIO;
+			}
 		}
 	}
 	cfg_type = map_sampling_ms(sampling_ms);
@@ -286,12 +292,13 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 			is_multimedia_enable = true;
 	}
 
-	if (is_multimedia_enable) {
+	if (is_multimedia_enable && sampling_ms < SAMPLING_100MS) {
 		ret = smci_bwprof_license_check(&bwprof_data->oic,
 					bwprof_data->bwprof_profiler,
 					BWMON_FEATURE_MULTIMEDIA, NULL, 0);
 		if (ret) {
-			pr_err("smci_bwprof_license_check failed : %d\n", ret);
+			pr_err("smci_bwprof_license_check failed for multimedia masters : %d\n",
+				ret);
 			return -EIO;
 		}
 	}
