@@ -202,6 +202,22 @@ static int qcom_smmu_nesting_attach_dev(struct kvm_hyp_iommu *iommu,
 	return 0;
 }
 
+static int qcom_smmu_nesting_map_pages(struct kvm_hyp_iommu_domain *domain,
+				       unsigned long iova, phys_addr_t paddr,
+				       size_t pgsize, size_t pgcount, int prot,
+				       size_t *total_mapped)
+{
+	return 0;
+}
+
+static size_t qcom_smmu_nesting_unmap_pages(struct kvm_hyp_iommu_domain *domain,
+					    unsigned long iova,
+					    size_t pgsize, size_t pgcount,
+					    struct iommu_iotlb_gather *iotlb_gather)
+{
+	return 0;
+}
+
 static int qcom_smmu_nesting_init(void)
 {
 	int ret, i = 0;
@@ -336,6 +352,8 @@ struct kvm_iommu_ops qcom_smmu_hyp_nesting_ops = {
 	.dabt_handler                   = qcom_dispatcher_dabt_handler,
 	.attach_dev			= qcom_smmu_nesting_attach_dev,
 	.detach_dev			= qcom_smmu_nesting_detach_dev,
+	.map_pages			= qcom_smmu_nesting_map_pages,
+	.unmap_pages			= qcom_smmu_nesting_unmap_pages,
 	.suspend			= qcom_smmu_nesting_suspend,
 	.resume				= qcom_smmu_nesting_resume,
 	.host_stage2_idmap		= qcom_smmu_nesting_idmap,
