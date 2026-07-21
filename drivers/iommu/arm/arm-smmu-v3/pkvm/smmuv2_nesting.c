@@ -676,6 +676,34 @@ static int reserve_host_s2_context_bank(struct smmu_v2_nested *smmu)
 	return 0;
 }
 
+static int reserve_guest_resources(struct smmu_v2_nested *smmu)
+{
+	if (smmu->num_cb < smmu->num_guest_cb ||
+		smmu->num_smr < smmu->num_guest_smr) {
+		smmu_v2_debug_print("Insufficient resources for guest: num_cb=%u num_smr=%u\n",
+					smmu->num_cb, smmu->num_smr);
+		return -ENODEV;
+	}
+
+	/*
+	 * Carve out the tail of the host CB/SMR pools for guest pVM use
+	 * Shrink host-visible counts accordingly so guest entries are
+	 * never touched by the host allocation paths.
+	 */
+	smmu->guest_cb_base = smmu->num_cb - smmu->num_guest_cb;
+	smmu->num_cb = smmu->guest_cb_base;
+	smmu->num_cbar = smmu->num_cb;
+
+	smmu->guest_smr_base = smmu->num_smr - smmu->num_guest_smr;
+	smmu->num_smr = smmu->guest_smr_base;
+	smmu->num_s2cr = smmu->num_smr;
+
+	smmu_v2_debug_print("Guest resources reserved: %u CBs, %u SMRs\n",
+			     smmu->num_guest_cb, smmu->num_guest_smr);
+
+	return 0;
+}
+
 static int hw_profile_init(void)
 {
 	struct smmu_v2_nested *smmu;
@@ -686,8 +714,8 @@ static int hw_profile_init(void)
 		u32 id1 = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_ID1);
 		u32 scr_val = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_sCR0);
 
-
-		smmu->num_smr = id0 & ARM_SMMU_ID0_NUMSMRG;
+		smmu->total_num_smr = id0 & ARM_SMMU_ID0_NUMSMRG;
+		smmu->num_smr = smmu->total_num_smr;
 		smmu->num_s2cr = smmu->num_smr; /* smr == s2cr */
 		smmu->num_cb = id1 & ARM_SMMU_ID1_NUMCB;
 		smmu->num_cbar = smmu->num_cb; /* cbar == cb */
@@ -722,6 +750,13 @@ static int hw_profile_init(void)
 		ret = update_s2cr_profile(smmu);
 		if (ret) {
 			smmu_v2_debug_print("Failed to update S2CR profile!\n");
+			return ret;
+		}
+
+		/* Reserve guest resources out of the profiled CB/SMR tails */
+		ret = reserve_guest_resources(smmu);
+		if (ret) {
+			smmu_v2_debug_print("Failed to reserve guest resources: %d\n", ret);
 			return ret;
 		}
 

@@ -222,6 +222,120 @@ int smmuv2_post_boot_init(void)
 	return 0;
 }
 
+/*
+ * Parse the pkvm_assignable_devices DT node
+ *	pkvm_assignable_devices {
+ *		compatible = "pkvm,device-assignment";
+ *		// List of <phandle group_id> pairs
+ *		devices = <&device_node_1 group_id_1>, ..., <&device_node_N group_id_N>;
+ *	};
+ *
+ *	device with stream IDs 0 and 7
+ *	device_node_1 {
+ *		iommus = <&smmu2 0 0>,
+ *			 <&smmu2 7 0>;
+ *	};
+ */
+static int smmuv2_parse_assignable_devices(void)
+{
+	struct device_node *np, *dev_np, *smmu_np;
+	struct of_phandle_args args;
+	struct resource res;
+	int i, j, index, entry_size, num_iommus_cells;
+	u32 smmu_cells, group_id, num_smrs, num_s2_cbs;
+	bool found;
+	u32 seen_groups[ARM_SMMU_MAX_GUEST_S2_CB]; /* To track unique groupIDs */
+
+	np = of_find_compatible_node(NULL, NULL, "pkvm,device-assignment");
+	if (!np) {
+		pr_info("No assignable devices found\n");
+		return 0;
+	}
+
+	for (i = 0; i < smmu_v2_nested_count; i++) {
+		index = 0;
+		num_smrs = 0;
+		num_s2_cbs = 0;
+		memset(seen_groups, 0, sizeof(seen_groups));
+
+		while (!of_parse_phandle_with_fixed_args(np, "devices",
+							1, index++, &args)) {
+			dev_np = args.np;
+			group_id = args.args[0];
+
+			/* 1. Count SMRs */
+			entry_size = 0;
+			smmu_cells = 0;
+
+			num_iommus_cells = of_property_count_u32_elems(dev_np,
+								"iommus");
+			if (num_iommus_cells <= 0) {
+				of_node_put(dev_np);
+				continue;
+			}
+
+			/* Assumption: single-SMMU-per-device */
+			smmu_np = of_parse_phandle(dev_np, "iommus", 0);
+			if (!smmu_np) {
+				of_node_put(dev_np);
+				continue;
+			}
+
+			if (of_address_to_resource(smmu_np, 0, &res) ||
+			    res.start != smmu_v2_nested_base[i].base_pa) {
+				of_node_put(dev_np);
+				of_node_put(smmu_np);
+				continue;
+			}
+
+			if (of_property_read_u32(smmu_np, "#iommu-cells",
+							&smmu_cells)) {
+				of_node_put(dev_np);
+				of_node_put(smmu_np);
+				continue;
+			}
+
+			entry_size = smmu_cells + 1;
+			num_smrs += num_iommus_cells / entry_size;
+
+			/* 2. Count unique Group Ids = CBs*/
+			found = false;
+
+			for (j = 0; j < num_s2_cbs; j++) {
+				if (group_id == seen_groups[j]) {
+					found = true;
+					break;
+				}
+			}
+
+			if (!found) {
+				if (num_s2_cbs >= ARM_SMMU_MAX_GUEST_S2_CB)
+					pr_warn("Total unique group IDs exceeds MAX_GUEST_S2_CB\n");
+				else
+					seen_groups[num_s2_cbs++] = group_id;
+			}
+
+			of_node_put(smmu_np);
+			of_node_put(dev_np);
+		}
+
+		/* Clamp total devices to ARM_SMMU_MAX_GUEST_SMRS */
+		if (num_smrs > ARM_SMMU_MAX_GUEST_SMRS) {
+			pr_warn("Total assignable_devices exceeds MAX_GUEST_SMRS;"
+				"clamping\n");
+			num_smrs = ARM_SMMU_MAX_GUEST_SMRS;
+		}
+		smmu_v2_nested_base[i].num_guest_smr = num_smrs;
+		smmu_v2_nested_base[i].num_guest_cb = num_s2_cbs;
+
+		pr_info("SMMU[%d]: guest SMRs=%u, guest S2 CBs=%u\n",
+			 i, num_smrs, num_s2_cbs);
+	}
+	of_node_put(np);
+
+	return 0;
+}
+
 int smmuv2_describe_smmuv2(void)
 {
 	struct device_node *np;
@@ -253,6 +367,7 @@ int smmuv2_describe_smmuv2(void)
 		return -ENOMEM;
 
 	smmu_v2_host_nested_base = smmu_v2_nested_base;
+
 	/* Process each compatible device */
 	for (i = 0; i < ARRAY_SIZE(compatible_devices); i++) {
 		for_each_compatible_node(np, NULL, compatible_devices[i]) {
@@ -276,9 +391,14 @@ int smmuv2_describe_smmuv2(void)
 				/* second one is cb fault IRQ to start with */
 				irq = of_irq_get(np, 1);
 				smmu_v2_nested_base[smmu_v2_nested_count].irq_s2_cb = irq;
+
 				pr_info("smmu_v2_nested_base[%lx].irq_s2_cb: %d\n",
 					smmu_v2_nested_count,
 					smmu_v2_nested_base[smmu_v2_nested_count].irq_s2_cb);
+
+				desc = irq_to_desc(irq);
+				if (desc)
+					pr_info("SMMU IRQ: %d\n", (int)desc->irq_data.hwirq);
 
 				/* Read qcom,handoff-smrs: array of (sid, mask) pairs.
 				 * Each pair is packed as sid | (mask << 16) into handoff_smrs[].
@@ -303,9 +423,6 @@ int smmuv2_describe_smmuv2(void)
 				}
 
 				smmu_v2_nested_count++;
-				desc = irq_to_desc(irq);
-				if (desc)
-					pr_info("SMMU IRQ: %d\n", (int)desc->irq_data.hwirq);
 			}
 		}
 	}
@@ -313,6 +430,13 @@ int smmuv2_describe_smmuv2(void)
 	pr_info("Total Num of SMMU will be used for nesting: %d\n",
 		total_smmus);
 	pr_info("smmu_v2_nested_base: %llx\n", (u64)smmu_v2_nested_base);
+
+	/* Determine no. guest S2 CBs & SMRs to reserve, by parsing the
+	 * pkvm_assignable_devices DT node.
+	 */
+	ret = smmuv2_parse_assignable_devices();
+	if (ret)
+		pr_info("Failed to parse assignable_devices DT node: %d\n", ret);
 
 	return total_smmus;
 }
