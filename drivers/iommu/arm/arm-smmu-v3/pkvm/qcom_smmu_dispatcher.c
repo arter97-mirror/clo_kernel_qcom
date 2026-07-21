@@ -180,11 +180,50 @@ static struct kvm_hyp_iommu *qcom_nesting_id_to_iommu(pkvm_handle_t smmu_id)
 
 static int qcom_smmu_nesting_alloc_domain(struct kvm_hyp_iommu_domain *domain, int type)
 {
+	struct smmu_nested_guest_domain *guest_domain;
+
+	if (type >= KVM_ARM_SMMU_DOMAIN_MAX)
+		return -EINVAL;
+
+	guest_domain = hyp_alloc(sizeof(*guest_domain));
+	if (!guest_domain)
+		return -ENOMEM;
+
+	/*
+	 * The SMMU version (v2/v3) is not known here, so the page table and
+	 * the SMMU binding are deferred to attach_dev, which supplies the
+	 * version-specific TLB ops. Keep them unset until then.
+	 */
+	guest_domain->domain = domain;
+	guest_domain->iommu = NULL;
+	guest_domain->cb_idx = -1;
+	guest_domain->pgtable = NULL;
+	hyp_spin_lock_init(&guest_domain->pgt_lock);
+
+	domain->priv = guest_domain;
+
 	return 0;
 }
 
 static void qcom_smmu_nesting_free_domain(struct kvm_hyp_iommu_domain *domain)
 {
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+
+	if (!guest_domain)
+		return;
+
+	/* Page table is allocated at attach_dev; NULL if never attached. */
+	if (guest_domain->pgtable)
+		kvm_arm_io_pgtable_free(guest_domain->pgtable);
+
+	/*
+	 * TODO: force_free_domain can free a domain with attached devices
+	 * (i.e. no detach_dev). Reclaim the guest CB/SMR pool slots here when
+	 * guest_domain->iommu != NULL, else a crashing pVM leaks them.
+	 */
+
+	hyp_free(guest_domain);
+	domain->priv = NULL;
 }
 
 static int qcom_smmu_nesting_detach_dev(struct kvm_hyp_iommu *iommu,
