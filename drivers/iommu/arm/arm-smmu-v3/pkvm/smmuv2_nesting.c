@@ -65,30 +65,29 @@ static void smmuv2_cbar_read(struct smmu_v2_nested *smmu, u32 offset, u64 *buf)
 			    i, smmu->base_pa + offset, (u32)arm_smmu_gr1_read(smmu, offset), *buf);
 }
 
-static int smmuv2_smr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
+/* Takes absolute hw idx, instead of offset. Checks conflicts against ALL hw SMRs */
+static int smmuv2_smr_program(struct smmu_v2_nested *smmu, u32 idx, u32 val)
 {
-	int i, j;
-	bool new_valid, old_valid;
+	int j;
+	bool old_valid, new_valid;
 	u32 new_sid, new_mask;
 	u32 other_smr, other_sid, other_mask;
 
-	/* Validate SMR offset and convert to index */
-	if (!ARM_SMMU_GR0_SMR_VALID(offset, smmu->num_smr)) {
-		smmu_v2_debug_print("smmu_v2_smr_write: invalid offset: %llx\n", offset);
+	if (idx >= smmu->total_num_smr) {
+		smmu_v2_debug_print("smr_program: idx %u out of range (total_num_smr=%u)\n",
+				     idx, smmu->total_num_smr);
 		return -EINVAL;
 	}
-	i = ARM_SMMU_GR0_SMR_INDEX(offset);
 
 	/* Extract VALID bits from new and old values */
 	new_valid = !!(val & ARM_SMMU_SMR_VALID);
-	old_valid = !!(smmu->smr_pool[i] & ARM_SMMU_SMR_VALID);
+	old_valid = !!(smmu->smr_pool[idx] & ARM_SMMU_SMR_VALID);
 
-	/* Handle detach case (VALID 1->0) */
 	if (!new_valid && old_valid) {
-		smmu_v2_debug_print("smmu_v2_smr_write: Detaching SMR[%d] (VALID 1->0)\n", i);
-		smmu->smr_pool[i] = val;
-		arm_smmu_gr0_write(smmu, offset, val);
-		smmu_v2_debug_print("smmu_v2_smr_write: SMR[%d] detached, val: 0x%x\n", i, val);
+		smmu_v2_debug_print("smmu_v2_smr_write: Detaching SMR[%d] (VALID 1->0)\n", idx);
+		smmu->smr_pool[idx] = val;
+		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_SMR(idx), val);
+		smmu_v2_debug_print("smmu_v2_smr_write: SMR[%d] detached, val: 0x%x\n", idx, val);
 		return 0;
 	}
 
@@ -99,8 +98,8 @@ static int smmuv2_smr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 		new_sid = val & ARM_SMMU_SMR_ID;
 		new_mask = (val & ARM_SMMU_SMR_MASK) >> 16;
 
-		for (j = 0; j < smmu->num_smr; j++) {
-			if (j == i)
+		for (j = 0; j < smmu->total_num_smr; j++) {
+			if (j == idx)
 				continue;
 
 			other_smr = smmu->smr_pool[j];
@@ -116,7 +115,7 @@ static int smmuv2_smr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 			if (((new_sid & ~new_mask) == (other_sid & ~other_mask)) &&
 			    ((new_mask & other_mask) != 0)) {
 				smmu_v2_debug_print("smr_write: SMR[%d] (SID=0x%x, MASK=0x%x) ",
-						    i, new_sid, new_mask);
+						    idx, new_sid, new_mask);
 				smmu_v2_debug_print("conflicts with SMR[%d] (SID=0x%x,MASK=0x%x)\n",
 						    j, other_sid, other_mask);
 				return -EINVAL;
@@ -127,37 +126,71 @@ static int smmuv2_smr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 	/* Atomic write with proper ordering per ARM SMMUv2 spec:
 	 * Update software pool first, then hardware register
 	 */
-	smmu->smr_pool[i] = val;
-	arm_smmu_gr0_write(smmu, offset, val);
+	smmu->smr_pool[idx] = val;
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_SMR(idx), val);
 
 	smmu_v2_debug_print("smr_write: SMR[%d] written: 0x%x\n",
-			    i, val);
+			    idx, val);
 	smmu_v2_debug_print("smr_write: (VALID=%d, SID=0x%x, MASK=0x%x)\n",
 			    new_valid, (val & ARM_SMMU_SMR_ID), ((val & ARM_SMMU_SMR_MASK) >> 16));
 
 	return 0;
 }
 
-static int smmuv2_s2cr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
+/* Host trap path - validates against host-visible range */
+static int smmuv2_smr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 {
-	int i;
-	u32 hw_val = val;  /* Value to write to hardware */
+	if (!ARM_SMMU_GR0_SMR_VALID(offset, smmu->num_smr)) {
+		smmu_v2_debug_print("smmu_v2_smr_write: invalid offset: %llx\n", offset);
+		return -EINVAL;
+	}
+
+	return smmuv2_smr_program(smmu, ARM_SMMU_GR0_SMR_INDEX(offset), val);
+}
+
+static int smmuv2_s2cr_program(struct smmu_v2_nested *smmu, u32 idx, u32 s2_cb_idx, u32 val)
+{
+	u32 hw_val = val;	/* Value to write to hardware */
 	u32 current_type;
 
-	/* Validate S2CR offset and convert to index */
+	/*
+	 * Save the ORIGINAL value for later read operations.
+	 * This is what EL1 will see on reads.
+	 */
+	smmu->s2cr_pool[idx] = val;
+
+	/* Extract current S2CR type from the original value */
+	current_type = (val & ARM_SMMU_S2CR_TYPE) >> 16;
+
+	/* If type is BYPASS, modify hardware value to TRANS with host/guest CB */
+	if (current_type == S2CR_TYPE_BYPASS) {
+		/* Clear the type and CBNDX fields in hardware value */
+		hw_val &= ~(ARM_SMMU_S2CR_TYPE | ARM_SMMU_S2CR_CBNDX);
+
+		/* Set type to TRANS and CBNDX to host/guest s2_cb_idx */
+		hw_val |= FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_TRANS);
+		hw_val |= FIELD_PREP(ARM_SMMU_S2CR_CBNDX, s2_cb_idx);
+	}
+
+	/* Write the (possibly modified) value to hardware */
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_S2CR(idx), hw_val);
+
+	smmu_v2_debug_print("s2cr_write: idx: %d, EL1_val: 0x%x, HW_val: 0x%x, stored: 0x%x\n",
+			    idx, val, hw_val, smmu->s2cr_pool[idx]);
+
+	return 0;
+}
+
+static int smmuv2_s2cr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
+{
+	u32 current_type;
+
 	if (!ARM_SMMU_GR0_S2CR_VALID(offset, smmu->num_s2cr)) {
 		smmu_v2_debug_print("smmu_v2_s2cr_write: invalid offset: %llx\n", offset);
 		return -EINVAL;
 	}
-	i = ARM_SMMU_GR0_S2CR_INDEX(offset);
 
-	/* Extract current S2CR type from the original value */
 	current_type = FIELD_GET(ARM_SMMU_S2CR_TYPE, val);
-
-	/*
-	 * Validate CBNDX for translation streams to prevent host from pointing
-	 * streams at unvalidated or firmware-configured context banks.
-	 */
 	if (current_type == S2CR_TYPE_TRANS) {
 		u32 cbndx = FIELD_GET(ARM_SMMU_S2CR_CBNDX, val);
 
@@ -172,77 +205,60 @@ static int smmuv2_s2cr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 		return -EINVAL;
 	}
 
+	return smmuv2_s2cr_program(smmu, ARM_SMMU_GR0_S2CR_INDEX(offset),
+				    smmu->host_s2_cb_idx, val);
+}
+
+static int smmuv2_cbar_program(struct smmu_v2_nested *smmu, u32 idx, u32 s2_vmid, u32 val)
+{
+	u32 hw_val;
+	u32 current_type;
+
 	/*
 	 * Save the ORIGINAL value for later read operations.
 	 * This is what EL1 will see on reads.
 	 */
-	smmu->s2cr_pool[i] = val;
+	smmu->cbar_pool[idx] = val;
 
-	/* If type is BYPASS, modify hardware value to TRANS with host CB */
-	if (current_type == S2CR_TYPE_BYPASS) {
-		/* Clear the type and CBNDX fields in hardware value */
-		hw_val &= ~(ARM_SMMU_S2CR_TYPE | ARM_SMMU_S2CR_CBNDX);
-		/* Set type to TRANS and CBNDX to host_s2_cb_idx */
-		hw_val |= FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_TRANS);
-		hw_val |= FIELD_PREP(ARM_SMMU_S2CR_CBNDX, smmu->host_s2_cb_idx);
+	/* Extract current CBAR type from the original value */
+	current_type = FIELD_GET(ARM_SMMU_CBAR_TYPE, val);
+
+	if (current_type == CBAR_TYPE_S2_TRANS ||
+		current_type == CBAR_TYPE_S1_TRANS_S2_BYPASS ||
+		current_type == CBAR_TYPE_S1_TRANS_S2_TRANS) {
+		/* Keep only the interrupt index from the caller-controlled value. */
+		hw_val = val & ARM_SMMU_CBAR_IRPTNDX;
+
+		if (s2_vmid == HOST_S2_VMID) {
+			hw_val |= FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_TRANS);
+			hw_val |= FIELD_PREP(ARM_SMMU_CBAR_CBNDX, smmu->host_s2_cb_idx);
+		} else {
+			hw_val |= FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S2_TRANS);
+		}
+
+		hw_val |= FIELD_PREP(ARM_SMMU_CBAR_VMID, s2_vmid);
+	} else {
+		hw_val = (val & ARM_SMMU_CBAR_IRPTNDX) |
+			 FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_FAULT);
 	}
 
-	/* Write the (possibly modified) value to hardware */
-	arm_smmu_gr0_write(smmu, offset, hw_val);
+	arm_smmu_gr1_write(smmu, ARM_SMMU_GR1_CBAR(idx), hw_val);
 
-	smmu_v2_debug_print("s2cr_write: idx: %d, EL1_val: 0x%x, HW_val: 0x%x, stored: 0x%x\n",
-			    i, val, hw_val, smmu->s2cr_pool[i]);
+	smmu_v2_debug_print("cbar_write: idx: %d, EL1_val: 0x%x, HW_val: 0x%x, stored: 0x%x\n",
+				idx, val, hw_val, smmu->cbar_pool[idx]);
 
 	return 0;
 }
 
 static int smmuv2_cbar_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 {
-	int i;
-	u32 hw_val = val;  /* Value to write to hardware */
-	u32 current_type;
-
 	/* Validate CBAR offset and convert to index */
 	if (!ARM_SMMU_GR1_CBAR_VALID(offset, smmu->num_cbar)) {
 		smmu_v2_debug_print("smmu_v2_cbar_write: invalid offset: %llx\n", offset);
 		return -EINVAL;
 	}
-	i = ARM_SMMU_GR1_CBAR_INDEX(offset);
 
-	/*
-	 * Save the ORIGINAL value for later read operations.
-	 * This is what EL1 will see on reads.
-	 */
-	smmu->cbar_pool[i] = val;
-
-	/* Extract current CBAR type from the original value */
-	current_type = FIELD_GET(ARM_SMMU_CBAR_TYPE, val);
-
-	/* If type is not FAULT, modify hardware value for nested stage-2 translation */
-	if (current_type == CBAR_TYPE_S2_TRANS ||
-		current_type == CBAR_TYPE_S1_TRANS_S2_BYPASS ||
-		current_type == CBAR_TYPE_S1_TRANS_S2_TRANS) {
-		/*
-		 * Build hardware CBAR from scratch keeping only IRPTNDX so
-		 * host-supplied bits in [23:18] or [15:8] (e.g. bits [11:10]
-		 * outside S1_MEMATTR | S1_BPSHCFG) cannot corrupt CBNDX.
-		 */
-		hw_val = (val & ARM_SMMU_CBAR_IRPTNDX) |
-			 FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_TRANS) |
-			 FIELD_PREP(ARM_SMMU_CBAR_CBNDX, smmu->host_s2_cb_idx) |
-			 FIELD_PREP(ARM_SMMU_CBAR_VMID, HOST_S2_VMID);
-	} else {
-		hw_val = (val & ARM_SMMU_CBAR_IRPTNDX) |
-			 FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_FAULT);
-	}
-
-	/* Write the (possibly modified) value to hardware */
-	arm_smmu_gr1_write(smmu, offset, hw_val);
-
-	smmu_v2_debug_print("cbar_write: idx: %d, EL1_val: 0x%x, HW_val: 0x%x, stored: 0x%x\n",
-			    i, val, hw_val, smmu->cbar_pool[i]);
-
-	return 0;
+	return smmuv2_cbar_program(smmu, ARM_SMMU_GR1_CBAR_INDEX(offset), HOST_S2_VMID, val);
 }
 
 /* Core register access functions */
