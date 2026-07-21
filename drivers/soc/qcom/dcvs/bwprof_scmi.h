@@ -12,7 +12,7 @@
 
 #define MIN_MS	1
 #define MAX_MS	2000
-#define MAX_MASTERS	3
+#define MAX_MASTERS	8
 #define MAX_BUCKETS	4
 #define SAMPLING_1MS	1
 #define SAMPLING_10MS	10
