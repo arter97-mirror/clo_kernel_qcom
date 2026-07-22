@@ -63,6 +63,7 @@ struct ps883x_retimer {
 
 	enum typec_orientation orientation;
 	bool in_reset;
+	bool dp_4_lane;
 };
 
 static int ps883x_enable_vregs(struct ps883x_retimer *retimer)
@@ -210,6 +211,9 @@ static int ps883x_configure(struct ps883x_retimer *retimer, int cfg0,
 		return ret;
 	}
 
+	if (retimer->dp_4_lane)
+		mdelay(50);
+
 	return 0;
 }
 
@@ -225,6 +229,8 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 	if (retimer->orientation == TYPEC_ORIENTATION_REVERSE)
 		cfg0 |= CONN_STATUS_0_ORIENTATION_REVERSED;
 
+	retimer->dp_4_lane = false;
+
 	if (state->alt) {
 		switch (state->alt->svid) {
 		case USB_TYPEC_DP_SID:
@@ -234,6 +240,8 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 			switch (state->mode)  {
 			case TYPEC_DP_STATE_C:
 				cfg1 |= CONN_STATUS_1_DP_PIN_ASSIGNMENT_C_D;
+				retimer->dp_4_lane = true;
+
 				break;
 			case TYPEC_DP_STATE_D:
 				cfg1 |= CONN_STATUS_1_DP_PIN_ASSIGNMENT_C_D;
