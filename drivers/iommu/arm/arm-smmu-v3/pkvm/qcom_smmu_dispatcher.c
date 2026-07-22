@@ -246,7 +246,29 @@ static int qcom_smmu_nesting_map_pages(struct kvm_hyp_iommu_domain *domain,
 				       size_t pgsize, size_t pgcount, int prot,
 				       size_t *total_mapped)
 {
-	return 0;
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+	struct io_pgtable *pgtable;
+	int ret;
+
+	/*
+	 * The core only holds a domain refcount here, so concurrent
+	 * map/unmap hypercalls from sibling vCPUs can reach the same
+	 * page table. Serialize them.
+	 */
+	hyp_spin_lock(&guest_domain->pgt_lock);
+
+	pgtable = guest_domain->pgtable;
+	if (!pgtable) {
+		hyp_spin_unlock(&guest_domain->pgt_lock);
+		return -EINVAL;
+	}
+
+	ret = pgtable->ops.map_pages(&pgtable->ops, iova, paddr,
+				     pgsize, pgcount, prot, 0, total_mapped);
+
+	hyp_spin_unlock(&guest_domain->pgt_lock);
+
+	return ret;
 }
 
 static size_t qcom_smmu_nesting_unmap_pages(struct kvm_hyp_iommu_domain *domain,
@@ -254,7 +276,24 @@ static size_t qcom_smmu_nesting_unmap_pages(struct kvm_hyp_iommu_domain *domain,
 					    size_t pgsize, size_t pgcount,
 					    struct iommu_iotlb_gather *iotlb_gather)
 {
-	return 0;
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+	struct io_pgtable *pgtable;
+	size_t unmapped;
+
+	hyp_spin_lock(&guest_domain->pgt_lock);
+
+	pgtable = guest_domain->pgtable;
+	if (!pgtable) {
+		hyp_spin_unlock(&guest_domain->pgt_lock);
+		return 0;
+	}
+
+	unmapped = pgtable->ops.unmap_pages(&pgtable->ops, iova,
+					    pgsize, pgcount, iotlb_gather);
+
+	hyp_spin_unlock(&guest_domain->pgt_lock);
+
+	return unmapped;
 }
 
 static int qcom_smmu_nesting_init(void)
