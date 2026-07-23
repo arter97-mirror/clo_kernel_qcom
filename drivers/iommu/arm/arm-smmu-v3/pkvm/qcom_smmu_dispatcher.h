@@ -55,6 +55,12 @@ struct smmu_vendor_callbacks {
 	void (*get_cfg)(struct io_pgtable_cfg *ncfg);
 	int (*post_init)(void);
 	bool (*dabt_hdl)(struct user_pt_regs *regs, u64 esr, u64 addr);
+	int (*attach_dev)(struct kvm_hyp_iommu *iommu,
+			  struct kvm_hyp_iommu_domain *domain,
+			  u32 sid, u32 pasid, u32 pasid_bits, unsigned long flags);
+	int (*detach_dev)(struct kvm_hyp_iommu *iommu,
+			  struct kvm_hyp_iommu_domain *domain,
+			  u32 sid, u32 pasid);
 };
 
 /* SMMU vendor driver structure */

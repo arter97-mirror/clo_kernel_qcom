@@ -230,7 +230,20 @@ static int qcom_smmu_nesting_detach_dev(struct kvm_hyp_iommu *iommu,
 					struct kvm_hyp_iommu_domain *domain,
 					u32 sid, u32 pasid)
 {
-	return 0;
+	int i, ret = -ENODEV;
+
+	/* Route to the vendor that owns this iommu (returns -ENODEV if not). */
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->detach_dev)
+			continue;
+
+		ret = registered_drivers[i]->callbacks->detach_dev(iommu, domain,
+								   sid, pasid);
+		if (ret != -ENODEV)
+			return ret;
+	}
+
+	return ret;
 }
 
 static int qcom_smmu_nesting_attach_dev(struct kvm_hyp_iommu *iommu,
@@ -238,7 +251,21 @@ static int qcom_smmu_nesting_attach_dev(struct kvm_hyp_iommu *iommu,
 					u32 endpoint_id, u32 pasid, u32 pasid_bits,
 					unsigned long flags)
 {
-	return 0;
+	int i, ret = -ENODEV;
+
+	/* Route to the vendor that owns this iommu (returns -ENODEV if not). */
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->attach_dev)
+			continue;
+
+		ret = registered_drivers[i]->callbacks->attach_dev(iommu, domain,
+								   endpoint_id, pasid,
+								   pasid_bits, flags);
+		if (ret != -ENODEV)
+			return ret;
+	}
+
+	return ret;
 }
 
 static int qcom_smmu_nesting_map_pages(struct kvm_hyp_iommu_domain *domain,

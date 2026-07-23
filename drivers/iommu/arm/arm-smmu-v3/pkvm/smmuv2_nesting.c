@@ -504,6 +504,380 @@ static bool smmuv2_nesting_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 
 	return false;
 }
 
+/* True if @iommu is one of this driver's SMMU instances. */
+static bool smmuv2_owns_iommu(struct kvm_hyp_iommu *iommu)
+{
+	struct smmu_v2_nested *smmu;
+
+	for_each_smmu(smmu)
+		if (&smmu->iommu == iommu)
+			return true;
+
+	return false;
+}
+
+/* TLB maintenance */
+/* Wait for any pending TLB invalidations to complete */
+static int __arm_smmu_tlb_sync(struct smmu_v2_nested *smmu, int cb_idx,
+				int sync, int status)
+{
+	unsigned int inc, delay;
+	u32 reg;
+
+	arm_smmu_cb_write(smmu, cb_idx, sync, QCOM_DUMMY_VAL);
+
+	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
+		reg = arm_smmu_cb_read(smmu, cb_idx, status);
+		if (!(reg & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
+			return 0;
+
+		pkvm_udelay(inc);
+
+		if (inc < TLB_LOOP_INC_MAX)
+			inc *= 2;
+	}
+
+	return -EINVAL;
+}
+
+static void arm_smmu_tlb_sync_context(struct smmu_v2_nested *smmu, int cb_idx)
+{
+	if (__arm_smmu_tlb_sync(smmu, cb_idx,
+				ARM_SMMU_CB_TLBSYNC,
+				ARM_SMMU_CB_TLBSTATUS)) {
+		/* Fatal assertion in case of TLB sync failure*/
+		BUG_ON(1);
+	}
+}
+
+static void arm_smmu_tlb_sync_global(struct smmu_v2_nested *smmu)
+{
+	unsigned int inc, delay;
+	u32 reg;
+
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sTLBGSYNC, QCOM_DUMMY_VAL);
+
+	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
+		reg = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_sTLBGSTATUS);
+		if (!(reg & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
+			return;
+
+		pkvm_udelay(inc);
+
+		if (inc < TLB_LOOP_INC_MAX)
+			inc *= 2;
+	}
+
+	/* Fatal assertion in case of TLB sync failure */
+	BUG_ON(1);
+}
+
+/*
+ * Invalidate all S2 TLB entries tagged with @vmid on @smmu and wait for
+ * the sync. Called when a guest CB is retired so a future domain reusing
+ * the CB/VMID cannot hit stale translations.
+ */
+static void arm_smmu_tlb_inv_vmid(struct smmu_v2_nested *smmu, u32 vmid)
+{
+	/* Issue invalidate */
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMID, vmid);
+	/* Request sync and wait for completion */
+	arm_smmu_tlb_sync_global(smmu);
+}
+
+static void arm_smmu_tlb_inv_range_s2(struct smmu_v2_nested *smmu, int cb_idx,
+				      unsigned long iova, size_t size,
+				      size_t granule, int reg)
+{
+	iova >>= PAGE_SHIFT;
+
+	do {
+		arm_smmu_cb_writeq(smmu, cb_idx, reg, iova);
+		iova += granule >> PAGE_SHIFT;
+	} while (size > granule && (size -= granule));
+}
+
+/*
+ * Lock, invalidate an IPA range in @cb_idx's S2 TLB, sync, invalidate
+ * combined S1+S2 entries for @vmid, and unlock.
+ */
+static void arm_smmu_tlb_inv_sync_s2(struct smmu_v2_nested *smmu, int cb_idx,
+				     u32 vmid, unsigned long iova, size_t size,
+				     size_t granule, int reg)
+{
+	kvm_iommu_lock(&smmu->iommu);
+	arm_smmu_tlb_inv_range_s2(smmu, cb_idx, iova, size, granule, reg);
+	arm_smmu_tlb_sync_context(smmu, cb_idx);
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, vmid);
+	arm_smmu_tlb_sync_global(smmu);
+	kvm_iommu_unlock(&smmu->iommu);
+}
+
+/*
+ * Host fully-virtualized path: invalidate the reserved host S2 context
+ * bank on every SMMU instance.
+ */
+static void arm_smmu_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
+				     unsigned long iova, size_t granule,
+				     void *cookie)
+{
+	struct smmu_v2_nested *smmu;
+
+	for_each_smmu(smmu)
+		arm_smmu_tlb_inv_sync_s2(smmu, smmu->host_s2_cb_idx,
+					 HOST_S2_VMID, iova, granule, granule,
+					 ARM_SMMU_CB_S2_TLBIIPAS2L);
+}
+
+static void arm_smmu_tlb_inv_walk_s2(unsigned long iova, size_t size,
+				     size_t granule, void *cookie)
+{
+	struct smmu_v2_nested *smmu;
+
+	for_each_smmu(smmu)
+		arm_smmu_tlb_inv_sync_s2(smmu, smmu->host_s2_cb_idx,
+					 HOST_S2_VMID, iova, size, granule,
+					 ARM_SMMU_CB_S2_TLBIIPAS2);
+}
+
+static const struct iommu_flush_ops arm_smmu_s2_tlb_ops_v2 = {
+	.tlb_flush_walk	= arm_smmu_tlb_inv_walk_s2,
+	.tlb_add_page	= arm_smmu_tlb_add_page_s2,
+};
+
+/*
+ * Guest para-virtualized path: the io-pgtable cookie is the
+ * kvm_hyp_iommu_domain, whose priv (smmu_nested_guest_domain) resolves to
+ * the guest domain's own SMMU and CB (both set at attach_dev). Invalidate
+ * only that CB on that SMMU.
+ *
+ * v1 assumption: a guest domain spans a single SMMU instance
+ * (smmu_nested_guest_domain.iommu). Multi-SMMU domains would require
+ * walking a per-domain SMMU list.
+ */
+static void arm_smmu_guest_tlb_inv_s2(void *cookie, unsigned long iova,
+				      size_t size, size_t granule, int reg)
+{
+	struct kvm_hyp_iommu_domain *domain = cookie;
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+
+	if (!guest_domain || !guest_domain->iommu || guest_domain->cb_idx < 0)
+		return;
+
+	arm_smmu_tlb_inv_sync_s2(to_smmu_v2(guest_domain->iommu),
+				 guest_domain->cb_idx, domain->domain_id,
+				 iova, size, granule, reg);
+}
+
+static void arm_smmu_guest_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
+					   unsigned long iova, size_t granule,
+					   void *cookie)
+{
+	arm_smmu_guest_tlb_inv_s2(cookie, iova, granule, granule,
+				  ARM_SMMU_CB_S2_TLBIIPAS2L);
+}
+
+static void arm_smmu_guest_tlb_inv_walk_s2(unsigned long iova, size_t size,
+					   size_t granule, void *cookie)
+{
+	arm_smmu_guest_tlb_inv_s2(cookie, iova, size, granule,
+				  ARM_SMMU_CB_S2_TLBIIPAS2);
+}
+
+static const struct iommu_flush_ops arm_smmu_guest_s2_tlb_ops_v2 = {
+	.tlb_flush_walk	= arm_smmu_guest_tlb_inv_walk_s2,
+	.tlb_add_page	= arm_smmu_guest_tlb_add_page_s2,
+};
+
+/* Device attach/detach */
+static int smmuv2_attach_dev(struct kvm_hyp_iommu *iommu,
+			     struct kvm_hyp_iommu_domain *domain,
+			     u32 sid, u32 pasid, u32 pasid_bits,
+			     unsigned long flags)
+{
+	struct smmu_v2_nested *smmu = to_smmu_v2(iommu);
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+	int i, ret = 0;
+	int guest_smr, guest_cb;
+	u32 smr_val = 0, s2cr_val = 0, cbar_val = 0;
+	pkvm_handle_t domain_id = domain->domain_id;
+	bool new_cb = false;
+
+	/* Not one of our SMMUs - let the dispatcher try the next driver. */
+	if (!smmuv2_owns_iommu(iommu))
+		return -ENODEV;
+
+	/*
+	 * A domain binds to one SMMU. cb_idx and the CB/SMR pools are per
+	 * instance, so a CB index from one SMMU is meaningless on another.
+	 */
+	if (guest_domain->iommu && guest_domain->iommu != iommu)
+		return -EINVAL;
+
+	/*
+	 * Allocate the guest S2 page table on first attach (deferred from
+	 * alloc_domain since the SMMU version is only known here).
+	 */
+	if (!guest_domain->pgtable) {
+		struct io_pgtable_cfg cfg = (struct io_pgtable_cfg) {
+			.fmt = ARM_64_LPAE_S2,
+			.pgsize_bitmap = SZ_4K | SZ_2M | SZ_1G,
+			.ias = 48,
+			.oas = 48,
+			.coherent_walk = true,
+			.tlb = &arm_smmu_guest_s2_tlb_ops_v2,
+		};
+
+		/* Double-checked: prevents a concurrent attach from allocating twice. */
+		hyp_spin_lock(&guest_domain->pgt_lock);
+		if (!guest_domain->pgtable)
+			guest_domain->pgtable = kvm_arm_io_pgtable_alloc(&cfg, domain,
+									 &ret, false);
+		hyp_spin_unlock(&guest_domain->pgt_lock);
+		if (ret)
+			return ret;
+	}
+
+	kvm_iommu_lock(iommu);
+
+	/* Allocate a CB for this domain, if not yet assigned */
+	if (guest_domain->cb_idx < 0) {
+		for (i = 0; i < smmu->num_guest_cb; i++) {
+			/* Assumption here - domain_id couldn't be 0 */
+			if (smmu->guest_cb_pool[i] == ARM_SMMU_GUEST_CB_FREE) {
+				smmu->guest_cb_pool[i] = (u32)domain_id;
+				guest_cb = i + smmu->guest_cb_base;
+				guest_domain->cb_idx = guest_cb;
+
+				/* Bind domain to this SMMU (v1: single SMMU per domain). */
+				guest_domain->iommu = iommu;
+				break;
+			}
+		}
+
+		if (guest_domain->cb_idx < 0) {
+			kvm_iommu_unlock(iommu);
+			return -ENOSPC;
+		}
+
+		new_cb = true;
+
+		/* Program CBAR - S2 transl with domain_id as VMID */
+		cbar_val |= FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S2_TRANS);
+		cbar_val |= FIELD_PREP(ARM_SMMU_CBAR_VMID, domain->domain_id);
+
+		smmuv2_cbar_program(smmu, guest_cb, domain->domain_id, cbar_val);
+
+		/* Program CB with guest S2 PT */
+		/* TODO: Commonization of smmu_attach_stage_2 pending */
+		// smmu_attach_stage_2();
+	}
+
+	/* Get the Guest S2 CB idx */
+	guest_cb = guest_domain->cb_idx;
+
+	/* Allocate SMR from guest pool */
+	guest_smr = -1;
+	for (i = 0; i < smmu->num_guest_smr; i++) {
+		if (smmu->guest_smr_pool[i] == ARM_SMMU_GUEST_SMR_FREE) {
+			smmu->guest_smr_pool[i] = guest_cb;
+			guest_smr = i + smmu->guest_smr_base;
+			break;
+		}
+	}
+
+	if (guest_smr < 0) {
+		/*
+		 * Only free a CB this call allocated. One inherited from an earlier
+		 * attach still backs a live S2CR, and clearing cb_idx would leave
+		 * that SID with no way to detach.
+		 */
+		if (new_cb) {
+			smmu->guest_cb_pool[guest_cb - smmu->guest_cb_base] =
+				ARM_SMMU_GUEST_CB_FREE;
+			guest_domain->cb_idx = -1;
+			guest_domain->iommu = NULL;
+		}
+		kvm_iommu_unlock(iommu);
+		return -ENOSPC;
+	}
+
+	/* Program SMR */
+	smr_val = sid | ARM_SMMU_SMR_VALID;
+	smmuv2_smr_program(smmu, guest_smr, smr_val);
+
+	/* Program S2CR */
+	s2cr_val |= FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_TRANS);
+	s2cr_val |= FIELD_PREP(ARM_SMMU_S2CR_CBNDX, guest_cb);
+	smmuv2_s2cr_program(smmu, guest_smr, guest_cb, s2cr_val);
+
+	kvm_iommu_unlock(iommu);
+
+	return 0;
+}
+
+static int smmuv2_detach_dev(struct kvm_hyp_iommu *iommu,
+			     struct kvm_hyp_iommu_domain *domain,
+			     u32 sid, u32 pasid)
+{
+	int i;
+	struct smmu_v2_nested *smmu = to_smmu_v2(iommu);
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+	int guest_cb = guest_domain->cb_idx;
+	u32 guest_smr = 0;
+	bool sid_found = false, cb_in_use = false;
+
+	/* Not one of our SMMUs - let the dispatcher try the next driver. */
+	if (!smmuv2_owns_iommu(iommu))
+		return -ENODEV;
+
+	/*
+	 * Same one-SMMU binding as attach. Detaching on the wrong instance
+	 * would clear another domain's SMR/S2CR and free its CB.
+	 */
+	if (guest_domain->iommu && guest_domain->iommu != iommu)
+		return -EINVAL;
+
+	if (guest_cb < 0)
+		return 0;
+
+	kvm_iommu_lock(iommu);
+
+	for (i = 0; i < smmu->num_guest_smr; i++) {
+		if (smmu->guest_smr_pool[i] != guest_cb)
+			continue;
+
+		guest_smr = smmu->guest_smr_base + i;
+
+		if ((smmu->smr_pool[guest_smr] & ARM_SMMU_SMR_ID)
+			== (sid & ARM_SMMU_SMR_ID)) {
+			sid_found = true;
+
+			smmuv2_smr_program(smmu, guest_smr, 0);
+			smmuv2_s2cr_program(smmu, guest_smr, guest_cb, 0);
+
+			smmu->guest_smr_pool[i] = ARM_SMMU_GUEST_SMR_FREE;
+		} else {
+			cb_in_use = true;
+		}
+	}
+
+	if (!cb_in_use) {
+		/* Flush the CB's stale S2 entries before returning it to the pool. */
+		arm_smmu_tlb_inv_vmid(smmu, domain->domain_id);
+		smmu->guest_cb_pool[guest_cb - smmu->guest_cb_base] = ARM_SMMU_GUEST_CB_FREE;
+		guest_domain->cb_idx = -1;
+		guest_domain->iommu = NULL;
+	}
+
+	if (!sid_found)
+		smmu_v2_debug_print("detach_dev: SID 0x%x not found in guest SMR pool\n", sid);
+
+	kvm_iommu_unlock(iommu);
+
+	return 0;
+}
+
 /* Initialization functions */
 static int take_over_smmus(void)
 {
@@ -802,170 +1176,13 @@ static int hw_profile_init(void)
 	return 0;
 }
 
-/* Wait for any pending TLB invalidations to complete */
-static int __arm_smmu_tlb_sync(struct smmu_v2_nested *smmu, int cb_idx,
-				int sync, int status)
-{
-	unsigned int inc, delay;
-	u32 reg;
-
-	arm_smmu_cb_write(smmu, cb_idx, sync, QCOM_DUMMY_VAL);
-
-	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
-		reg = arm_smmu_cb_read(smmu, cb_idx, status);
-		if (!(reg & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
-			return 0;
-
-		pkvm_udelay(inc);
-
-		if (inc < TLB_LOOP_INC_MAX)
-			inc *= 2;
-	}
-
-	return -EINVAL;
-}
-
-static void arm_smmu_tlb_sync_context(struct smmu_v2_nested *smmu, int cb_idx)
-{
-	if (__arm_smmu_tlb_sync(smmu, cb_idx,
-				ARM_SMMU_CB_TLBSYNC,
-				ARM_SMMU_CB_TLBSTATUS)) {
-		/* Fatal assertion in case of TLB sync failure*/
-		BUG_ON(1);
-	}
-}
-
-static void arm_smmu_tlb_sync_global(struct smmu_v2_nested *smmu)
-{
-	unsigned int inc, delay;
-	u32 reg;
-
-	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sTLBGSYNC, QCOM_DUMMY_VAL);
-
-	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
-		reg = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_sTLBGSTATUS);
-		if (!(reg & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
-			return;
-
-		pkvm_udelay(inc);
-
-		if (inc < TLB_LOOP_INC_MAX)
-			inc *= 2;
-	}
-
-	/* Fatal assertion in case of TLB sync failure */
-	BUG_ON(1);
-}
-
-static void arm_smmu_tlb_inv_range_s2(struct smmu_v2_nested *smmu, int cb_idx,
-				      unsigned long iova, size_t size,
-				      size_t granule, int reg)
-{
-	iova >>= PAGE_SHIFT;
-
-	do {
-		arm_smmu_cb_writeq(smmu, cb_idx, reg, iova);
-		iova += granule >> PAGE_SHIFT;
-	} while (size > granule && (size -= granule));
-}
-
-/*
- * Lock, invalidate an IPA range in @cb_idx's S2 TLB, sync, invalidate
- * combined S1+S2 entries for @vmid, and unlock.
- */
-static void arm_smmu_tlb_inv_sync_s2(struct smmu_v2_nested *smmu, int cb_idx,
-				     u32 vmid, unsigned long iova, size_t size,
-				     size_t granule, int reg)
-{
-	kvm_iommu_lock(&smmu->iommu);
-	arm_smmu_tlb_inv_range_s2(smmu, cb_idx, iova, size, granule, reg);
-	arm_smmu_tlb_sync_context(smmu, cb_idx);
-	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, vmid);
-	arm_smmu_tlb_sync_global(smmu);
-	kvm_iommu_unlock(&smmu->iommu);
-}
-
-/*
- * Host fully-virtualized path: invalidate the reserved host S2 context
- * bank on every SMMU instance.
- */
-static void arm_smmu_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
-				     unsigned long iova, size_t granule,
-				     void *cookie)
-{
-	struct smmu_v2_nested *smmu;
-
-	for_each_smmu(smmu)
-		arm_smmu_tlb_inv_sync_s2(smmu, smmu->host_s2_cb_idx,
-					 HOST_S2_VMID, iova, granule, granule,
-					 ARM_SMMU_CB_S2_TLBIIPAS2L);
-}
-
-static void arm_smmu_tlb_inv_walk_s2(unsigned long iova, size_t size,
-				     size_t granule, void *cookie)
-{
-	struct smmu_v2_nested *smmu;
-
-	for_each_smmu(smmu)
-		arm_smmu_tlb_inv_sync_s2(smmu, smmu->host_s2_cb_idx,
-					 HOST_S2_VMID, iova, size, granule,
-					 ARM_SMMU_CB_S2_TLBIIPAS2);
-}
-
-static const struct iommu_flush_ops arm_smmu_s2_tlb_ops_v2 = {
-	.tlb_flush_walk	= arm_smmu_tlb_inv_walk_s2,
-	.tlb_add_page	= arm_smmu_tlb_add_page_s2,
-};
-
-/*
- * Guest para-virtualized path: the io-pgtable cookie is the
- * kvm_hyp_iommu_domain, whose priv (smmu_nested_guest_domain) resolves to
- * the guest domain's own SMMU and CB (both set at attach_dev). Invalidate
- * only that CB on that SMMU.
- *
- * v1 assumption: a guest domain spans a single SMMU instance
- * (smmu_nested_guest_domain.iommu). Multi-SMMU domains would require
- * walking a per-domain SMMU list.
- */
-static void arm_smmu_guest_tlb_inv_s2(void *cookie, unsigned long iova,
-				      size_t size, size_t granule, int reg)
-{
-	struct kvm_hyp_iommu_domain *domain = cookie;
-	struct smmu_nested_guest_domain *guest_domain = domain->priv;
-
-	if (!guest_domain || !guest_domain->iommu || guest_domain->cb_idx < 0)
-		return;
-
-	arm_smmu_tlb_inv_sync_s2(to_smmu_v2(guest_domain->iommu),
-				 guest_domain->cb_idx, domain->domain_id,
-				 iova, size, granule, reg);
-}
-
-static void arm_smmu_guest_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
-					   unsigned long iova, size_t granule,
-					   void *cookie)
-{
-	arm_smmu_guest_tlb_inv_s2(cookie, iova, granule, granule,
-				  ARM_SMMU_CB_S2_TLBIIPAS2L);
-}
-
-static void arm_smmu_guest_tlb_inv_walk_s2(unsigned long iova, size_t size,
-					   size_t granule, void *cookie)
-{
-	arm_smmu_guest_tlb_inv_s2(cookie, iova, size, granule,
-				  ARM_SMMU_CB_S2_TLBIIPAS2);
-}
-
-static const struct iommu_flush_ops arm_smmu_guest_s2_tlb_ops_v2 = {
-	.tlb_flush_walk	= arm_smmu_guest_tlb_inv_walk_s2,
-	.tlb_add_page	= arm_smmu_guest_tlb_add_page_s2,
-};
-
 const struct smmu_vendor_callbacks v2callbacks = {
 	.tlb_ops = &arm_smmu_s2_tlb_ops_v2,
 	.get_cfg = NULL, /* fix me */
 	.post_init = smmu_attach_stage_2,
 	.dabt_hdl = smmuv2_nesting_dabt_handler,
+	.attach_dev = smmuv2_attach_dev,
+	.detach_dev = smmuv2_detach_dev,
 };
 
 static struct smmu_vendor_driver smmuv2_driver = {
