@@ -266,6 +266,81 @@ static int smmuv2_cbar_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 	return smmuv2_cbar_program(smmu, ARM_SMMU_GR1_CBAR_INDEX(offset), HOST_S2_VMID, val);
 }
 
+/*
+ * Programs TTBR0, TCR, CBA2R, SCTLR, ACTLR, CONTEXTIDR for a
+ * stage-2 context bank. Used by both host (idmap) and guest pVM CBs.
+ */
+static void smmu_program_stage_2(struct smmu_v2_nested *smmu, u32 cb_idx,
+				 struct io_pgtable *pgtable)
+{
+	struct io_pgtable_cfg *pt_cfg = &pgtable->cfg;
+	u32 vtcr, sctlr_val, cba2r_val;
+	u64 vttbr;
+
+	/* Extract stage-2 configuration from domain */
+	vttbr = pt_cfg->arm_lpae_s2_cfg.vttbr;
+
+	/* Build VTCR from page table configuration */
+	vtcr = ARM_SMMU_VTCR_RES1 |
+	       FIELD_PREP(ARM_SMMU_VTCR_PS, pt_cfg->arm_lpae_s2_cfg.vtcr.ps) |
+	       FIELD_PREP(ARM_SMMU_VTCR_TG0, pt_cfg->arm_lpae_s2_cfg.vtcr.tg) |
+	       FIELD_PREP(ARM_SMMU_VTCR_SH0, pt_cfg->arm_lpae_s2_cfg.vtcr.sh) |
+	       FIELD_PREP(ARM_SMMU_VTCR_ORGN0, pt_cfg->arm_lpae_s2_cfg.vtcr.orgn) |
+	       FIELD_PREP(ARM_SMMU_VTCR_IRGN0, pt_cfg->arm_lpae_s2_cfg.vtcr.irgn) |
+	       FIELD_PREP(ARM_SMMU_VTCR_SL0, pt_cfg->arm_lpae_s2_cfg.vtcr.sl) |
+	       FIELD_PREP(ARM_SMMU_VTCR_T0SZ, pt_cfg->arm_lpae_s2_cfg.vtcr.tsz);
+
+	/* Configure the stage-2 translation registers */
+	arm_smmu_cb_writeq(smmu, cb_idx, ARM_SMMU_CB_TTBR0, vttbr);
+	arm_smmu_cb_write(smmu, cb_idx, ARM_SMMU_CB_TCR, vtcr);
+
+	/* Configure CBA2R - set VA64 bit for 64-bit virtual addressing */
+	cba2r_val = arm_smmu_gr1_read(smmu, ARM_SMMU_GR1_CBA2R(cb_idx));
+
+	cba2r_val |= ARM_SMMU_CBA2R_VA64;
+	arm_smmu_gr1_write(smmu, ARM_SMMU_GR1_CBA2R(cb_idx), cba2r_val);
+
+	/* Configure SCTLR for the host/guest S2 context bank (0xCF0061) */
+	sctlr_val = ARM_SMMU_SCTLR_M |
+		    ARM_SMMU_SCTLR_CFRE |
+		    ARM_SMMU_SCTLR_CFIE |
+		    (0xF << 16) |   /* Bits 16-19 */
+		    (0x3 << 22);    /* Bits 22-23 */
+	arm_smmu_cb_write(smmu, cb_idx, ARM_SMMU_CB_SCTLR, sctlr_val);
+
+	/* Configure ACTLR - set CPRE and CMTLB bits
+	 * CPRE  - Enable context caching in the prefetch buffer.
+	 * CMTLB - Enable context caching in the macro-TLB.
+	 */
+	arm_smmu_cb_write(smmu, cb_idx, ARM_SMMU_CB_ACTLR, 0x3);
+
+	/* Configure CONTEXTIDR */
+	arm_smmu_cb_write(smmu, cb_idx, ARM_SMMU_CB_CONTEXTIDR, 0x0);
+
+	smmu_v2_debug_print("Configured S2, CB[%d] VTCR=0x%x, VTTBR=0x%llx, CBA2R=0x%x\n",
+			     cb_idx, vtcr, vttbr, cba2r_val);
+	smmu_v2_debug_print("Configured S2, CB[%d] SCTLR=0x%x, ACTLR=0x3, CONTEXTIDR=0x0\n",
+			     cb_idx, sctlr_val);
+}
+
+/*
+ * Programs the host S2 context bank across all SMMUs using the
+ * idmapped vdomain page table. Called during post-boot init.
+ */
+static int smmu_attach_stage_2(void)
+{
+	struct smmu_v2_nested *smmu;
+
+	if (!data.vdomain)
+		return -EINVAL;
+
+	for_each_smmu(smmu)
+		smmu_program_stage_2(smmu, smmu->host_s2_cb_idx,
+				     data.vdomain->pgtable);
+
+	return 0;
+}
+
 /* Core register access functions */
 static int smmuv2_read_global_region_0(struct smmu_v2_nested *smmu, u64 offset, u32 len, u64 *buf)
 {
@@ -768,9 +843,8 @@ static int smmuv2_attach_dev(struct kvm_hyp_iommu *iommu,
 
 		smmuv2_cbar_program(smmu, guest_cb, domain->domain_id, cbar_val);
 
-		/* Program CB with guest S2 PT */
-		/* TODO: Commonization of smmu_attach_stage_2 pending */
-		// smmu_attach_stage_2();
+		/* Program the guest S2 CB (TTBR/SCTLR) from the domain page table */
+		smmu_program_stage_2(smmu, guest_cb, guest_domain->pgtable);
 	}
 
 	/* Get the Guest S2 CB idx */
@@ -976,75 +1050,6 @@ static int update_cbar_profile(struct smmu_v2_nested *smmu)
 	for (j = 0; j < smmu->num_cbar; j++) {
 		smmu->cbar_pool[j] = fault_val;
 		arm_smmu_gr1_write(smmu, ARM_SMMU_GR1_CBAR(j), fault_val);
-	}
-
-	return 0;
-}
-
-static int smmu_attach_stage_2(void)
-{
-	struct smmu_v2_nested *smmu;
-	struct io_pgtable_cfg *pt_cfg;
-	u64 vttbr;
-	u32 vtcr;
-
-	if (!data.vdomain)
-		return -EINVAL;
-
-	pt_cfg = &data.vdomain->pgtable->cfg;
-
-	/* Extract stage-2 configuration from idmapped domain */
-	vttbr = pt_cfg->arm_lpae_s2_cfg.vttbr;
-
-	/* Build VTCR from page table configuration */
-	vtcr = ARM_SMMU_VTCR_RES1 |
-	       FIELD_PREP(ARM_SMMU_VTCR_PS, pt_cfg->arm_lpae_s2_cfg.vtcr.ps) |
-	       FIELD_PREP(ARM_SMMU_VTCR_TG0, pt_cfg->arm_lpae_s2_cfg.vtcr.tg) |
-	       FIELD_PREP(ARM_SMMU_VTCR_SH0, pt_cfg->arm_lpae_s2_cfg.vtcr.sh) |
-	       FIELD_PREP(ARM_SMMU_VTCR_ORGN0, pt_cfg->arm_lpae_s2_cfg.vtcr.orgn) |
-	       FIELD_PREP(ARM_SMMU_VTCR_IRGN0, pt_cfg->arm_lpae_s2_cfg.vtcr.irgn) |
-	       FIELD_PREP(ARM_SMMU_VTCR_SL0, pt_cfg->arm_lpae_s2_cfg.vtcr.sl) |
-	       FIELD_PREP(ARM_SMMU_VTCR_T0SZ, pt_cfg->arm_lpae_s2_cfg.vtcr.tsz);
-
-	for_each_smmu(smmu) {
-		u32 sctlr_val;
-
-		/* Configure the stage-2 translation registers */
-		arm_smmu_cb_writeq(smmu, smmu->host_s2_cb_idx,
-				   ARM_SMMU_CB_TTBR0, vttbr);
-		arm_smmu_cb_write(smmu, smmu->host_s2_cb_idx,
-				  ARM_SMMU_CB_TCR, vtcr);
-
-		/* Configure CBA2R - set VA64 bit for 64-bit virtual addressing */
-		u32 cba2r_val = arm_smmu_gr1_read(smmu, ARM_SMMU_GR1_CBA2R(smmu->host_s2_cb_idx));
-
-		cba2r_val |= ARM_SMMU_CBA2R_VA64;
-		arm_smmu_gr1_write(smmu, ARM_SMMU_GR1_CBA2R(smmu->host_s2_cb_idx), cba2r_val);
-
-		/* Configure SCTLR for the host S2 context bank (0xCF0061) */
-		sctlr_val = ARM_SMMU_SCTLR_M |
-			    ARM_SMMU_SCTLR_CFRE |
-			    ARM_SMMU_SCTLR_CFIE |
-			    (0xF << 16) |   /* Bits 16-19 */
-			    (0x3 << 22);    /* Bits 22-23 */
-		arm_smmu_cb_write(smmu, smmu->host_s2_cb_idx,
-				  ARM_SMMU_CB_SCTLR, sctlr_val);
-
-		/* Configure ACTLR - set CPRE and CMTLB bits
-		 * CPRE  - Enable context caching in the prefetch buffer.
-		 * CMTLB - Enable context caching in the macro-TLB.
-		 */
-		arm_smmu_cb_write(smmu, smmu->host_s2_cb_idx,
-				  ARM_SMMU_CB_ACTLR, 0x3);
-
-		/* Configure CONTEXTIDR */
-		arm_smmu_cb_write(smmu, smmu->host_s2_cb_idx,
-				  ARM_SMMU_CB_CONTEXTIDR, 0x0);
-
-		smmu_v2_debug_print("Configured S2, CB[%d] VTCR=0x%x, VTTBR=0x%llx, CBA2R=0x%x\n",
-				    smmu->host_s2_cb_idx, vtcr, vttbr, cba2r_val);
-		smmu_v2_debug_print("Configured S2, CB[%d] SCTLR=0x%x, ACTLR=0x3, CONTEXTIDR=0x0\n",
-				    smmu->host_s2_cb_idx, sctlr_val);
 	}
 
 	return 0;
