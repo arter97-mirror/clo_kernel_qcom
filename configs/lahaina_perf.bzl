@@ -104,6 +104,7 @@ lahaina_perf_config = {
     "CONFIG_LEDS_QCOM_LPG": "m",
     "CONFIG_LEDS_QPNP_VIBRATOR_LDO": "m",
     "CONFIG_LEDS_QTI_FLASH": "m",
+    "CONFIG_LEDS_TRIGGER_NETDEV": "m",
     "CONFIG_MAC80211": "m",
     "CONFIG_MAC80211_DEBUG_MENU": "n",
     "CONFIG_MAC80211_HWSIM": "n",
