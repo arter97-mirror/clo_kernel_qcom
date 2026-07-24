@@ -245,6 +245,7 @@ static int gh_hvc_vm_state(struct notifier_block *this,
 {
 	struct gh_hvc_prv *prv;
 	enum gh_vm_names vm_name;
+	struct hvc_struct *hvc;
 	gh_vmid_t vmid = *((gh_vmid_t *)data);
 	int ret;
 
@@ -253,10 +254,17 @@ static int gh_hvc_vm_state(struct notifier_block *this,
 		return NOTIFY_DONE;
 
 	if (cmd == GH_VM_EXITED) {
-		if (gh_hvc_data[vm_name].hvc) {
-			hvc_remove(gh_hvc_data[vm_name].hvc);
-			gh_hvc_data[vm_name].hvc = NULL;
-		}
+		/*
+		 * Multiple gunyah VM instances sharing the same vm_name can be
+		 * closed concurrently, each triggering GH_VM_EXITED via
+		 * srcu_notifier_call_chain() which allows concurrent readers.
+		 * Use xchg() to atomically transfer ownership of the hvc pointer
+		 * so that exactly one caller proceeds to hvc_remove() while all
+		 * others get NULL and skip it, preventing a use-after-free.
+		 */
+		hvc = xchg(&gh_hvc_data[vm_name].hvc, NULL);
+		if (hvc)
+			hvc_remove(hvc);
 	} else if (cmd == GH_VM_BEFORE_POWERUP) {
 		/*
 		 * We have already setup the hvc at init for the first
