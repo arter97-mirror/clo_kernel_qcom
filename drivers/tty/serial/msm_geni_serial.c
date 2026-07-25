@@ -566,6 +566,7 @@ struct msm_geni_serial_port {
 	struct workqueue_struct *wakeup_irq_wq;
 	struct delayed_work wakeup_irq_dwork;
 	struct completion wakeup_comp;
+	atomic_t wakeup_pending_resume;
 	atomic_t flush_buffers;
 	struct ktermios *current_termios;
 	bool resuming_from_deep_sleep;
@@ -1417,6 +1418,7 @@ static bool msm_geni_find_wakeup_byte(struct uart_port *uport, int size)
 			     "Found wakeup byte (0x%x) in size %u\n",
 			     port->wakeup_byte, size);
 		atomic_set(&port->check_wakeup_byte, 0);
+		complete(&port->wakeup_comp);
 		return true;
 	}
 
@@ -1530,8 +1532,6 @@ static int vote_clock_on(struct uart_port *uport)
 		dev_err(uport->dev, "Failed to vote clock on\n");
 		return ret;
 	}
-	atomic_set(&port->check_wakeup_byte, 0);
-	complete(&port->wakeup_comp);
 	port->ioctl_count++;
 	usage_count = atomic_read(&uport->dev->power.usage_count);
 	UART_LOG_DBG(port->ipc_log_pwr, uport->dev,
@@ -1620,7 +1620,7 @@ static int msm_geni_serial_ioctl(struct uart_port *uport, unsigned int cmd,
 			__func__, uart_error, port->uart_error);
 		ret = uart_error;
 
-		if (port->ioctl_count)
+		if (pm_runtime_active(uport->dev))
 			geni_se_dump_dbg_regs(uport);
 		/* Do not use previous log file from this issue point */
 		port->ipc_log_rx = port->ipc_log_new;
@@ -1824,6 +1824,23 @@ static void msm_geni_serial_power_off(struct uart_port *uport)
 		pm_runtime_mark_last_busy(uport->dev);
 		pm_runtime_put_autosuspend(uport->dev);
 	}
+}
+
+/*
+ * msm_geni_serial_power_voted() - True when ANY client holds a runtime-PM vote.
+ *
+ * @uport: pointer to uart port
+ *
+ * The pm_runtime_enabled() guard keeps this correct on pm_auto_suspend_disable
+ * ports, where runtime PM is never enabled and usage_count baselines at 1 with
+ * no client actually voting.
+ *
+ * Return: true if a runtime-PM vote is held on an RPM-enabled port.
+ */
+static bool msm_geni_serial_power_voted(struct uart_port *uport)
+{
+	return pm_runtime_enabled(uport->dev) &&
+	       atomic_read(&uport->dev->power.usage_count) > 0;
 }
 
 static int msm_geni_serial_poll_bit(struct uart_port *uport,
@@ -3694,7 +3711,7 @@ static int stop_rx_sequencer(struct uart_port *uport)
 			UART_LOG_DBG(port->ipc_log_misc, uport->dev, "%s: Interrupt delay\n",
 					__func__);
 			handle_rx_dma_xfer(s_irq_status, uport);
-			if (pm_runtime_enabled(uport->dev) && !port->ioctl_count) {
+			if (pm_runtime_enabled(uport->dev) && !msm_geni_serial_power_voted(uport)) {
 				usage_count = atomic_read(&uport->dev->power.usage_count);
 				UART_LOG_DBG(port->ipc_log_misc, uport->dev,
 					"%s: Abort Stop Rx, extend the PM timer, usage_count:%d\n",
@@ -4524,6 +4541,7 @@ static void msm_geni_wakeup_work(struct work_struct *work)
 {
 	struct msm_geni_serial_port *port;
 	struct uart_port *uport;
+	int ret;
 
 	port = container_of(work, struct msm_geni_serial_port,
 			    wakeup_irq_dwork.work);
@@ -4534,12 +4552,28 @@ static void msm_geni_wakeup_work(struct work_struct *work)
 
 	UART_LOG_DBG(port->ipc_log_rx, uport->dev, "Wakeup work started\n");
 	reinit_completion(&port->wakeup_comp);
-	if (msm_geni_serial_power_on(uport)) {
+	atomic_set(&port->wakeup_pending_resume, 1);
+	ret = msm_geni_serial_power_on(uport);
+	atomic_set(&port->wakeup_pending_resume, 0);
+	if (ret) {
 		atomic_set(&port->check_wakeup_byte, 0);
 		UART_LOG_DBG(port->ipc_log_rx, uport->dev,
 			     "%s:Failed to power on\n", __func__);
 		return;
 	}
+
+	/*
+	 * If another client (ioctl vote or sysfs power/control) won the
+	 * 0->active resume while we were powering on, runtime_resume has
+	 * already cleared check_wakeup_byte and taken ownership of this
+	 * session. Release our vote immediately instead of stalling on
+	 * wakeup_comp for the full WAKEBYTE_TIMEOUT_MSEC.
+	 */
+	if (!atomic_read(&port->check_wakeup_byte)) {
+		msm_geni_serial_power_off(uport);
+		return;
+	}
+
 	/* wait to receive wakeup byte in rx path */
 	if (!wait_for_completion_timeout(&port->wakeup_comp,
 					 msecs_to_jiffies(WAKEBYTE_TIMEOUT_MSEC)))
@@ -4663,6 +4697,8 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 	int ret = 0, j = 0, i, timeout;
 	unsigned long long start_time;
 	int usage_count = atomic_read(&uport->dev->power.usage_count);
+	bool self_vote = false;
+	int votes = 0;
 
 	UART_LOG_DBG(msm_port->ipc_log_misc, uport->dev, "%s: %d\n", __func__, true);
 	msm_port->port_state = UART_PORT_SHUTDOWN_IN_PROGRESS;
@@ -4675,12 +4711,13 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 		console_stop(uport->cons);
 		disable_irq(uport->irq);
 	} else {
-		if (!usage_count || !pm_runtime_active(uport->dev))
+		if (!usage_count || !pm_runtime_active(uport->dev)) {
 			msm_geni_serial_power_on(uport);
+			self_vote = true;
+		}
 
 		if (msm_port->xfer_mode == GENI_GPI_DMA) {
-			/* Prevent device suspend */
-			pm_runtime_forbid(uport->dev);
+			pm_runtime_get_noresume(uport->dev);
 
 			/* From the framework every time the stop
 			 * rx sequncer will be called before the closing
@@ -4769,8 +4806,8 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 				msm_port->gsi->tx_c = NULL;
 			}
 
-			/* Allow device to suspend */
-			pm_runtime_allow(uport->dev);
+			/* Release the teardown pin taken above */
+			pm_runtime_put_noidle(uport->dev);
 		} else {
 			msm_geni_serial_stop_tx(uport);
 		}
@@ -4778,19 +4815,26 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 		if (msm_port->pm_auto_suspend_disable)
 			disable_irq(uport->irq);
 
+		votes = (self_vote ? 1 : 0) + msm_port->ioctl_count;
 		if (msm_port->ioctl_count) {
 			UART_LOG_DBG(msm_port->ipc_log_pwr, uport->dev,
 				     "%s: IOCTL vote present. Resetting ioctl count\n", __func__);
 			msm_port->ioctl_count = 0;
 		}
 
-		if (pm_runtime_enabled(uport->dev)) {
+		if (pm_runtime_enabled(uport->dev) && votes) {
+			while (--votes)
+				pm_runtime_put_noidle(uport->dev);
 			ret = pm_runtime_put_sync_suspend(uport->dev);
 			if (ret < 0)
 				UART_LOG_DBG(msm_port->ipc_log_pwr, uport->dev,
 					     "%s: Failed to suspend ret=%d\n",
 					     __func__, ret);
-			if (ret == -EBUSY) {
+			if (msm_geni_serial_power_voted(uport)) {
+				UART_LOG_DBG(msm_port->ipc_log_pwr, uport->dev,
+					     "%s: peer power vote (sysfs) held; device stays resumed\n",
+					     __func__);
+			} else if (ret == -EBUSY) {
 				do {
 					UART_LOG_DBG(msm_port->ipc_log_pwr, uport->dev,
 						     "%s: Failed to suspend ret:%d retry:%d\n",
@@ -6339,6 +6383,7 @@ static int msm_geni_serial_port_init(struct platform_device *pdev,
 	init_completion(&dev_port->tx_xfer);
 
 	init_completion(&dev_port->wakeup_comp);
+	atomic_set(&dev_port->wakeup_pending_resume, 0);
 	platform_set_drvdata(pdev, dev_port);
 
 	/*
@@ -6813,6 +6858,19 @@ static int msm_geni_serial_runtime_resume(struct device *dev)
 	}
 	msm_geni_enable_disable_se_clk(&port->uport, true);
 
+	/*
+	 * A resume that isn't driven by the wakeup-byte search itself
+	 * (ioctl vote, generic runtime-PM sysfs vote via power/control,
+	 * a TX kick, etc.) means some other actor is now explicitly
+	 * handling this session. Unblock any wakeup worker that may
+	 * still be waiting on the designated wakeup byte instead of
+	 * holding the clock for the full WAKEBYTE_TIMEOUT_MSEC.
+	 */
+	if (!atomic_read(&port->wakeup_pending_resume)) {
+		atomic_set(&port->check_wakeup_byte, 0);
+		complete(&port->wakeup_comp);
+	}
+
 	/* Don't start the RX sequencer during shutdown */
 	if (port->port_state == UART_PORT_OPEN)
 		start_rx_sequencer(&port->uport);
@@ -6865,11 +6923,13 @@ static int msm_geni_serial_sys_suspend(struct device *dev)
 
 		mutex_lock(&tty_port->mutex);
 		if (!pm_runtime_status_suspended(dev)) {
-			dev_err(dev, "%s:Active userspace vote; ioctl_cnt %d\n",
-					__func__, port->ioctl_count);
+			dev_err(dev, "%s:Active runtime-PM vote; ioctl_cnt %d usage_count %d\n",
+					__func__, port->ioctl_count,
+					atomic_read(&dev->power.usage_count));
 			UART_LOG_DBG(port->ipc_log_pwr, dev,
-				"%s:Active userspace vote; ioctl_cnt %d\n",
-					__func__, port->ioctl_count);
+				"%s:Active runtime-PM vote; ioctl_cnt %d usage_count %d\n",
+					__func__, port->ioctl_count,
+					atomic_read(&dev->power.usage_count));
 			mutex_unlock(&tty_port->mutex);
 			return -EBUSY;
 		}
