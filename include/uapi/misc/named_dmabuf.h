@@ -66,4 +66,41 @@ struct named_dmabuf_destroy {
 #define NAMED_DMABUF_IOC_DESTROY \
 	_IOW(NAMED_DMABUF_IOC_MAGIC, 0x02, struct named_dmabuf_destroy)
 
+/*
+ * NAMED_DMABUF_IOC_GET_EXPORT_INFO — get the export tuple for a registered buffer.
+ *
+ * Fails with -EOPNOTSUPP if the instance has no carveout or the buffer was
+ * not validated against one.
+ */
+struct named_dmabuf_export_info {
+	char  name[NAMED_DMABUF_NAME_LEN]; /* in:  buffer to query */
+	char  inst_name[NAMED_DMABUF_NAME_LEN]; /* out: this instance's name */
+	__u64 offset; /* out: bytes from carveout base */
+	__u64 size; /* out: buffer size in bytes */
+};
+
+/*
+ * NAMED_DMABUF_IOC_IMPORT_REMOTE — register a buffer described by an export tuple.
+ *
+ * Validates inst_name, range-checks offset+size against the carveout,
+ * constructs a dmabuf from carveout_base+offset, and registers it under name.
+ * Fails with -ENODEV if the instance has no carveout.
+ * Fails with -EINVAL if inst_name does not match this instance.
+ * Fails with -ERANGE if offset+size exceeds the carveout bounds.
+ */
+struct named_dmabuf_import {
+	char  name[NAMED_DMABUF_NAME_LEN]; /* name to register under */
+	char  inst_name[NAMED_DMABUF_NAME_LEN]; /* must match this instance's name */
+	__u64 offset; /* bytes from carveout base */
+	__u64 size; /* buffer size in bytes */
+	__u32 flags; /* NAMED_DMABUF_F_* */
+	__u32 _pad;
+};
+
+#define NAMED_DMABUF_IOC_GET_EXPORT_INFO \
+	_IOWR(NAMED_DMABUF_IOC_MAGIC, 0x03, struct named_dmabuf_export_info)
+
+#define NAMED_DMABUF_IOC_IMPORT_REMOTE \
+	_IOW(NAMED_DMABUF_IOC_MAGIC, 0x04, struct named_dmabuf_import)
+
 #endif
