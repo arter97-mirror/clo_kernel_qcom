@@ -710,7 +710,7 @@ store_grp_attr(adaptive_level_1, 0U, 8000000U, MEMLAT_ADAPTIVE_LEVEL_1);
 show_attr(min_freq);
 show_attr(max_freq);
 show_attr(ipm_ceil);
-store_attr(ipm_ceil, 1U, 20000000U, MEMLAT_IPM_CEIL);
+store_attr(ipm_ceil, 1U, 80000000U, MEMLAT_IPM_CEIL);
 show_attr(fe_stall_floor);
 store_attr(fe_stall_floor, 0U, 100U, MEMLAT_FE_STALL_FLOOR);
 show_attr(be_stall_floor);
@@ -1031,8 +1031,8 @@ static void calculate_mon_sampling_freq(struct memlat_mon *mon)
 			     stats->freq_mhz < mon->freq_scale_ceil_mhz) &&
 			    (stats->fe_stall_pct >= mon->fe_stall_floor ||
 			     stats->be_stall_pct >= mon->be_stall_floor)) {
-				max_cpufreq_scaled += (stats->freq_mhz * ipm_diff *
-					mon->freq_scale_pct) / (mon->ipm_ceil * 100);
+				max_cpufreq_scaled += (u64)stats->freq_mhz * ipm_diff *
+					mon->freq_scale_pct / ((u64)mon->ipm_ceil * 100);
 				max_cpufreq_scaled = min(mon->freq_scale_ceil_mhz,
 							 max_cpufreq_scaled);
 			}
