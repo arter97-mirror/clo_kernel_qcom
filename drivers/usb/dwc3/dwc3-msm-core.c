@@ -8585,7 +8585,7 @@ static int dwc3_msm_runtime_suspend(struct device *dev)
 	dev_dbg(dev, "DWC3-msm runtime suspend\n");
 	dbg_event(0xFF, "RT Sus", 0);
 
-	if (dwc && !mdwc->force_suspend)
+	if (dwc && (!mdwc->force_suspend || !mdwc->in_host_mode))
 		device_init_wakeup(dwc->dev, false);
 
 	if (dev->pm_domain) {
