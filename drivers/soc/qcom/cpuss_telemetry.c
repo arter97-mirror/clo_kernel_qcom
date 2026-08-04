@@ -314,7 +314,7 @@ static int scmi_cpuss_telemetry_probe(struct scmi_device *sdev)
 		return -ENOMEM;
 	}
 
-	name_array_size = sizeof(struct telemetry_counter_attributes_name_t *) *
+	name_array_size = sizeof(struct telemetry_counter_attributes_name_t) *
 					telemetry->num_max_counters;
 	pname = (const struct telemetry_counter_attributes_name_t *)
 			ioremap_cache(telemetry->pname, name_array_size);
@@ -323,7 +323,7 @@ static int scmi_cpuss_telemetry_probe(struct scmi_device *sdev)
 		goto mem_allocation_error_handler;
 	}
 
-	value_array_size = sizeof(struct telemetry_counter_attributes_value_t *) *
+	value_array_size = sizeof(struct telemetry_counter_attributes_value_t) *
 					telemetry->num_max_counters;
 
 	pvalue = (struct telemetry_counter_attributes_value_t *)
