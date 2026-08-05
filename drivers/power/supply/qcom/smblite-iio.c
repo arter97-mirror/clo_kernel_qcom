@@ -108,6 +108,9 @@ int smblite_iio_get_prop(struct smb_charger *chg, int channel, int *val)
 	case PSY_IIO_DIE_HEALTH:
 		rc = smblite_lib_get_die_health(chg, val);
 		break;
+	case PSY_IIO_TYPEC_ACCESSORY_MODE:
+		rc = smblite_lib_get_usb_prop_typec_accessory_mode(chg, val);
+		break;
 	default:
 		pr_debug("get prop %x is not supported\n", channel);
 		return -EINVAL;

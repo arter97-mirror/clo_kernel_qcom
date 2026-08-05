@@ -2233,6 +2233,30 @@ int smblite_lib_get_prop_typec_power_role(struct smb_charger *chg,
 	return rc;
 }
 
+inline int smblite_lib_get_usb_prop_typec_accessory_mode(struct smb_charger *chg, int *val)
+{
+	if (chg->connector_type == QTI_POWER_SUPPLY_CONNECTOR_MICRO_USB) {
+		*val = TYPEC_ACCESSORY_NONE;
+		return 0;
+	}
+
+	switch (chg->typec_mode) {
+	case QTI_POWER_SUPPLY_TYPEC_NONE:
+		*val = TYPEC_ACCESSORY_NONE;
+		break;
+	case QTI_POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER:
+		*val = TYPEC_ACCESSORY_AUDIO;
+		break;
+	case QTI_POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY:
+		*val = TYPEC_ACCESSORY_DEBUG;
+		break;
+	default:
+		*val = -EINVAL;
+	}
+
+	return 0;
+}
+
 int smblite_lib_get_prop_input_current_settled(struct smb_charger *chg,
 					  int *val)
 {
