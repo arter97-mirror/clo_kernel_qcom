@@ -91,6 +91,7 @@ phy-qcom-ufs.ko
 phy-qcom-ufs-qmp-v4-kalama.ko
 qcom_ice.ko
 dwc3-msm.ko
+dwc3-qcom-mp.ko
 videocc-x1p42100.ko
 ufs-qcom.ko
 ufshcd-crypto-qti.ko
