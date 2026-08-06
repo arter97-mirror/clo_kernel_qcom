@@ -473,7 +473,7 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	if (regval & HW_CONTROL_MASK) {
 		dev_warn(&rdev->dev, "Invalid Disable while %s is under HW control\n",
 				sc->rdesc.name);
-		return -EBUSY;
+		goto done;
 	}
 
 	if (sc->force_root_en) {
