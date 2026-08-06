@@ -3792,6 +3792,48 @@ static const struct adsp_data diwali_wpss_resource = {
 	.ssctl_id = 0x19,
 };
 
+static const struct adsp_data diwali_adsp_resource = {
+	.crash_reason_smem = 423,
+	.firmware_name = "adsp.mdt",
+	.pas_id = 1,
+	.minidump_id = 5,
+	.load_state = "adsp",
+	.uses_elf64 = true,
+	.auto_boot = false,
+	.ssr_name = "lpass",
+	.sysmon_name = "adsp",
+	.ssctl_id = 0x14,
+};
+
+static const struct adsp_data diwali_cdsp_resource = {
+	.crash_reason_smem = 601,
+	.firmware_name = "cdsp.mdt",
+	.pas_id = 18,
+	.minidump_id = 7,
+	.load_state = "cdsp",
+	.uses_elf64 = true,
+	.auto_boot = true,
+	.ssr_name = "cdsp",
+	.sysmon_name = "cdsp",
+	.ssctl_id = 0x17,
+};
+
+static const struct adsp_data diwali_mpss_resource = {
+	.crash_reason_smem = 421,
+	.firmware_name = "modem.mdt",
+	.pas_id = 4,
+	.minidump_id = 3,
+	.load_state = "modem",
+	.uses_elf64 = true,
+	.auto_boot = false,
+	.ssr_name = "mpss",
+	.sysmon_name = "modem",
+	.ssctl_id = 0x12,
+	.dma_phys_below_32b = true,
+	.decrypt_shutdown = true,
+	.both_dumps = true,
+};
+
 static const struct of_device_id adsp_of_match[] = {
 	{ .compatible = "qcom,msm8226-adsp-pil", .data = &adsp_resource_init},
 	{ .compatible = "qcom,msm8953-adsp-pil", .data = &msm8996_adsp_resource},
@@ -3917,6 +3959,9 @@ static const struct of_device_id adsp_of_match[] = {
 	{ .compatible = "qcom,waipio-slpi-pas", .data = &waipio_slpi_resource},
 	{ .compatible = "qcom,waipio-modem-pas", .data = &waipio_mpss_resource},
 	{ .compatible = "qcom,diwali-wpss-pas", .data = &diwali_wpss_resource},
+	{ .compatible = "qcom,diwali-adsp-pas", .data = &diwali_adsp_resource},
+	{ .compatible = "qcom,diwali-cdsp-pas", .data = &diwali_cdsp_resource},
+	{ .compatible = "qcom,diwali-modem-pas", .data = &diwali_mpss_resource},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, adsp_of_match);
