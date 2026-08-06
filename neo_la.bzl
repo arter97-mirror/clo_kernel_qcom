@@ -148,6 +148,7 @@ neo_la_in_tree_modules = [
     "drivers/soc/qcom/minidump.ko",
     "drivers/soc/qcom/msm_performance.ko",
     "drivers/soc/qcom/pdr_interface.ko",
+    "drivers/soc/qcom/pdr_monitor.ko",
     "drivers/soc/qcom/pmic-pon-log.ko",
     "drivers/soc/qcom/power_state.ko",
     "drivers/soc/qcom/qcom_aoss.ko",
