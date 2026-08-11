@@ -761,7 +761,9 @@
   genphy_c37_read_status
   genphy_c45_fast_retrain
   genphy_c45_pma_read_abilities
+  genphy_c45_pma_resume
   genphy_c45_pma_setup_forced
+  genphy_c45_pma_suspend
   __genphy_config_aneg
   genphy_read_abilities
   genphy_read_lpa
@@ -1182,6 +1184,7 @@
   mbox_free_channel
   mbox_request_channel
   mbox_send_message
+  mdiobus_c45_modify
   mdiobus_c45_modify_changed
   __mdiobus_read
   mdiobus_read
@@ -1501,11 +1504,14 @@
   __phy_modify
   phy_modify
   phy_modify_changed
+  __phy_modify_mmd
   phy_modify_mmd
   phy_modify_mmd_changed
   phy_power_off
   phy_power_on
+  __phy_read_mmd
   phy_read_mmd
+  phy_resolve_aneg_linkmode
   phy_resolve_aneg_pause
   phy_restart_aneg
   phy_set_mode_ext
@@ -1513,6 +1519,7 @@
   phy_sfp_detach
   phy_sfp_probe
   phy_trigger_machine
+  __phy_write_mmd
   phy_write_mmd
   pick_highest_pushable_task
   pick_migrate_task
