@@ -30,6 +30,11 @@ static void trace___hyp_printk(u8 fmt_id, u64 a, u64 b, u64 c, u64 d)
 			trace_hyp_printk(fmt, ##__VA_ARGS__); \
 	} while (0)
 
+static struct smmu_v2_nested *to_smmu_v2(struct kvm_hyp_iommu *iommu)
+{
+	return container_of(iommu, struct smmu_v2_nested, iommu);
+}
+
 /* Helper functions for register access */
 static void smmuv2_cbar_read(struct smmu_v2_nested *smmu, u32 offset, u64 *buf)
 {
@@ -798,16 +803,16 @@ static int hw_profile_init(void)
 }
 
 /* Wait for any pending TLB invalidations to complete */
-static int __arm_smmu_tlb_sync(struct smmu_v2_nested *smmu, int cb,
+static int __arm_smmu_tlb_sync(struct smmu_v2_nested *smmu, int cb_idx,
 				int sync, int status)
 {
 	unsigned int inc, delay;
 	u32 reg;
 
-	arm_smmu_cb_write(smmu, cb, sync, QCOM_DUMMY_VAL);
+	arm_smmu_cb_write(smmu, cb_idx, sync, QCOM_DUMMY_VAL);
 
 	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
-		reg = arm_smmu_cb_read(smmu, cb, status);
+		reg = arm_smmu_cb_read(smmu, cb_idx, status);
 		if (!(reg & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
 			return 0;
 
@@ -820,9 +825,9 @@ static int __arm_smmu_tlb_sync(struct smmu_v2_nested *smmu, int cb,
 	return -EINVAL;
 }
 
-static void arm_smmu_tlb_sync_context(struct smmu_v2_nested *smmu)
+static void arm_smmu_tlb_sync_context(struct smmu_v2_nested *smmu, int cb_idx)
 {
-	if (__arm_smmu_tlb_sync(smmu, smmu->host_s2_cb_idx,
+	if (__arm_smmu_tlb_sync(smmu, cb_idx,
 				ARM_SMMU_CB_TLBSYNC,
 				ARM_SMMU_CB_TLBSTATUS)) {
 		/* Fatal assertion in case of TLB sync failure*/
@@ -852,33 +857,48 @@ static void arm_smmu_tlb_sync_global(struct smmu_v2_nested *smmu)
 	BUG_ON(1);
 }
 
-static void arm_smmu_tlb_inv_range_s2(struct smmu_v2_nested *smmu,
+static void arm_smmu_tlb_inv_range_s2(struct smmu_v2_nested *smmu, int cb_idx,
 				      unsigned long iova, size_t size,
-				      size_t granule, void *cookie, int reg)
+				      size_t granule, int reg)
 {
 	iova >>= PAGE_SHIFT;
 
 	do {
-		arm_smmu_cb_writeq(smmu, smmu->host_s2_cb_idx, reg, iova);
+		arm_smmu_cb_writeq(smmu, cb_idx, reg, iova);
 		iova += granule >> PAGE_SHIFT;
 	} while (size > granule && (size -= granule));
 }
 
+/*
+ * Lock, invalidate an IPA range in @cb_idx's S2 TLB, sync, invalidate
+ * combined S1+S2 entries for @vmid, and unlock.
+ */
+static void arm_smmu_tlb_inv_sync_s2(struct smmu_v2_nested *smmu, int cb_idx,
+				     u32 vmid, unsigned long iova, size_t size,
+				     size_t granule, int reg)
+{
+	kvm_iommu_lock(&smmu->iommu);
+	arm_smmu_tlb_inv_range_s2(smmu, cb_idx, iova, size, granule, reg);
+	arm_smmu_tlb_sync_context(smmu, cb_idx);
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, vmid);
+	arm_smmu_tlb_sync_global(smmu);
+	kvm_iommu_unlock(&smmu->iommu);
+}
+
+/*
+ * Host fully-virtualized path: invalidate the reserved host S2 context
+ * bank on every SMMU instance.
+ */
 static void arm_smmu_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
 				     unsigned long iova, size_t granule,
 				     void *cookie)
 {
 	struct smmu_v2_nested *smmu;
 
-	for_each_smmu(smmu) {
-		kvm_iommu_lock(&smmu->iommu);
-		arm_smmu_tlb_inv_range_s2(smmu, iova, granule, granule, cookie,
-					  ARM_SMMU_CB_S2_TLBIIPAS2L);
-		arm_smmu_tlb_sync_context(smmu);
-		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, HOST_S2_VMID);
-		arm_smmu_tlb_sync_global(smmu);
-		kvm_iommu_unlock(&smmu->iommu);
-	}
+	for_each_smmu(smmu)
+		arm_smmu_tlb_inv_sync_s2(smmu, smmu->host_s2_cb_idx,
+					 HOST_S2_VMID, iova, granule, granule,
+					 ARM_SMMU_CB_S2_TLBIIPAS2L);
 }
 
 static void arm_smmu_tlb_inv_walk_s2(unsigned long iova, size_t size,
@@ -886,20 +906,59 @@ static void arm_smmu_tlb_inv_walk_s2(unsigned long iova, size_t size,
 {
 	struct smmu_v2_nested *smmu;
 
-	for_each_smmu(smmu) {
-		kvm_iommu_lock(&smmu->iommu);
-		arm_smmu_tlb_inv_range_s2(smmu, iova, size, granule, cookie,
-					  ARM_SMMU_CB_S2_TLBIIPAS2);
-		arm_smmu_tlb_sync_context(smmu);
-		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, HOST_S2_VMID);
-		arm_smmu_tlb_sync_global(smmu);
-		kvm_iommu_unlock(&smmu->iommu);
-	}
+	for_each_smmu(smmu)
+		arm_smmu_tlb_inv_sync_s2(smmu, smmu->host_s2_cb_idx,
+					 HOST_S2_VMID, iova, size, granule,
+					 ARM_SMMU_CB_S2_TLBIIPAS2);
 }
 
 static const struct iommu_flush_ops arm_smmu_s2_tlb_ops_v2 = {
 	.tlb_flush_walk	= arm_smmu_tlb_inv_walk_s2,
 	.tlb_add_page	= arm_smmu_tlb_add_page_s2,
+};
+
+/*
+ * Guest para-virtualized path: the io-pgtable cookie is the
+ * kvm_hyp_iommu_domain, whose priv (smmu_nested_guest_domain) resolves to
+ * the guest domain's own SMMU and CB (both set at attach_dev). Invalidate
+ * only that CB on that SMMU.
+ *
+ * v1 assumption: a guest domain spans a single SMMU instance
+ * (smmu_nested_guest_domain.iommu). Multi-SMMU domains would require
+ * walking a per-domain SMMU list.
+ */
+static void arm_smmu_guest_tlb_inv_s2(void *cookie, unsigned long iova,
+				      size_t size, size_t granule, int reg)
+{
+	struct kvm_hyp_iommu_domain *domain = cookie;
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+
+	if (!guest_domain || !guest_domain->iommu || guest_domain->cb_idx < 0)
+		return;
+
+	arm_smmu_tlb_inv_sync_s2(to_smmu_v2(guest_domain->iommu),
+				 guest_domain->cb_idx, domain->domain_id,
+				 iova, size, granule, reg);
+}
+
+static void arm_smmu_guest_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
+					   unsigned long iova, size_t granule,
+					   void *cookie)
+{
+	arm_smmu_guest_tlb_inv_s2(cookie, iova, granule, granule,
+				  ARM_SMMU_CB_S2_TLBIIPAS2L);
+}
+
+static void arm_smmu_guest_tlb_inv_walk_s2(unsigned long iova, size_t size,
+					   size_t granule, void *cookie)
+{
+	arm_smmu_guest_tlb_inv_s2(cookie, iova, size, granule,
+				  ARM_SMMU_CB_S2_TLBIIPAS2);
+}
+
+static const struct iommu_flush_ops arm_smmu_guest_s2_tlb_ops_v2 = {
+	.tlb_flush_walk	= arm_smmu_guest_tlb_inv_walk_s2,
+	.tlb_add_page	= arm_smmu_guest_tlb_add_page_s2,
 };
 
 const struct smmu_vendor_callbacks v2callbacks = {
