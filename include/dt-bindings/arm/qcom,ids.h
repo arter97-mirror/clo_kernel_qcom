@@ -338,6 +338,7 @@
 #define QCOM_ID_DIWALI			506
 #define QCOM_ID_DIWALIP			547
 #define QCOM_ID_MAHUA			693
+#define QCOM_ID_QMB410			800
 
 /*
  * The board type and revision information, used by Qualcomm bootloaders and
