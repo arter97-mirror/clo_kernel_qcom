@@ -817,6 +817,8 @@ static void binder_transaction_priority(struct binder_thread *thread,
 		.prio = node->min_priority,
 	};
 
+	trace_android_vh_binder_transaction_priority(thread, t);
+
 	if (t->set_priority_called)
 		return;
 
@@ -4673,7 +4675,7 @@ static int binder_thread_write(struct binder_proc *proc,
 				}
 			}
 			binder_debug(BINDER_DEBUG_DEAD_BINDER,
-				     "%d:%d BC_DEAD_BINDER_DONE %016llx found %pK\n",
+				     "%d:%d BC_DEAD_BINDER_DONE %016llx found %p\n",
 				     proc->pid, thread->pid, (u64)cookie,
 				     death);
 			if (death == NULL) {

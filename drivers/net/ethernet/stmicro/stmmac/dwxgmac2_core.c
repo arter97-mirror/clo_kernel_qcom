@@ -61,13 +61,13 @@ static void dwxgmac2_core_init(struct mac_device_info *hw,
 
 	writel(tx, ioaddr + XGMAC_TX_CONFIG);
 	writel(rx, ioaddr + XGMAC_RX_CONFIG);
-
+	#if 0
 	if (!(priv->lpi_irq < 0)) {
 		intr_en = readl(ioaddr + XGMAC_INT_EN);
 		intr_en |= XGMAC_LPIIE;
 		writel(intr_en, ioaddr + XGMAC_INT_EN);
 	}
-
+	#endif
 	// Disable link status interrupt
 	intr_en = readl(ioaddr + XGMAC_INT_EN);
 	intr_en &= ~XGMAC_LSI;

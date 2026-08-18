@@ -134,7 +134,6 @@ static int loongson_dwmac_probe(struct pci_dev *pdev, const struct pci_device_id
 		dev_info(&pdev->dev, "IRQ eth_wake_irq not found, using macirq\n");
 		res.wol_irq = res.irq;
 	}
-
 	res.lpi_irq = of_irq_get_byname(np, "eth_lpi");
 	if (res.lpi_irq < 0) {
 		dev_err(&pdev->dev, "IRQ eth_lpi not found\n");
