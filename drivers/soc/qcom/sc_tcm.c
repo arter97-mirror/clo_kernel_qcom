@@ -17,6 +17,7 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/suspend.h>
 
+#include <linux/vmalloc.h>
 #include <linux/soc/qcom/llcc-qcom.h>
 #include "sc_tcm_internal.h"
 
@@ -25,6 +26,8 @@ struct sc_tcm_device {
 	unsigned long size;
 	struct gen_pool *pool;
 	struct mutex lock;
+	void *ddr_backup;
+	size_t ddr_backup_size;
 };
 
 /**
@@ -175,6 +178,49 @@ static void sc_tcm_unmap_mem(void)
 	__vunmap_range_noflush(base, end);
 }
 
+static int sc_tcm_hibernation_backup(void)
+{
+	void *tcm_vaddr;
+
+	if (!sc_tcm || !sc_tcm->size) {
+		pr_err("hibernation backup: sc_tcm invalid\n");
+		return -EINVAL;
+	}
+
+	sc_tcm->ddr_backup = vmalloc(sc_tcm->size);
+	if (!sc_tcm->ddr_backup)
+		return -ENOMEM;
+
+	tcm_vaddr = phys_to_virt(sc_tcm->base);
+	memcpy(sc_tcm->ddr_backup, tcm_vaddr, sc_tcm->size);
+	sc_tcm->ddr_backup_size = sc_tcm->size;
+
+	pr_info("hibernation backup: copied %zu bytes from TCM to DDR\n", sc_tcm->size);
+	return 0;
+}
+
+static int sc_tcm_hibernation_restore(void)
+{
+	void *tcm_vaddr;
+	size_t size;
+
+	if (!sc_tcm || !sc_tcm->ddr_backup) {
+		pr_err("hibernation restore: no backup available\n");
+		return -EINVAL;
+	}
+
+	tcm_vaddr = phys_to_virt(sc_tcm->base);
+	size = sc_tcm->ddr_backup_size;
+	memcpy(tcm_vaddr, sc_tcm->ddr_backup, size);
+
+	vfree(sc_tcm->ddr_backup);
+	sc_tcm->ddr_backup = NULL;
+	sc_tcm->ddr_backup_size = 0;
+
+	pr_info("hibernation restore: restored %zu bytes from DDR to TCM\n", size);
+	return 0;
+}
+
 static int sc_tcm_region(phys_addr_t *base, size_t *size)
 {
 	sc_tcm_tcm_data = llcc_tcm_activate();
@@ -194,11 +240,21 @@ static int sc_tcm_region(phys_addr_t *base, size_t *size)
 /**
  * sc_tcm_hibernation_prepare - PM_HIBERNATION_PREPARE handler
  *
- * Unmap the SC TCM linear mapping before the hibernation snapshot is taken.
+ * Backup TCM content to DDR and unmap the SC TCM linear mapping
+ * before the hibernation snapshot is taken.
  */
 static int sc_tcm_hibernation_prepare(void)
 {
-	pr_info("hibernation prepare: unmapping TCM\n");
+	int ret;
+
+	pr_info("hibernation prepare: backing up TCM content\n");
+
+	ret = sc_tcm_hibernation_backup();
+	if (ret) {
+		pr_err("hibernation prepare: backup failed, aborting\n");
+		return NOTIFY_BAD;
+	}
+
 	sc_tcm_unmap_mem();
 	return NOTIFY_OK;
 }
@@ -206,7 +262,8 @@ static int sc_tcm_hibernation_prepare(void)
 /**
  * sc_tcm_post_hibernation - PM_POST_HIBERNATION handler
  *
- * Re-establish the SC TCM linear mapping after resume from hibernation.
+ * Re-establish the SC TCM linear mapping after resume from hibernation
+ * and restore TCM content from DDR backup.
  */
 static int sc_tcm_post_hibernation(void)
 {
@@ -231,7 +288,13 @@ static int sc_tcm_post_hibernation(void)
 		return NOTIFY_BAD;
 	}
 
-	pr_info("post-hibernation: TCM remapped successfully\n");
+	ret = sc_tcm_hibernation_restore();
+	if (ret) {
+		pr_err("post-hibernation: restore failed\n");
+		return NOTIFY_BAD;
+	}
+
+	pr_info("post-hibernation: TCM remapped and restored successfully\n");
 	return NOTIFY_OK;
 }
 
