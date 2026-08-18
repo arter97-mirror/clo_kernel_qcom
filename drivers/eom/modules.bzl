@@ -32,6 +32,12 @@ def register_modules(registry):
                     "drivers/eom/pcie_eom_hamoa_phy.c",
                 ],
             },
+            "CONFIG_ARCH_MAHUA": {
+                True: [
+                    "drivers/eom/pcie_eom_mahua_phy_reg.h",
+                    "drivers/eom/pcie_eom_mahua_phy.c",
+                ],
+            },
         },
         hdrs = [
             "include/linux/phy_core.h",
