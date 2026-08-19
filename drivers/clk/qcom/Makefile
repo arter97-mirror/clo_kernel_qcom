@@ -195,6 +195,8 @@ obj-$(CONFIG_SM_VIDEOCC_CANOE) += videocc-canoe.o
 
 obj-$(CONFIG_SM_VIDEOCC_CHORA) += videocc-chora.o
 
+obj-$(CONFIG_SM_VIDEOCC_DIWALI) += videocc-diwali.o
+
 obj-$(CONFIG_SM_VIDEOCC_SUN) += videocc-sun.o
 
 obj-$(CONFIG_SPMI_PMIC_CLKDIV) += clk-spmi-pmic-div.o
