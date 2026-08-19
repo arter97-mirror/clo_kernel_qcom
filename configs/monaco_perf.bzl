@@ -221,6 +221,7 @@ monaco_perf_config = {
     "CONFIG_QCOM_WCNSS_PIL": "n",
     "CONFIG_QCOM_WDOG_BITE_EARLY_PANIC": "n",
     "CONFIG_QCOM_WDT_CORE": "m",
+    "CONFIG_QCOM_WEAR_CONFIG": "m",
     "CONFIG_QPNP_SMBLITE": "m",
     "CONFIG_QRTR": "m",
     "CONFIG_QRTR_SMD": "m",
