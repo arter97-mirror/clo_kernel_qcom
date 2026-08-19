@@ -1291,6 +1291,7 @@ static void msm_dirconn_cfg_reg(struct irq_data *d, u32 offset)
 	u32 val;
 	const struct msm_pingroup *g;
 	unsigned long flags;
+	u32 intr_target_mask = GENMASK(2, 0);
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 
@@ -1302,7 +1303,13 @@ static void msm_dirconn_cfg_reg(struct irq_data *d, u32 offset)
 	writel_relaxed(val, pctrl->regs[g->tile] + g->dir_conn_reg
 					+ (offset * 4));
 
+	if (g->intr_target_width)
+		intr_target_mask = GENMASK(g->intr_target_width - 1, 0);
+
 	val = msm_readl_intr_cfg(pctrl, g);
+	val &= ~(intr_target_mask << g->intr_target_bit);
+	val |= g->intr_target_kpss_val << g->intr_target_bit;
+
 	val |= BIT(g->dir_conn_en_bit);
 
 	msm_writel_intr_cfg(val, pctrl, g);
