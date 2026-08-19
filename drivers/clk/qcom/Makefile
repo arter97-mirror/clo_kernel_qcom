@@ -125,6 +125,8 @@ obj-$(CONFIG_SM_DISPCC_CANOE) += dispcc-canoe.o
 
 obj-$(CONFIG_SM_DISPCC_CHORA) += dispcc-chora.o
 
+obj-$(CONFIG_SM_DISPCC_DIWALI) += dispcc-diwali.o
+
 obj-$(CONFIG_SM_DISPCC_KHAJE) += dispcc-khaje.o
 
 obj-$(CONFIG_SM_DISPCC_MALABAR) += dispcc-malabar.o
