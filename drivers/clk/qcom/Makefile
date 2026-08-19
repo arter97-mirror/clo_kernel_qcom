@@ -93,6 +93,8 @@ obj-$(CONFIG_SM_CAMCC_CANOE) += camcc-canoe.o
 
 obj-$(CONFIG_SM_CAMCC_CHORA) += camcc-chora.o
 
+obj-$(CONFIG_SM_CAMCC_DIWALI) += camcc-diwali.o
+
 obj-$(CONFIG_SM_CAMCC_SUN) += camcc-sun.o
 
 obj-$(CONFIG_SM_DEBUGCC_4450) += debugcc-sm4450.o
