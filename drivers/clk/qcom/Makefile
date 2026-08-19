@@ -165,6 +165,8 @@ obj-$(CONFIG_SM_GPUCC_CANOE) += gpucc-canoe.o
 
 obj-$(CONFIG_SM_GPUCC_CHORA) += gpucc-chora.o
 
+obj-$(CONFIG_SM_GPUCC_DIWALI) += gpucc-diwali.o
+
 obj-$(CONFIG_SM_GPUCC_KHAJE) += gpucc-khaje.o
 
 obj-$(CONFIG_SM_GPUCC_MALABAR) += gpucc-malabar.o
