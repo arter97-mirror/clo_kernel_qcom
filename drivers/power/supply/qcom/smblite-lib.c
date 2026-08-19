@@ -4228,6 +4228,7 @@ static void smblite_lib_thermal_regulation_work(struct work_struct *work)
 {
 	struct smb_charger *chg = container_of(work, struct smb_charger,
 						thermal_regulation_work.work);
+	const char *effective_client;
 	int rc = 0, icl_ua = 0, input_present = 0;
 	u8 stat = 0;
 
@@ -4284,8 +4285,9 @@ static void smblite_lib_thermal_regulation_work(struct work_struct *work)
 		 * with increment otherwise if other voter has voted a lower
 		 * ICL then remove vote and exit work.
 		 */
-		if (!strcmp(get_effective_client(chg->usb_icl_votable),
-				SW_THERM_REGULATION_VOTER)) {
+		effective_client =
+			get_effective_client(chg->usb_icl_votable);
+		if (effective_client && !strcmp(effective_client, SW_THERM_REGULATION_VOTER)) {
 			icl_ua += THERM_REGULATION_STEP_UA;
 			vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER,
 					true, icl_ua);
