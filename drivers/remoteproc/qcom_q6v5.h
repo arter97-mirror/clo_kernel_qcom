@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ */
 
 #ifndef __QCOM_Q6V5_H__
 #define __QCOM_Q6V5_H__
@@ -30,6 +33,7 @@ struct qcom_q6v5 {
 
 	struct icc_path *path;
 	struct icc_path *crypto_path;
+	struct icc_path *cnoc_path;
 
 	unsigned int stop_bit;
 	unsigned int ping_bit;
