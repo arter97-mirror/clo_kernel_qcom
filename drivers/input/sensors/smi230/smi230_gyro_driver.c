@@ -68,7 +68,7 @@
 #define SMI230_MAX_VALUE 32767
 
 #define SMI230_MAX_GYRO_FIFO_FRAME 100
-#define SMI230_MAX_GYRO_FIFO_BYTES                                             \
+#define SMI230_MAX_GYRO_FIFO_BYTES					     \
 	(SMI230_MAX_GYRO_FIFO_FRAME * SMI230_FIFO_GYRO_FRAME_LENGTH)
 
 static uint8_t fifo_buf[SMI230_MAX_GYRO_FIFO_BYTES];
@@ -90,6 +90,7 @@ struct smi230_client_data {
 	int IRQ;
 	int gpio_pin;
 	uint64_t timestamp;
+	uint64_t timestamp_pending;
 	uint64_t timestamp_old;
 #ifdef CONFIG_ENABLE_SMI230_ACC_GYRO_BUFFERING
 	bool read_gyro_boot_sample;
@@ -896,10 +897,11 @@ static void smi230_gyro_fifo_wm_handle(struct smi230_client_data *client_data)
 {
 	struct smi230_fifo_frame fifo;
 	int err = 0, i;
-	bool repeat = false;
 	uint16_t fifo_length;
 	uint32_t tsamp;
 	uint64_t timestamp_ns;
+	uint64_t now;
+	bool first_pass = true;
 	struct timespec64 ts;
 
 	err = smi230_gyro_get_fifo_length(&fifo_length, p_smi230_dev);
@@ -926,39 +928,60 @@ static void smi230_gyro_fifo_wm_handle(struct smi230_client_data *client_data)
 		fifo_length = SMI230_MAX_GYRO_FIFO_FRAME;
 		err = smi230_gyro_extract_fifo(fifo_gyro_data, &fifo_length,
 					       &fifo, p_smi230_dev);
+
+		/* First pass uses the timestamp captured in the top-half at
+		 * IRQ time. Subsequent passes drain FIFO data that arrived
+		 * after that instant, so capture a fresh timestamp for each
+		 * of them to keep the per-sample spacing meaningful.
+		 */
+		if (first_pass) {
+			now = client_data->timestamp;
+			first_pass = false;
+		} else {
+			now = ktime_get_boottime_ns();
+		}
+
+		/* Guard against a non-monotonic timestamp: a watermark IRQ
+		 * can latch an edge time while a previous multi-pass drain is
+		 * still advancing timestamp_old with fresh ktime values. In
+		 * that case the staged edge time may predate timestamp_old,
+		 * which would underflow the unsigned subtraction below and
+		 * produce a bogus sample period. Fall back to the current
+		 * time, which is always >= timestamp_old.
+		 */
+		if (now <= client_data->timestamp_old)
+			now = ktime_get_boottime_ns();
+
+		tsamp = div_u64(now - client_data->timestamp_old, fifo_length);
+		timestamp_ns = client_data->timestamp_old;
+		client_data->timestamp_old = now;
+
+
 		if (!is_gyro_ready) {
 			PINFO("gyro not ready, discard data of first 200ms period after active");
-			client_data->timestamp_old = client_data->timestamp;
+			client_data->timestamp_old = now;
 			return;
 		}
 
-		tsamp = div_u64(client_data->timestamp -
-					client_data->timestamp_old,
-				fifo_length);
-		timestamp_ns = client_data->timestamp_old;
-		client_data->timestamp_old = client_data->timestamp;
-
 		//ignore fifo data from next irq
-		if (!repeat && fifo_length >= p_smi230_dev->gyro_cfg.fifo_wm) {
-			for (i = 0; i < fifo_length; i++) {
-				timestamp_ns += tsamp;
-				ts = ns_to_timespec64(timestamp_ns);
+		for (i = 0; i < fifo_length; i++) {
+			timestamp_ns += tsamp;
+			ts = ns_to_timespec64(timestamp_ns);
 
-				input_event(client_data->input, EV_MSC,
-					    MSC_TIMESTAMP, ts.tv_sec);
-				input_event(client_data->input, EV_MSC,
-					    MSC_TIMESTAMP, ts.tv_nsec);
-				input_event(client_data->input, EV_MSC, MSC_RAW,
-					    (int)fifo_gyro_data[i].x);
-				input_event(client_data->input, EV_MSC, MSC_RAW,
-					    (int)fifo_gyro_data[i].y);
-				input_event(client_data->input, EV_MSC, MSC_RAW,
-					    (int)fifo_gyro_data[i].z);
-				input_sync(client_data->input);
-				store_gyro_boot_sample(client_data, fifo_gyro_data[i].x,
-						fifo_gyro_data[i].y,
-						fifo_gyro_data[i].z, ts);
-			}
+			input_event(client_data->input, EV_MSC,
+				    MSC_TIMESTAMP, ts.tv_sec);
+			input_event(client_data->input, EV_MSC,
+				    MSC_TIMESTAMP, ts.tv_nsec);
+			input_event(client_data->input, EV_MSC, MSC_RAW,
+				    (int)fifo_gyro_data[i].x);
+			input_event(client_data->input, EV_MSC, MSC_RAW,
+				    (int)fifo_gyro_data[i].y);
+			input_event(client_data->input, EV_MSC, MSC_RAW,
+				    (int)fifo_gyro_data[i].z);
+			input_sync(client_data->input);
+			store_gyro_boot_sample(client_data, fifo_gyro_data[i].x,
+					fifo_gyro_data[i].y,
+					fifo_gyro_data[i].z, ts);
 		}
 
 		err = smi230_gyro_get_fifo_length(&fifo_length, p_smi230_dev);
@@ -969,7 +992,6 @@ static void smi230_gyro_fifo_wm_handle(struct smi230_client_data *client_data)
 		if (p_smi230_dev->gyro_cfg.power == SMI230_GYRO_PM_SUSPEND ||
 		    p_smi230_dev->gyro_cfg.power == SMI230_GYRO_PM_DEEP_SUSPEND)
 			break;
-		repeat = true;
 	}
 }
 
@@ -1008,6 +1030,22 @@ static irqreturn_t smi230_irq_work_func(int irq, void *handle)
 		return IRQ_HANDLED;
 	}
 
+	/*
+	 * Some parts occasionally assert the INT pin without any status bit
+	 * being set (int_status == 0x00). Such spurious edges have already
+	 * captured an edge timestamp in the top half; if we let that time
+	 * propagate it corrupts the timestamp used for the next real sample.
+	 * Drop the edge here and leave client_data->timestamp untouched so the
+	 * pending edge time is only committed for a genuine interrupt below.
+	 */
+	if (data == 0) {
+		mutex_unlock(&interrupt_handling_lock);
+		return IRQ_HANDLED;
+	}
+
+	/* Valid interrupt: commit the edge timestamp captured in the top half. */
+	client_data->timestamp = client_data->timestamp_pending;
+
 	if (data & 0x10) {
 		if (IS_ENABLED(CONFIG_SMI230_GYRO_FIFO_WM)) {
 			smi230_gyro_fifo_wm_handle(client_data);
@@ -1026,13 +1064,22 @@ static irqreturn_t smi230_irq_work_func(int irq, void *handle)
 static irqreturn_t smi230_irq_handle(int irq, void *handle)
 {
 	struct smi230_client_data *client_data = handle;
+	uint64_t ts = ktime_get_boottime_ns();
 
-	client_data->timestamp = ktime_get_boottime_ns();
-
-	if (IS_ENABLED(CONFIG_SMI230_DATA_SYNC))
+	if (IS_ENABLED(CONFIG_SMI230_DATA_SYNC)) {
+		/* Data-sync validates on the accel side; use the edge directly. */
+		client_data->timestamp = ts;
 		return IRQ_HANDLED;
-	else
-		return IRQ_WAKE_THREAD;
+	}
+
+	/*
+	 * Stage the edge timestamp only. The threaded handler commits it to
+	 * client_data->timestamp after confirming the interrupt is genuine
+	 * (int_status != 0), so spurious edges cannot corrupt sample timing.
+	 */
+	client_data->timestamp_pending = ts;
+	return IRQ_WAKE_THREAD;
+
 }
 
 __maybe_unused static void
