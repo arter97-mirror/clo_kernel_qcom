@@ -201,6 +201,8 @@ struct stmmac_dma_ops {
 			    int fifosz, u8 qmode);
 	void (*dma_tx_mode)(void __iomem *ioaddr, int mode, u32 channel,
 			    int fifosz, u8 qmode);
+	/* Map an MTL Tx queue to a hardware traffic class. */
+	void (*set_tx_queue_tc)(void __iomem *ioaddr, u32 queue, u32 tc);
 	/* To track extra statistic (if supported) */
 	void (*dma_diagnostic_fr)(void *data, struct stmmac_extra_stats *x,
 				  void __iomem *ioaddr);
@@ -275,6 +277,8 @@ struct stmmac_dma_ops {
 	stmmac_do_void_callback(__priv, dma, dma_rx_mode, __args)
 #define stmmac_dma_tx_mode(__priv, __args...) \
 	stmmac_do_void_callback(__priv, dma, dma_tx_mode, __args)
+#define stmmac_set_tx_queue_tc(__priv, __args...)			\
+	stmmac_do_void_callback(__priv, dma, set_tx_queue_tc, __args)
 #define stmmac_dma_diagnostic_fr(__priv, __args...) \
 	stmmac_do_void_callback(__priv, dma, dma_diagnostic_fr, __args)
 #define stmmac_enable_dma_transmission(__priv, __args...) \
