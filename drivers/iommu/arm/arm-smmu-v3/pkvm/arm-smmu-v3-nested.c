@@ -995,27 +995,39 @@ static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 	 * There are some other registers that are not used by Linux as IDR2, IDR4
 	 * that won't be allowed.
 	 */
-	case ARM_SMMU_EVTQ_PROD + SZ_64K:
-	case ARM_SMMU_EVTQ_CONS + SZ_64K:
 	case ARM_SMMU_EVTQ_IRQ_CFG1:
 	case ARM_SMMU_EVTQ_IRQ_CFG2:
-	case ARM_SMMU_PRIQ_PROD + SZ_64K:
-	case ARM_SMMU_PRIQ_CONS + SZ_64K:
-	case ARM_SMMU_PRIQ_IRQ_CFG1:
-	case ARM_SMMU_PRIQ_IRQ_CFG2:
-	case ARM_SMMU_GERRORN:
 	case ARM_SMMU_GERROR_IRQ_CFG1:
 	case ARM_SMMU_GERROR_IRQ_CFG2:
+	case ARM_SMMU_PRIQ_IRQ_CFG1:
+	case ARM_SMMU_PRIQ_IRQ_CFG2:
+		/* These are RES0 as MSI support is hidden. */
+		val = 0;
+		if (!is_write)
+			goto out_update_regs;
+		fallthrough;
+	case ARM_SMMU_EVTQ_PROD + SZ_64K:
+	case ARM_SMMU_EVTQ_CONS + SZ_64K:
+	case ARM_SMMU_PRIQ_PROD + SZ_64K:
+	case ARM_SMMU_PRIQ_CONS + SZ_64K:
+	case ARM_SMMU_GERRORN:
 	case ARM_SMMU_IRQ_CTRLACK:
 	case ARM_SMMU_IRQ_CTRL:
 	case ARM_SMMU_CR0ACK:
 	case ARM_SMMU_CR2:
 		/* These are 32 bit registers. */
 		WARN_ON(len != sizeof(u32));
-		fallthrough;
+		mask = read_write;
+		break;
 	case ARM_SMMU_EVTQ_IRQ_CFG0:
 	case ARM_SMMU_PRIQ_IRQ_CFG0:
 	case ARM_SMMU_GERROR_IRQ_CFG0:
+		if (len != sizeof(u64))
+			break;
+		/* These are RES0 as MSI support is hidden. */
+		val = 0;
+		if (!is_write)
+			goto out_update_regs;
 		mask = read_write;
 		break;
 	case ARM_SMMU_IIDR:
