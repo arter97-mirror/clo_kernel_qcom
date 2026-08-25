@@ -707,15 +707,14 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 		/* Only allow VMID = 0*/
 		if (FIELD_GET(CMDQ_TLBI_0_VMID, command[0]) == 0)
 			break;
-		break;
+		return true;
 	}
-	case 0x10: /* CMD_TLBI_NH_ALL: Not used by Linux */
-	case CMDQ_OP_TLBI_EL2_ALL:
-	case CMDQ_OP_TLBI_EL2_VA:
-	case CMDQ_OP_TLBI_EL2_ASID:
-	case CMDQ_OP_TLBI_S12_VMALL:
-	case 0x23: /* CMD_TLBI_EL2_VAA: Not used by Linux */
-		return WARN_ON(true);
+	case CMDQ_OP_PREFETCH_CFG:
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+	case CMDQ_OP_TLBI_NH_ALL:
+	case CMDQ_OP_TLBI_NSNH_ALL:
+		break;
 	case CMDQ_OP_CMD_SYNC:
 		if (FIELD_GET(CMDQ_SYNC_0_CS, command[0]) == CMDQ_SYNC_0_CS_IRQ) {
 			/* Allow it, but let the host timeout, as this should never happen. */
@@ -724,6 +723,9 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 			command[1] &= ~CMDQ_SYNC_1_MSIADDR_MASK;
 		}
 		break;
+	default:
+		/* Deny unknown commands */
+		return true;
 	}
 
 	return false;
@@ -752,7 +754,7 @@ static void smmu_emulate_cmdq_insert(struct hyp_arm_smmu_v3_device *smmu)
 		smmu_copy_from_host(smmu, cmd, &host_cmdq[idx * CMDQ_ENT_DWORDS],
 				    CMDQ_ENT_DWORDS << 3);
 		skip = smmu_filter_command(smmu, cmd);
-		if (skip)
+		if (WARN_ON(skip))
 			continue;
 		smmu_add_cmd_raw(smmu, cmd);
 	}
