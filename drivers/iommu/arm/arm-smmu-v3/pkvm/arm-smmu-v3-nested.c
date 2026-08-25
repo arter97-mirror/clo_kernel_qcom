@@ -731,7 +731,7 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 
 static void smmu_emulate_cmdq_insert(struct hyp_arm_smmu_v3_device *smmu)
 {
-	u64 *host_cmdq = hyp_phys_to_virt(smmu->cmdq_host.q_base & Q_BASE_ADDR_MASK);
+	u64 *host_cmdq = hyp_phys_to_virt(smmu->cmdq_host.base_dma);
 	int idx;
 	u64 cmd[CMDQ_ENT_DWORDS];
 	bool skip;
@@ -803,7 +803,8 @@ static void smmu_emulate_disable(struct hyp_arm_smmu_v3_device *smmu)
 static void smmu_emulate_cmdq_enable(struct hyp_arm_smmu_v3_device *smmu)
 {
 	smmu->cmdq_host.llq.max_n_shift = smmu->cmdq_host.q_base & Q_BASE_LOG2SIZE;
-	smmu->cmdq_host.base_dma = smmu->cmdq_host.q_base & Q_BASE_ADDR_MASK;
+	smmu->cmdq_host.base_dma = smmu->cmdq_host.q_base &
+		Q_BASE_ADDR_MASK & ((1ULL << smmu->oas) - 1);
 	WARN_ON(smmu_share_pages(smmu->cmdq_host.base_dma,
 				 cmdq_size(&smmu->cmdq_host)));
 }
@@ -814,9 +815,11 @@ static void smmu_emulate_cmdq_disable(struct hyp_arm_smmu_v3_device *smmu)
 				   cmdq_size(&smmu->cmdq_host)));
 }
 
-static void smmu_emulate_queue(unsigned long q_base, size_t ent_size_shift)
+static void smmu_emulate_queue(struct hyp_arm_smmu_v3_device *smmu,
+			       unsigned long q_base, size_t ent_size_shift)
 {
-	phys_addr_t base = q_base & Q_BASE_ADDR_MASK;
+	/* Q_BASE_ADDR_MASK is not enough as the SMMU also ignores bits > OAS */
+	phys_addr_t base = q_base & Q_BASE_ADDR_MASK & ((1ULL << smmu->oas) - 1);
 	size_t size = 1UL << (FIELD_GET(Q_BASE_LOG2SIZE, q_base) + ent_size_shift);
 
 	WARN_ON(smmu_share_pages(base, size));
@@ -919,13 +922,13 @@ static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 			 * As the host never disable those queues, don't support that.
 			 */
 			if (!last_evtq_en && is_evtq_enabled(smmu))
-				smmu_emulate_queue(smmu->evtq_base, EVTQ_ENT_SZ_SHIFT);
+				smmu_emulate_queue(smmu, smmu->evtq_base, EVTQ_ENT_SZ_SHIFT);
 			else if (last_evtq_en && !is_evtq_enabled(smmu)) {
 				if (smmu->cr0 != 0)
 					WARN_ON(1);
 			}
 			if (!last_priq_en && is_priq_enabled(smmu))
-				smmu_emulate_queue(smmu->priq_base, PRIQ_ENT_SZ_SHIFT);
+				smmu_emulate_queue(smmu, smmu->priq_base, PRIQ_ENT_SZ_SHIFT);
 			else if (last_priq_en && !is_priq_enabled(smmu)) {
 				if (smmu->cr0 != 0)
 					WARN_ON(1);
