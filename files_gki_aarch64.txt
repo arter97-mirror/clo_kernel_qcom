@@ -4536,6 +4536,7 @@ include/trace/hooks/preemptirq.h
 include/trace/hooks/printk.h
 include/trace/hooks/psci.h
 include/trace/hooks/psi.h
+include/trace/hooks/rcu.h
 include/trace/hooks/reboot.h
 include/trace/hooks/regmap.h
 include/trace/hooks/remoteproc.h
