@@ -287,9 +287,9 @@ static void convert_vbat_thresh_val_to_adc(struct bcl_device *bcl_perph, int *va
 		*val = (*val * 1000 * 3) / (scaling_factor * battery_config);
 	} else {
 		if (bcl_perph->no_bit_shift)
-			*val = (*val * 1000) / BCL_VBAT_SCALING_UV;
+			*val = (*val * 1000) / scaling_factor;
 		else
-			*val = (*val * 2000) / BCL_VBAT_SCALING_UV;
+			*val = (*val * 2000) / scaling_factor;
 	}
 }
 
@@ -307,7 +307,7 @@ static void convert_adc_to_vbat_val(int *val, int scaling_factor, bool batt_conf
 	if (batt_conf_valid)
 		*val = (*val * scaling_factor * battery_config) / (1000 * 3);
 	else
-		*val = (*val * BCL_VBAT_SCALING_UV) / 1000;
+		*val = (*val * scaling_factor) / 1000;
 }
 
 static void convert_vbat_to_vcmp_val(const struct bcl_desc *desc, int vbat, int *val,
@@ -584,6 +584,8 @@ static int bcl_read_vbat_tz(struct thermal_zone_device *tzd, int *adc_value)
 static int bcl_set_adc_value(struct bcl_device *bcl_perph,
 				int addr_idx, int temp, int *val)
 {
+	const struct bcl_desc *desc = bcl_perph->desc;
+	bool vadc_thresh = addr_idx == BCLBIG_COMP_VCMP_L0_THR && desc->vadc_type;
 	int ret = 0;
 	int16_t addr;
 	int thresh = temp;
@@ -591,24 +593,22 @@ static int bcl_set_adc_value(struct bcl_device *bcl_perph,
 	if (temp <= 0) {
 		pr_debug("Invalid input temp\n");
 		return -EINVAL;
-	} else if (temp < bcl_perph->desc->vcmp_thresh_base) {
+	} else if (temp < desc->vcmp_thresh_base) {
 		pr_debug("input temp is %d, lower than MIN\n", temp);
 		return -EINVAL;
-	} else if (temp > bcl_perph->desc->vcmp_thresh_max) {
+	} else if (temp > desc->vcmp_thresh_max) {
 		pr_debug("input temp is %d, higher than MAX\n", temp);
 		return -EINVAL;
 	}
 
-	addr = bcl_perph->desc->vbat_regs[addr_idx];
-	if ((addr_idx == BCLBIG_COMP_VCMP_L0_THR) &&
-				bcl_perph->desc->vadc_type) {
+	addr = desc->vbat_regs[addr_idx];
+	if (vadc_thresh) {
 		convert_vbat_thresh_val_to_adc(bcl_perph, &thresh,
-			bcl_perph->desc->vbat_thresh_scaling_factor,
-			bcl_perph->desc->batt_conf_valid);
+			desc->vbat_thresh_scaling_factor,
+			desc->batt_conf_valid);
 		*val = thresh;
 	} else {
-		convert_vbat_to_vcmp_val(bcl_perph->desc, temp, val,
-			bcl_perph->desc->batt_conf_valid);
+		convert_vbat_to_vcmp_val(desc, temp, val, desc->batt_conf_valid);
 	}
 
 	ret = bcl_write_register(bcl_perph, addr, *val);
@@ -1488,6 +1488,22 @@ static const struct bcl_desc pm8550_data = {
 	.one_byte_reg = true,
 };
 
+static const struct bcl_desc pmw6100_data = {
+	.vadc_type = true,
+	.vbat_regs = {
+		[BCLBIG_COMP_VCMP_L0_THR]		= 0x48,
+		[BCLBIG_COMP_VCMP_L1_THR]		= 0x49,
+		[BCLBIG_COMP_VCMP_L2_THR]		= 0x4A,
+	},
+	.vbat_zone_enabled = true,
+	.vcmp_thresh_base = 1500,
+	.vcmp_thresh_max = 4000,
+	.ibat_scaling_factor = BCL_IBAT_SCALING_REV5_NA,
+	.ibat_thresh_scaling_factor = BCL_IBAT_THRESH_SCALING_REV5_UA,
+	.vbat_scaling_factor = BCL_VBAT_SCALING_REV5_NV,
+	.vbat_thresh_scaling_factor = BCL_VBAT_SCALING_UV,
+};
+
 static const struct bcl_desc pmh0101_data = {
 	.vadc_type = false,
 	.vbat_regs = {
@@ -1527,6 +1543,7 @@ static const struct of_device_id bcl_match[] = {
 	{ .compatible = "qcom,pmiv010x-bcl-v5", .data = &pmiv010x_data},
 	{ .compatible = "qcom,pm8550-bcl-v5", .data = &pm8550_data},
 	{ .compatible = "qcom,smb2360-bcl-v5", .data = &smb2360_data},
+	{ .compatible = "qcom,pmw6100-bcl-v5", .data = &pmw6100_data},
 	{ }
 };
 MODULE_DEVICE_TABLE(of, bcl_match);
