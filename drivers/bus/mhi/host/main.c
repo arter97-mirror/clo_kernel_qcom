@@ -128,6 +128,8 @@ void mhi_ring_cmd_db(struct mhi_controller *mhi_cntrl, struct mhi_cmd *mhi_cmd)
 	struct mhi_ring *ring = &mhi_cmd->ring;
 
 	db = ring->iommu_base + (ring->wp - ring->base);
+	/* Ensure context writes are visible to device before doorbell */
+	dma_wmb();
 	*ring->ctxt_wp = cpu_to_le64(db);
 	mhi_write_db(mhi_cntrl, ring->db_addr, db);
 }
