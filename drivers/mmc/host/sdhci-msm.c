@@ -4320,11 +4320,19 @@ static void sdhci_msm_hw_reset(struct sdhci_host *host)
 	sdhci_msm_registers_restore(host);
 	msm_host->reg_store = false;
 
+	if (host->mmc->caps & MMC_CAP_NONREMOVABLE) {
+		ret = sdhci_msm_setup_vreg(msm_host, false, false);
+		if (!ret)
+			ret = sdhci_msm_set_vdd_io_vol(msm_host,
+					VDD_IO_LOW, 0);
+		msleep(20);
+		ret = sdhci_msm_setup_vreg(msm_host, true, false);
+		if (!ret)
+			ret = sdhci_msm_set_vdd_io_vol(msm_host,
+					VDD_IO_HIGH, 0);
+	}
+
 	sdhci_msm_log_str(msm_host, "HW reset done\n");
-#if defined(CONFIG_SDC_QTI)
-	if (host->mmc->card)
-		mmc_power_cycle(host->mmc, host->mmc->card->ocr);
-#endif
 }
 
 static const struct sdhci_ops sdhci_msm_ops = {
