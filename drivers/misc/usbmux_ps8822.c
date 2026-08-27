@@ -323,6 +323,13 @@ void usbmux_setmode(struct usbmux_handle *handle, int lanes, int orientation)
 }
 EXPORT_SYMBOL_GPL(usbmux_setmode);
 
+static int usbmux_send_dpin_enabled(struct device *dev, bool enable)
+{
+	dev_err(dev, "ucsi_glink not available - SET_DP_IN_ENABLED not sent (enable=%d)\n",
+			enable);
+	return -EOPNOTSUPP;
+}
+
 static int usbmux_send_sinkonly(struct device *dev, bool enable)
 {
 	dev_err(dev, "ucsi_glink not available - SET_SINKONLY not sent (enable=%d)\n",
@@ -337,12 +344,11 @@ static int usbmux_send_cc_reconnect(struct device *dev)
 }
 
 /**
- * usbmux_set_dp_state - Set DP state with sink-only mode control
+ * usbmux_set_dp_state - Set DP-IN enabled state
  * @data: Device data pointer
- * @enable: true to enable DP state (sink-only), false to disable
+ * @enable: true to enable DP-IN, false to disable
  *
- * Common routine to handle DP state changes by sending UCSI commands
- * to ADSP for sink-only mode control and CC reconnection.
+ * This does not change the Type-C port role.
  *
  * Return: 0 on success, negative error code on failure
  */
@@ -353,9 +359,9 @@ static int usbmux_set_dp_state(struct usbmux_ps8822_data *data, bool enable)
 	if (!data)
 		return -EINVAL;
 
-	ret = usbmux_send_sinkonly(data->dev, enable);
+	ret = usbmux_send_dpin_enabled(data->dev, enable);
 	if (ret < 0) {
-		dev_err(data->dev, "Failed to send sinkonly command: %d\n", ret);
+		dev_err(data->dev, "Failed to send DP-IN command: %d\n", ret);
 		return ret;
 	}
 
@@ -368,6 +374,29 @@ static int usbmux_set_dp_state(struct usbmux_ps8822_data *data, bool enable)
 			 ret, enable);
 		return ret;
 	}
+
+	return 0;
+}
+
+static int usbmux_set_sinkonly(struct usbmux_ps8822_data *data, bool enable)
+{
+	int ret = 0;
+
+	if (!data)
+		return -EINVAL;
+
+	ret = usbmux_send_sinkonly(data->dev, enable);
+	if (ret < 0)
+		return ret;
+
+	ret = usbmux_send_cc_reconnect(data->dev);
+	if (ret < 0) {
+		dev_err(data->dev, "CC_RECONNECT failed for sinkonly: %d\n", ret);
+		return ret;
+	}
+
+	data->is_sinkonly = enable;
+	dev_dbg(data->dev, "is_sinkonly changed to %d\n", enable);
 
 	return 0;
 }
@@ -410,8 +439,42 @@ static ssize_t dp_state_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(dp_state);
 
+static ssize_t sinkonly_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct usbmux_ps8822_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -EINVAL;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", data->is_sinkonly ? 1 : 0);
+}
+
+static ssize_t sinkonly_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct usbmux_ps8822_data *data = dev_get_drvdata(dev);
+	int val = 0;
+	int ret = 0;
+
+	if (!data)
+		return -EINVAL;
+
+	if (kstrtoint(buf, 10, &val))
+		return -EINVAL;
+
+	ret = usbmux_set_sinkonly(data, val != 0);
+	if (ret < 0)
+		return ret;
+
+	return count;
+}
+static DEVICE_ATTR_RW(sinkonly);
+
 static struct attribute *usbmux_ps8822_attrs[] = {
 	&dev_attr_dp_state.attr,
+	&dev_attr_sinkonly.attr,
 	NULL
 };
 
@@ -662,6 +725,7 @@ static int usbmux_probe(struct i2c_client *client, const struct i2c_device_id *i
 	}
 
 	data->dp_state = false;
+	data->is_sinkonly = false;
 
 	ret = devm_device_add_group(&client->dev, &usbmux_ps8822_attr_group);
 	if (ret) {
