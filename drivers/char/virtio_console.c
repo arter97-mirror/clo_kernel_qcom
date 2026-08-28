@@ -1615,8 +1615,8 @@ static void handle_control_message(struct virtio_device *vdev,
 		break;
 	case VIRTIO_CONSOLE_RESIZE: {
 		struct {
-			__virtio16 rows;
 			__virtio16 cols;
+			__virtio16 rows;
 		} size;
 
 		if (!is_console_port(port))
@@ -1741,7 +1741,9 @@ static void out_intr(struct virtqueue *vq)
 
 	port = find_port_by_vq(vq->vdev->priv, vq);
 	if (!port) {
-		flush_bufs(vq, false);
+		/* Avoid unlocked num_free update; buffers are
+		 * cleaned up by remove_vqs() at freeze.
+		 */
 		return;
 	}
 
@@ -1755,7 +1757,9 @@ static void in_intr(struct virtqueue *vq)
 
 	port = find_port_by_vq(vq->vdev->priv, vq);
 	if (!port) {
-		flush_bufs(vq, false);
+		/* Avoid unlocked num_free update; buffers are
+		 * cleaned up by remove_vqs() at freeze.
+		 */
 		return;
 	}
 
@@ -2154,10 +2158,16 @@ static const unsigned int rproc_serial_features[] = {
 static int virtcons_freeze(struct virtio_device *vdev)
 {
 	struct ports_device *portdev;
-	struct port *port, *port2;
+	struct port *port;
 
 	portdev = vdev->priv;
 
+	/*
+	 * Break VQs and wait for any in-flight IRQ handlers to finish
+	 * before reset to prevent concurrent num_free updates.
+	 */
+	virtio_break_device(vdev);
+	virtio_synchronize_cbs(vdev);
 	virtio_reset_device(vdev);
 
 	if (use_multiport(portdev))
@@ -2182,9 +2192,6 @@ static int virtcons_freeze(struct virtio_device *vdev)
 		remove_port_data(port);
 	}
 
-	list_for_each_entry_safe(port, port2, &portdev->ports, list)
-		unplug_port(port);
-
 	remove_vqs(portdev);
 
 	return 0;
@@ -2202,17 +2209,18 @@ static int virtcons_restore(struct virtio_device *vdev)
 	if (ret)
 		return ret;
 
-	virtio_device_ready(portdev->vdev);
+	/* Update port VQ pointers before enabling the device. */
+	list_for_each_entry(port, &portdev->ports, list) {
+		port->in_vq = portdev->in_vqs[port->id];
+		port->out_vq = portdev->out_vqs[port->id];
+	}
 
-	add_port(portdev, 0);
+	virtio_device_ready(portdev->vdev);
 
 	if (use_multiport(portdev))
 		fill_queue(portdev->c_ivq, &portdev->c_ivq_lock);
 
 	list_for_each_entry(port, &portdev->ports, list) {
-		port->in_vq = portdev->in_vqs[port->id];
-		port->out_vq = portdev->out_vqs[port->id];
-
 		fill_queue(port->in_vq, &port->inbuf_lock);
 
 		/* Get port open/close status on the host */

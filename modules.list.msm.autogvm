@@ -46,3 +46,5 @@ pinctrl-spmi-mpp.ko
 rtc-pm8xxx.ko
 clk-qcom.ko
 clk-dummy.ko
+phy-qcom-ufs.ko
+phy-qcom-ufs-qmp-v4-lahaina.ko

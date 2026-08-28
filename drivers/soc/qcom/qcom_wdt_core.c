@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <linux/irqdomain.h>
 #include <linux/delay.h>
@@ -665,7 +665,7 @@ EXPORT_SYMBOL(qcom_wdt_remove);
  */
 void qcom_wdt_trigger_bite(void)
 {
-	if (!wdog_data)
+	if (!wdog_data || !wdog_data->initialized)
 		return;
 	compute_irq_count();
 	dev_err(wdog_data->dev, "Causing a QCOM Apps Watchdog bite!\n");
@@ -834,6 +834,7 @@ static int qcom_wdt_init(struct msm_watchdog_data *wdog_dd,
 		wdog_dd->wdog_cpu_pm_nb.notifier_call = qcom_wdt_cpu_pm_notify;
 		cpu_pm_register_notifier(&wdog_dd->wdog_cpu_pm_nb);
 	}
+	wdog_dd->initialized = true;
 	dev_info(wdog_dd->dev, "QCOM Apps Watchdog Initialized\n");
 
 	return 0;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/cpuidle.h>
@@ -12,6 +12,7 @@
 #include <linux/blkdev.h>
 #include <linux/swap.h>
 #include <soc/qcom/qcom_hibernation.h>
+#include <linux/bootmarker_kernel.h>
 
 #define __NEW_UTS_LEN 64
 
@@ -58,11 +59,39 @@ static void save_cpu_resume(void *data, u64 *addr, u64 phys_addr)
 	*addr = phys_addr;
 }
 
+static const char *hib_state_to_marker(enum hibernate_resume_state s)
+{
+	switch (s) {
+	case HIBERNATION_IMAGE_RESTORE_START:
+		return "M - Hibernation: Image restore start";
+	case HIBERNATION_DEVICE_RESUME_START:
+		return "M - Hibernation: Device resume start";
+	case HIBERNATION_DEVICE_RESUME_DONE:
+		return "M - Hibernation: Device resume done";
+	case HIBERNATION_IMAGE_RESTORE_DONE:
+		return "M - Hibernation: Image restore done";
+	case HIBERNATION_EXIT:
+		return "M - Hibernation: Exit";
+	default:
+		return NULL;
+	}
+}
+
+
+static void qcom_place_marker(void *data, enum hibernate_resume_state state)
+{
+	const char *name = hib_state_to_marker(state);
+
+	if (name)
+		bootmarker_place_marker(name);
+}
+
 static int __init init_s2d_hooks(void)
 {
 	register_trace_android_vh_save_hib_resume_bdev(save_hib_resume_bdev, NULL);
 	register_trace_android_vh_check_hibernation_swap(check_hibernation_swap, NULL);
 	register_trace_android_vh_save_cpu_resume(save_cpu_resume, NULL);
+	register_trace_android_vh_hibernate_resume_state(qcom_place_marker, NULL);
 	return 0;
 }
 

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _SOC_QCOM_WATCHDOG_H_
@@ -135,6 +135,7 @@ struct msm_watchdog_data {
 	spinlock_t freeze_lock;
 	struct timer_list user_pet_timer;
 	bool hibernate;
+	bool initialized;
 };
 
 extern void qcom_wdt_trigger_bite(void);

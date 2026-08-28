@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022-2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
@@ -38,6 +38,7 @@ struct clk_virtio {
 	int clk_id;
 	struct clk_hw hw;
 	struct virtio_clk *vclk;
+	unsigned long saved_rate;
 };
 
 struct virtio_cc_map {
@@ -45,13 +46,14 @@ struct virtio_cc_map {
 	const struct clk_virtio_desc *desc;
 };
 
+static struct virtio_clk_msg *virtclk_wait_rsp(struct virtio_clk *vclk);
+
 static int virtio_clk_prepare(struct clk_hw *hw)
 {
 	struct clk_virtio *v = to_clk_virtio(hw);
 	struct virtio_clk *vclk = v->vclk;
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	pr_debug("%s\n", clk_hw_get_name(hw));
@@ -76,15 +78,7 @@ static int virtio_clk_prepare(struct clk_hw *hw)
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("%s: fail to get virtqueue buffer\n",
-				clk_hw_get_name(hw));
-		ret = -EIO;
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	ret = virtio32_to_cpu(vclk->vdev, rsp->result);
 out:
@@ -100,7 +94,6 @@ static void virtio_clk_unprepare(struct clk_hw *hw)
 	struct virtio_clk *vclk = v->vclk;
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	pr_debug("%s\n", clk_hw_get_name(hw));
@@ -125,14 +118,7 @@ static void virtio_clk_unprepare(struct clk_hw *hw)
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("%s: fail to get virtqueue buffer\n",
-				clk_hw_get_name(hw));
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	if (rsp->result)
 		pr_err("%s: error response (%d)\n", clk_hw_get_name(hw),
@@ -150,7 +136,6 @@ static int virtio_clk_set_rate(struct clk_hw *hw,
 	struct virtio_clk *vclk = v->vclk;
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	pr_debug("%s, rate: %lu, parent_rate: %lu\n", clk_hw_get_name(hw),
@@ -177,15 +162,7 @@ static int virtio_clk_set_rate(struct clk_hw *hw,
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("%s: fail to get virtqueue buffer\n",
-				clk_hw_get_name(hw));
-		ret = -EIO;
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	ret = virtio32_to_cpu(vclk->vdev, rsp->result);
 out:
@@ -202,7 +179,6 @@ static long virtio_clk_round_rate(struct clk_hw *hw, unsigned long rate,
 	struct virtio_clk *vclk = v->vclk;
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	pr_debug("%s, rate: %lu\n", clk_hw_get_name(hw), rate);
@@ -228,15 +204,7 @@ static long virtio_clk_round_rate(struct clk_hw *hw, unsigned long rate,
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("%s: fail to get virtqueue buffer\n",
-				clk_hw_get_name(hw));
-		ret = 0;
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	if (rsp->result) {
 		pr_err("%s: error response (%d)\n", clk_hw_get_name(hw),
@@ -259,7 +227,6 @@ static unsigned long virtio_clk_get_rate(struct clk_hw *hw,
 	struct virtio_clk *vclk = v->vclk;
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	req = kzalloc(sizeof(struct virtio_clk_msg), GFP_KERNEL);
@@ -282,15 +249,7 @@ static unsigned long virtio_clk_get_rate(struct clk_hw *hw,
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("%s: fail to get virtqueue buffer\n",
-				clk_hw_get_name(hw));
-		ret = 0;
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	if (rsp->result) {
 		/*
@@ -316,7 +275,6 @@ static int virtio_clk_set_parent(struct clk_hw *hw, u8 index)
 	struct virtio_clk *vclk = v->vclk;
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	pr_debug("%s, parent index: %d\n", clk_hw_get_name(hw), index);
@@ -342,15 +300,7 @@ static int virtio_clk_set_parent(struct clk_hw *hw, u8 index)
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("%s: fail to get virtqueue buffer\n",
-				clk_hw_get_name(hw));
-		ret = 0;
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	ret = virtio32_to_cpu(vclk->vdev, rsp->result);
 
@@ -383,7 +333,6 @@ __virtio_reset(struct reset_controller_dev *rcdev, unsigned long id,
 	struct virtio_clk *vclk = container_of(rcdev, struct virtio_clk, rcdev);
 	struct virtio_clk_msg *req, *rsp;
 	struct scatterlist sg[1];
-	unsigned int len;
 	int ret = 0;
 
 	pr_debug("%s, action: %d\n", vclk->desc->reset_names[id], action);
@@ -410,14 +359,7 @@ __virtio_reset(struct reset_controller_dev *rcdev, unsigned long id,
 
 	virtqueue_kick(vclk->vq);
 
-	wait_for_completion(&vclk->rsp_avail);
-
-	rsp = virtqueue_get_buf(vclk->vq, &len);
-	if (!rsp) {
-		pr_err("fail to get virtqueue buffer\n");
-		ret = -EIO;
-		goto out;
-	}
+	rsp = virtclk_wait_rsp(vclk);
 
 	ret = virtio32_to_cpu(vclk->vdev, rsp->result);
 
@@ -476,6 +418,30 @@ static int virtclk_init_vqs(struct virtio_clk *vclk)
 	vclk->vq = vqs[0];
 
 	return 0;
+}
+
+/*
+ * virtclk_wait_rsp - wait for a VQ response, draining spurious completions.
+ *
+ * virtio_device_ready() can trigger an unsolicited notification from the QNX
+ * backend on 2nd+ restore (session-ack).  Without the retry loop,
+ * wait_for_completion() returns on the spurious event, virtqueue_get_buf()
+ * returns NULL, and the VQ goes off by one — every subsequent operation gets
+ * the previous operation's response token.
+ *
+ * Must be called with vclk->lock held.
+ */
+static struct virtio_clk_msg *virtclk_wait_rsp(struct virtio_clk *vclk)
+{
+	struct virtio_clk_msg *rsp;
+	unsigned int len;
+
+	do {
+		wait_for_completion(&vclk->rsp_avail);
+		rsp = virtqueue_get_buf(vclk->vq, &len);
+	} while (!rsp);
+
+	return rsp;
 }
 
 static const struct virtio_cc_map clk_virtio_map_table[] = {
@@ -594,6 +560,7 @@ static int virtio_clk_probe(struct virtio_device *vdev)
 
 	memset(&init, 0x0, sizeof(init));
 	init.ops = &clk_virtio_ops;
+	init.flags = CLK_GET_RATE_NOCACHE;
 
 	if (desc) {
 		for (i = 0; i < vclk->num_clks; i++) {
@@ -667,6 +634,27 @@ static int virtio_clk_freeze(struct virtio_device *vdev)
 {
 	struct virtio_clk *vclk = vdev->priv;
 	void *buf;
+	unsigned int i;
+
+	/*
+	 * Save each clock's rate by querying QNX directly (CLK_GET_RATE_NOCACHE
+	 * ensures clk_hw_get_rate() calls recalc_rate → GET_RATE virtio msg).
+	 * Do not gate on clk_hw_is_prepared(): consumer drivers such as
+	 * msm_geni_serial call clk_disable_unprepare() during their own freeze
+	 * which runs before this noirq callback, clearing prepared_count to 0.
+	 * Gating on prepared state would save 0 for those clocks and skip
+	 * SET_RATE on restore, leaving QNX at XO on the 2nd+ S2D cycle.
+	 */
+	for (i = 0; i < vclk->num_clks; i++) {
+		struct clk_virtio *v = &vclk->clks[i];
+
+		if (!v->hw.core) {
+			v->saved_rate = 0;
+			continue;
+		}
+
+		v->saved_rate = clk_hw_get_rate(&v->hw);
+	}
 
 	virtio_reset_device(vdev);
 
@@ -681,6 +669,7 @@ static int virtio_clk_freeze(struct virtio_device *vdev)
 static int virtio_clk_restore(struct virtio_device *vdev)
 {
 	struct virtio_clk *vclk = vdev->priv;
+	unsigned int i;
 	int ret;
 
 	ret = virtclk_init_vqs(vclk);
@@ -689,7 +678,44 @@ static int virtio_clk_restore(struct virtio_device *vdev)
 		return ret;
 	}
 
+	/*
+	 * Clear any stale completion left by virtio_reset_device() in freeze,
+	 * then bring the device online.  Spurious completions that arrive after
+	 * virtio_device_ready() (QNX session-ack on 2nd+ restore) are absorbed
+	 * by the do-while retry in virtclk_wait_rsp().
+	 */
+	reinit_completion(&vclk->rsp_avail);
 	virtio_device_ready(vdev);
+
+	for (i = 0; i < vclk->num_clks; i++) {
+		struct clk_virtio *v = &vclk->clks[i];
+		int rc;
+
+		if (!v->saved_rate)
+			continue;
+
+		/*
+		 * After virtio_device_ready(), QNX has reset clocks to XO.
+		 * clk_hw_get_rate() with CLK_GET_RATE_NOCACHE calls
+		 * __clk_recalc_rates() → virtio_clk_get_rate() → QNX returns
+		 * XO → updates core->rate = XO.  This mirrors the consumer-side
+		 * fix (clk_get_rate before clk_set_rate): without it core->rate
+		 * still holds the pre-S2D value, so consumer clk_set_rate() sees
+		 * rate == core->rate and bails early without sending SET_RATE.
+		 * Do not call virtio_clk_unprepare() here: virtio_device_ready()
+		 * already resets QNX client prepare count to 0; sending an extra
+		 * UNPREPARE decrements it to -1, causing the serial driver's
+		 * subsequent clk_prepare_enable() to land at 0 (not 1), leaving
+		 * the clock gate closed on every S2D cycle after the first.
+		 */
+		clk_hw_get_rate(&v->hw);
+		rc = virtio_clk_set_rate(&v->hw, v->saved_rate, 0);
+		if (rc)
+			dev_err(&vdev->dev, "%s: SET_RATE(%lu) failed: %d\n",
+				clk_hw_get_name(&v->hw), v->saved_rate, rc);
+
+		v->saved_rate = 0;
+	}
 
 	return 0;
 }

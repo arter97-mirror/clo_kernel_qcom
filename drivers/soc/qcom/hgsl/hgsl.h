@@ -17,9 +17,6 @@
 #include "hgsl_tcsr.h"
 #include "hgsl_gmugos.h"
 
-#define CP_ALWAYS_ON_COUNTER_LO     0x980
-#define CP_ALWAYS_ON_COUNTER_HI     0x981
-
 #define HGSL_TIMELINE_NAME_LEN 64
 
 #define HGSL_ISYNC_32BITS_TIMELINE 0
@@ -33,7 +30,6 @@
 #define HGSL_DEVICE_NUM  (2)
 #define HGSL_CONTEXT_NUM (256)
 
-#define HGSL_PROF_RING_SIZE 128
 #define HGSL_MAX_IOC_SIZE (128)
 #define HGSL_IOCTL_FUNC(_cmd, _func) \
 	[_IOC_NR((_cmd))] = \
@@ -61,63 +57,6 @@ struct hgsl_ioctl {
 	unsigned int cmd;
 	int (*func)(struct file *filep, void *data);
 };
-/* For application specific GPU work period stats */
-#define HGSL_WORK_PERIOD	0
-/* GPU work period time in msec to emulate application work stats */
-#define HGSL_WORK_PERIOD_MS	900
-
-#define CP_TYPE7_PKT (7UL << 28UL)
-/* Minimal CP/type7 helpers and registers needed for profiling IB build */
-#ifndef cp_type7_packet
-#define cp_type7_packet(opcode, cnt) \
-	((((opcode) & 0xFF) << 16) | ((cnt) & 0x3FFF) | (7 << 8))
-#endif
-
-static inline uint32_t Pm4CalcOddParityBit(uint32_t val)
-{
-	return (0x9669UL >> (0xFUL & ((val) ^
-		((val) >> 4UL) ^ ((val) >> 8UL) ^ ((val) >> 12UL) ^
-		((val) >> 16UL) ^ ((val) >> 20UL) ^ ((val) >> 24UL) ^
-		((val) >> 28UL)))) & 1UL;
-}
-
-#define GPU_ADDR_LO(ADDR)   ((uint32_t)(ADDR))
-#define GPU_ADDR_HI(ADDR)   ((uint32_t)(ADDR >> 32))
-
-#ifndef CP_REG_TO_MEM
-#define CP_REG_TO_MEM 0x3E
-#endif
-
-static inline uint32_t CpType7Packet(uint32_t opcode, uint32_t cnt)
-{
-	return CP_TYPE7_PKT | ((cnt) << 0UL) |
-		(Pm4CalcOddParityBit(cnt) << 15UL) |
-		(((opcode) & 0x7FUL) << 16UL) |
-		((Pm4CalcOddParityBit(opcode) << 23UL));
-}
-
-static inline uint16_t CpAddAddr(uint32_t *pCmd, uint64_t addr)
-{
-	*pCmd++ = GPU_ADDR_LO(addr);
-	*pCmd = GPU_ADDR_HI(addr);
-	return 2UL;
-}
-
-static inline uint16_t Cp32BitRegToMem(uint32_t *pCmd, uint32_t reg,
-				       uint64_t gpuAddr)
-{
-	*pCmd++ = CpType7Packet(CP_REG_TO_MEM, 3UL);
-	*pCmd++ = reg;
-	pCmd += CpAddAddr(pCmd, gpuAddr);
-	return 4UL;
-}
-
-/* Size of per-slot IB written by a6xx_get_alwayson_counter
- * (two REG_TO_MEM packets)
- */
-#ifndef PROFILE_IB_DWORDS
-#define PROFILE_IB_DWORDS 4
-#endif
 
 struct qcom_hgsl;
 struct hgsl_hsync_timeline;
@@ -212,13 +151,6 @@ struct qcom_hgsl {
 	rwlock_t ctxt_lock;
 
 	struct hgsl_gmugos gmugos[HGSL_DEVICE_NUM];
-	/** @wp_list: List of work period allocated per uid */
-	struct list_head wp_list;
-	/** @wp_list_lock: Lock for accessing the work period list */
-	spinlock_t wp_list_lock;
-	/* Profiling retire worker */
-	struct timer_list prof_retire_timer;
-	struct work_struct prof_retire_ws;
 
 	struct list_head active_wait_list;
 	spinlock_t active_wait_lock;
@@ -239,48 +171,12 @@ struct qcom_hgsl {
 	atomic64_t total_mem_size;
 	struct hgsl_cache_flags cache_flags;
 
-	/* Runtime toggle for GPU work period accounting + tracepoints */
-	bool work_period_enabled;
-
-	/** @work_period_timer: Timer to capture application GPU work stats */
-	struct timer_list work_period_timer;
-	/** @work_period_lock: Lock to protect application GPU work periods */
-	spinlock_t work_period_lock;
-	/** @flags: Flags for gpu_period stats */
-	unsigned long flags;
-
-	struct {
-		u64 begin;
-		u64 end;
-	} gpu_period;
-	/** @work_period_ws: Work struct to emulate application GPU work events */
-	struct work_struct work_period_ws;
-
 	/* Debug nodes */
 	struct kobject sysfs;
 	struct kobject *clients_sysfs;
 	struct dentry *debugfs;
 	struct dentry *clients_debugfs;
 	struct dentry *debugfs_stat;
-	/* @lockless_workqueue: Pointer to a workqueue handler which doesn't hold device mutex */
-	struct workqueue_struct *lockless_workqueue;
-};
-
-/* Per-context profiling state container moved out of struct hgsl_context */
-struct hgsl_ctxt_profile {
-	struct hgsl_mem_node *mem_node;
-	void                 *buf_vaddr;
-	u64                   buf_gpuaddr;
-	size_t                buf_size;
-	struct iosys_map      map;
-	/* Per-context profiling submission ring */
-	struct {
-		u32 ts;       /* submission timestamp */
-		u16 slot_idx; /* data slot index in profiling buffer */
-	} ring[HGSL_PROF_RING_SIZE];
-	u16 writeIdx;
-	u16 readIdx;
-	spinlock_t lock;
 };
 
 /**
@@ -315,7 +211,6 @@ struct hgsl_context {
 	struct doorbell_context_queue *dbcq;
 	uint32_t dbcq_export_id;
 	uint32_t db_signal;
-	struct hgsl_ctxt_profile cmdbatch_kernel_profiling;
 };
 
 struct hgsl_priv {
@@ -337,8 +232,8 @@ struct hgsl_priv {
 	struct dentry *debugfs_client;
 	struct dentry *debugfs_mem;
 	struct dentry *debugfs_memtype;
-	struct gpu_work_period *period;
 };
+
 
 static inline bool hgsl_ts32_ge(uint32_t a, uint32_t b)
 {
@@ -467,27 +362,6 @@ struct hgsl_active_wait {
 	unsigned int timestamp;
 };
 
-/**
- * struct gpu_work_period - App specific GPU work period stats
- */
-struct gpu_work_period {
-	struct kref refcount;
-	struct list_head list;
-	/** @uid: application unique identifier */
-	uid_t uid;
-	/** @active: Total amount of time the GPU spent running work */
-	u64 active;
-	/** @cmds: Total number of commands completed within work period */
-	u32 cmds;
-	/** @frames: Total number of frames completed within work period */
-	atomic_t frames;
-	/** @flags: Flags to accumulate GPU busy stats */
-	unsigned long flags;
-	/** @active_cmds: The number of active cmds from application */
-	atomic_t active_cmds;
-	/** @defer_ws: Work struct to clear gpu work period */
-	struct work_struct defer_ws;
-};
 /* Fence for commands. */
 struct hgsl_hsync_fence *hgsl_hsync_fence_create(
 					struct hgsl_context *context,

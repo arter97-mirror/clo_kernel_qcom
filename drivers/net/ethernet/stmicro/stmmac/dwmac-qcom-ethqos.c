@@ -574,7 +574,7 @@ void dwmac_qcom_program_avb_algorithm(struct stmmac_priv *priv,
 	priv->plat->tx_queues_cfg[l_avb_struct.qinx].low_credit =
 		avb_params->low_credit,
 
-	priv->hw->mac->config_cbs(priv->hw,
+	priv->hw->mac->config_cbs(priv, priv->hw,
 	priv->plat->tx_queues_cfg[l_avb_struct.qinx].send_slope,
 	   priv->plat->tx_queues_cfg[l_avb_struct.qinx].idle_slope,
 	   priv->plat->tx_queues_cfg[l_avb_struct.qinx].high_credit,

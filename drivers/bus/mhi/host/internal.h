@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  */
 
@@ -247,6 +248,10 @@ struct mhi_chan {
 
 /* Default MHI timeout */
 #define MHI_TIMEOUT_MS (1000)
+
+/* Default RDDM timeout */
+#define RDDM_TIMEOUT_US (200000)
+#define RDDM_MAX_TIMEOUT_US (1000000)
 
 /* debugfs related functions */
 #ifdef CONFIG_MHI_BUS_DEBUG

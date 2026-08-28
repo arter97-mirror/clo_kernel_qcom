@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  */
 
@@ -99,8 +100,7 @@ static int __mhi_download_rddm_in_panic(struct mhi_controller *mhi_cntrl)
 	int ret;
 	enum mhi_ee_type ee;
 	const u32 delayus = 2000;
-	const u32 rddm_timeout_us = 200000;
-	int rddm_retry = rddm_timeout_us / delayus;
+	int rddm_retry = mhi_cntrl->rddm_timeout_us / delayus;
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
 
 	MHI_VERB(dev, "Entered with pm_state:%s dev_state:%s ee:%s\n",

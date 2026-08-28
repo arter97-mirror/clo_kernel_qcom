@@ -67,7 +67,7 @@ static void md_virtio_add_work(struct md_region *entry)
 	unsigned int len;
 	int ret = 0;
 
-	if (!pfn_is_map_memory(virt_to_pfn(entry->virt_addr))) {
+	if (!pfn_is_map_memory(__phys_to_pfn(entry->phys_addr))) {
 		pr_err("%s: Invalid Phy address %llu\n", entry->name, entry->phys_addr);
 		return;
 	}

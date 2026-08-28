@@ -9,47 +9,6 @@
 #include "hgsl.h"
 #include "hgsl_sysfs.h"
 
-static ssize_t work_period_enable_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buf)
-{
-	struct qcom_hgsl *hgsl = dev_get_drvdata(dev);
-
-	return sysfs_emit(buf, "%d\n", hgsl && hgsl->work_period_enabled);
-}
-
-static ssize_t work_period_enable_store(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf,
-					size_t count)
-{
-	struct qcom_hgsl *hgsl = dev_get_drvdata(dev);
-	bool val;
-	int ret;
-
-	if (!hgsl)
-		return -ENODEV;
-
-	ret = kstrtobool(buf, &val);
-	if (ret)
-		return ret;
-
-	WRITE_ONCE(hgsl->work_period_enabled, val);
-	return count;
-}
-
-static DEVICE_ATTR_RW(work_period_enable);
-
-static struct attribute *work_period_attrs[] = {
-	&dev_attr_work_period_enable.attr,
-	NULL,
-};
-
-static const struct attribute_group work_period_group = {
-	.name = "work_period",
-	.attrs = work_period_attrs,
-};
-
 struct hgsl_sysfs_client_attr {
 	struct attribute attr;
 	ssize_t (*show)(struct kobject *kobj,
@@ -167,17 +126,10 @@ int hgsl_sysfs_init(struct platform_device *pdev)
 	}
 
 	ret = sysfs_create_files(&hgsl->class_dev->kobj, _attrs);
-	if (ret)
-		goto exit;
-
-	ret = sysfs_create_group(&hgsl->class_dev->kobj, &work_period_group);
-	if (ret) {
-		sysfs_remove_files(&hgsl->class_dev->kobj, _attrs);
-		goto exit;
+	if (!ret) {
+		/* Notify userspace */
+		kobject_uevent(&hgsl->dev->kobj, KOBJ_ADD);
 	}
-
-	/* Notify userspace */
-	kobject_uevent(&hgsl->dev->kobj, KOBJ_ADD);
 
 exit:
 	return ret;
@@ -190,10 +142,10 @@ void hgsl_sysfs_release(struct platform_device *pdev)
 
 	hgsl = platform_get_drvdata(pdev);
 
-	sysfs_remove_group(&hgsl->class_dev->kobj, &work_period_group);
 	sysfs_remove_files(&hgsl->class_dev->kobj, _attrs);
 	if (hgsl->clients_sysfs) {
 		kobject_put(hgsl->clients_sysfs);
 		hgsl->clients_sysfs = NULL;
 	}
 }
+

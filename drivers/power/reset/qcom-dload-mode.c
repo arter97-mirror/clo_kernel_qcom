@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2020, 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/delay.h>
@@ -113,7 +113,6 @@ static int param_set_download_mode(const char *val,
 		return ret;
 
 	msm_enable_dump_mode(true);
-
 	return 0;
 }
 module_param_call(download_mode, param_set_download_mode, param_get_int,
@@ -259,8 +258,16 @@ static int qcom_dload_panic(struct notifier_block *this, unsigned long event,
 	struct qcom_dload *poweroff = container_of(this, struct qcom_dload,
 						     panic_nb);
 	poweroff->in_panic = true;
-	if (enable_dump)
-		msm_enable_dump_mode(true);
+	msm_enable_dump_mode(enable_dump);
+	/*
+	 * Disable SDI when dumps are disabled so TCSR does not retain a
+	 * stale FULLDUMP value from a prior warm-reset cycle, which would
+	 * cause the device to enter download mode against the user's intent.
+	 * The restart handler skips this when in_panic is true.
+	 */
+	if (!enable_dump)
+		qcom_scm_disable_sdi();
+
 	return NOTIFY_OK;
 }
 

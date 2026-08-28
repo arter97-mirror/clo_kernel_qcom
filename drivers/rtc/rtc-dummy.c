@@ -9,14 +9,44 @@
 #include <linux/err.h>
 #include <linux/rtc.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include <linux/kdev_t.h>
 
 #include "rtc-core.h"
 
-#define RTC_DEV_MAX 16 /* 16 RTCs should be enough for everyone... */
+#define MIN_RTC_THRESHOLD_VALUE 1000 /* min threshold that indicates RTC value retention */
+#define NUM_8_BIT_RTC_REGS              0x4
 
+#define RTC_DEV_MAX 16 /* 16 RTCs should be enough for everyone... */
+/**
+ * struct pm8xxx_rtc_regs - describe RTC registers per PMIC versions
+ * @ctrl:		address of control register
+ * @write:		base address of write registers
+ * @read:		base address of read registers
+ * @alarm_ctrl:		address of alarm control register
+ * @alarm_ctrl2:	address of alarm control2 register
+ * @alarm_rw:		base address of alarm read-write registers
+ * @alarm_en:		alarm enable mask
+ */
+struct pm8xxx_rtc_regs {
+	unsigned int ctrl;
+	unsigned int write;
+	unsigned int read;
+	unsigned int alarm_ctrl;
+	unsigned int alarm_ctrl2;
+	unsigned int alarm_rw;
+	unsigned int alarm_en;
+};
+
+/*
+ * @rtc:                rtc device for this driver.
+ * @regmap:             regmap used to access RTC registers
+ * @regs:               rtc registers description.
+ */
 struct rtc_dummy_data {
 	struct rtc_device *rtc;
+	struct regmap *regmap;
+	const struct pm8xxx_rtc_regs *regs;
 	time64_t offset;
 	struct timer_list alarm;
 	bool alarm_en;
@@ -71,7 +101,7 @@ rtc_dummy_dev_read(struct file *file, char __user *buf, size_t count, loff_t *pp
 			ret = put_user(data, (unsigned long __user *)buf) ?:
 				sizeof(unsigned long);
 	}
-	dev_dbg(rtc->dev.parent, "<<%s:%d ret: %d\n",
+	dev_dbg(rtc->dev.parent, "<<%s:%d ret: %zd\n",
 				__func__, __LINE__, ret);
 	return ret;
 }
@@ -205,7 +235,7 @@ static int rtc_dummy_dev_release(struct inode *inode, struct file *file)
 
 static const struct file_operations rtc_dev_fops = {
 	.owner		= THIS_MODULE,
-	.llseek		= no_llseek,
+	.llseek		= noop_llseek,
 	.read		= rtc_dummy_dev_read,
 	.poll		= rtc_dummy_dev_poll,
 	.unlocked_ioctl	= rtc_dummy_dev_ioctl,
@@ -220,7 +250,6 @@ static const struct file_operations rtc_dev_fops = {
 static int rtc_dummy_register_device(struct module *owner, struct rtc_device *rtc)
 {
 	dev_t rtc_devt;
-	struct device *class_dev;
 
 	int err;
 
@@ -253,7 +282,7 @@ static int rtc_dummy_register_device(struct module *owner, struct rtc_device *rt
 	cdev_init(&rtc->char_dev, &rtc_dev_fops);
 	rtc->char_dev.owner = rtc->owner;
 
-	err = cdev_add(&rtc->char_dev, rtc->dev.devt, 1);
+	err = cdev_device_add(&rtc->char_dev, &rtc->dev);
 	if (err) {
 		set_bit(RTC_NO_CDEV, &rtc->flags);
 		dev_err(rtc->dev.parent, "failed to add char device %d:%d err: %d\n",
@@ -262,12 +291,6 @@ static int rtc_dummy_register_device(struct module *owner, struct rtc_device *rt
 	}
 	dev_info(rtc->dev.parent, "char device (%d:%d) registered as %s\n",
 			MAJOR(rtc->dev.devt), rtc->id, dev_name(&rtc->dev));
-
-	class_dev = device_create(rtc->dev.class, NULL, rtc->dev.devt, NULL, "rtc0");
-	if (IS_ERR(class_dev)) {
-		dev_err(rtc->dev.parent, "class_device_create failed %d\n", -ENOMEM);
-		return -ENOMEM;
-	}
 
 	return 0;
 }
@@ -282,7 +305,7 @@ static void rtc_dummy_unregister_device(void *data)
 	 * letting any rtc_class_open() users access it again
 	 */
 	if (!test_bit(RTC_NO_CDEV, &rtc->flags))
-		cdev_del(&rtc->char_dev);
+		cdev_device_del(&rtc->char_dev, &rtc->dev);
 	rtc->ops = NULL;
 	mutex_unlock(&rtc->ops_lock);
 }
@@ -327,9 +350,47 @@ static int rtc_dummy_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 static int rtc_dummy_read_time(struct device *dev, struct rtc_time *tm)
 {
+	int rc;
+	u8 value[NUM_8_BIT_RTC_REGS];
+	unsigned long secs;
+	unsigned int reg;
 	struct rtc_dummy_data *rtd = dev_get_drvdata(dev);
+	const struct pm8xxx_rtc_regs *regs = rtd->regs;
 
-	rtc_time64_to_tm(ktime_get_real_seconds() + rtd->offset, tm);
+	if (!rtd->regmap) {
+		rtc_time64_to_tm(MIN_RTC_THRESHOLD_VALUE + 1, tm);
+		return 0;
+	}
+
+	rc = regmap_bulk_read(rtd->regmap, regs->read, value, sizeof(value));
+	if (rc) {
+		dev_err(dev, "RTC read data register failed\n");
+		return rc;
+	}
+
+	/*
+	 * Read the LSB again and check if there has been a carry over.
+	 * If there is, redo the read operation.
+	 */
+	rc = regmap_read(rtd->regmap, regs->read, &reg);
+	if (rc < 0) {
+		dev_err(dev, "RTC read data register failed\n");
+		return rc;
+	}
+
+	if (unlikely(reg < value[0])) {
+		rc = regmap_bulk_read(rtd->regmap, regs->read,
+				      value, sizeof(value));
+		if (rc) {
+			dev_err(dev, "RTC read data register failed\n");
+			return rc;
+		}
+	}
+
+	secs = value[0] | (value[1] << 8) | (value[2] << 16) |
+	       ((unsigned long)value[3] << 24);
+
+	rtc_time64_to_tm(secs, tm);
 
 	return 0;
 }
@@ -377,31 +438,52 @@ static void rtc_dummy_alarm_handler(struct timer_list *t)
 	rtc_update_irq(rtd->rtc, 1, RTC_AF | RTC_IRQF);
 }
 
-static const struct of_device_id rtc_dummy_match[] = {
-	{ .compatible = "qcom,rtc-dummy" },
-	{ }
+static const struct pm8xxx_rtc_regs pmk8350_regs = {
+	.ctrl		= 0x6146,
+	.write		= 0x6140,
+	.read		= 0x6148,
+	.alarm_rw	= 0x6240,
+	.alarm_ctrl	= 0x6246,
+	.alarm_ctrl2	= 0x6248,
+	.alarm_en	= BIT(7),
 };
-MODULE_DEVICE_TABLE(of, rtc_dummy_match);
+
+static const struct of_device_id pm8xxx_id_table[] = {
+	{ .compatible = "qcom,rtc-dummy", .data = &pmk8350_regs },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, pm8xxx_id_table);
 
 static int rtc_dummy_probe(struct platform_device *plat_dev)
 {
 	struct rtc_dummy_data *rtd;
+	const struct of_device_id *match;
+
+	match = of_match_node(pm8xxx_id_table, plat_dev->dev.of_node);
+	if (!match)
+		return -ENXIO;
 
 	rtd = devm_kzalloc(&plat_dev->dev, sizeof(*rtd), GFP_KERNEL);
 	if (!rtd)
 		return -ENOMEM;
 
+	rtd->regmap = dev_get_regmap(plat_dev->dev.parent, NULL);
+	if (!rtd->regmap)
+		dev_dbg(&plat_dev->dev, "Parent regmap unavailable, using software clock.\n");
+
 	platform_set_drvdata(plat_dev, rtd);
 
 	rtd->rtc = devm_rtc_allocate_device(&plat_dev->dev);
 	if (IS_ERR(rtd->rtc)) {
-		dev_err(&plat_dev->dev, "%s:%d devm_rtc_allocate_device: err: %d\n",
+		dev_err(&plat_dev->dev, "%s:%d devm_rtc_allocate_device: err: %ld\n",
 					__func__, __LINE__, PTR_ERR(rtd->rtc));
 		return PTR_ERR(rtd->rtc);
 	}
 
+	rtd->regs = match->data;
+
 	switch (plat_dev->id) {
-	case 0:
+	case PLATFORM_DEVID_NONE:
 		rtd->rtc->ops = &rtc_dummy_ops_noalm;
 		break;
 	default:
@@ -428,7 +510,7 @@ static struct platform_driver rtc_dummy_driver = {
 	.remove	= rtc_dummy_remove,
 	.driver = {
 		.name = "rtc-dummy",
-		.of_match_table	= of_match_ptr(rtc_dummy_match),
+		.of_match_table	= pm8xxx_id_table,
 	},
 };
 
