@@ -121,6 +121,18 @@
 			};
 		};
 
+		dp1-dai-link {
+			link-name = "DISPLAY_PORT-RX-2";
+
+			cpu {
+				sound-dai = <&q6apmbedai DISPLAY_PORT_RX_2>;
+			};
+
+			codec {
+				sound-dai = <&mdss0_dp1>;
+			};
+		};
+
 	};
 };
 

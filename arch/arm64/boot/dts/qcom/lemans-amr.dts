@@ -877,6 +877,20 @@
 		bias-pull-high;
 	};
 
+	m2b1_pwr_off_1p8: m2b1-pwr-off-1p8 {
+		pins = "gpio130";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	m2b1_reset_1p8: m2b1-reset-1p8 {
+		pins = "gpio128";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
 	pcie0_default_state: pcie0-default-state {
 		perst-pins {
 			pins = "gpio2";
@@ -1105,7 +1119,7 @@
 	maximum-speed = "super-speed-plus";
 	dr_mode = "host";
 	pinctrl-names = "default";
-	pinctrl-0 = <&usb1_en_state>;
+	pinctrl-0 = <&usb1_en_state>, <&m2b1_reset_1p8>, <&m2b1_pwr_off_1p8>;
 	status = "okay";
 };
 
