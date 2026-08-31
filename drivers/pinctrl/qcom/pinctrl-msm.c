@@ -1019,10 +1019,9 @@ static void msm_gpio_irq_mask(struct irq_data *d)
 	unsigned long flags;
 	struct irq_data *dir_conn_data;
 	irq_hw_number_t dir_conn_irq = 0;
-	u32 offset = 0;
 	u32 val;
 
-	if (is_gpio_tlmm_dc(d, &offset, &dir_conn_irq)) {
+	if (is_gpio_dual_edge(d, &dir_conn_irq)) {
 		dir_conn_data = irq_get_irq_data(dir_conn_irq);
 		if (!dir_conn_data)
 			return;
@@ -1088,6 +1087,11 @@ static void msm_gpio_irq_clear_unmask(struct irq_data *d, bool status_clear)
 			return;
 
 		dir_conn_data->chip->irq_unmask(dir_conn_data);
+		/* If is_gpio_dual_edge is true, this is a Direct Connect pin.
+		* We FORCE status_clear to false immediately.
+		* This prevents the hardware status bit from being wiped.
+		*/
+		status_clear = false;
 	}
 
 	if (d->parent_data)
@@ -1100,6 +1104,9 @@ static void msm_gpio_irq_clear_unmask(struct irq_data *d, bool status_clear)
 
 	raw_spin_lock_irqsave(&pctrl->lock, flags);
 
+	/* If status_clear is false (because we found it was DC above),
+	* this block is SKIPPED. The 'msm_writel_intr_status' never happens.
+	*/
 	if (status_clear) {
 		/*
 		 * clear the interrupt status bit before unmask to avoid
@@ -1217,39 +1224,29 @@ static void msm_gpio_irq_enable(struct irq_data *d)
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 	struct irq_data *dir_conn_data;
 	irq_hw_number_t dir_conn_irq = 0;
+	bool is_dir_conn = false;
 
-	if (test_bit(d->hwirq, pctrl->skip_wake_irqs)) {
-		if (pctrl->mpm_wake_ctl)
-			msm_gpio_mpm_wake_set(d->hwirq, true);
-	}
-	/*
-	 * Clear the interrupt that may be pending before we enable
-	 * the line.
-	 * This is especially a problem with the GPIOs routed to the
-	 * PDC. These GPIOs are direct-connect interrupts to the GIC.
-	 * Disabling the interrupt line at the PDC does not prevent
-	 * the interrupt from being latched at the GIC. The state at
-	 * GIC needs to be cleared before enabling.
-	 */
+	if (d->parent_data)
+		irq_chip_enable_parent(d);
+
 	if (is_gpio_dual_edge(d, &dir_conn_irq)) {
+		is_dir_conn = true;
 		dir_conn_data = irq_get_irq_data(dir_conn_irq);
 		if (!dir_conn_data)
 			return;
 
-		irq_set_irqchip_state(dir_conn_irq,
-				IRQCHIP_STATE_PENDING, 0);
-		dir_conn_data->chip->irq_unmask(dir_conn_data);
+		/* Since we know it is Direct Connect (is_dir_conn = true),
+		 * we SKIPPED the 'irq_set_irqchip_state' call that was here.
+		 * The interrupt is PRESERVED.
+		 */
+		if (dir_conn_data->chip->irq_unmask)
+			dir_conn_data->chip->irq_unmask(dir_conn_data);
 	}
 
-	if (d->parent_data) {
-		irq_chip_set_parent_state(d, IRQCHIP_STATE_PENDING, 0);
-		irq_chip_enable_parent(d);
-	}
+	clear_bit(d->hwirq, pctrl->skip_wake_irqs);
+	set_bit(d->hwirq, pctrl->enabled_irqs);
 
-	if (test_bit(d->hwirq, pctrl->skip_wake_irqs))
-		return;
-
-	msm_gpio_irq_clear_unmask(d, true);
+	msm_gpio_irq_clear_unmask(d, !is_dir_conn);
 }
 
 static void msm_gpio_irq_disable(struct irq_data *d)
@@ -1259,16 +1256,16 @@ static void msm_gpio_irq_disable(struct irq_data *d)
 	struct irq_data *dir_conn_data;
 	irq_hw_number_t dir_conn_irq = 0;
 
-	if (is_gpio_dual_edge(d, &dir_conn_irq)) {
-		dir_conn_data = irq_get_irq_data(dir_conn_irq);
-		if (!dir_conn_data)
-			return;
+	if (d->parent_data) {
+		if (is_gpio_dual_edge(d, &dir_conn_irq)) {
+			dir_conn_data = irq_get_irq_data(dir_conn_irq);
+			if (!dir_conn_data)
+				return;
 
-		dir_conn_data->chip->irq_mask(dir_conn_data);
-	}
-
-	if (d->parent_data)
+			dir_conn_data->chip->irq_mask(dir_conn_data);
+		}
 		irq_chip_disable_parent(d);
+	}
 
 	if (test_bit(d->hwirq, pctrl->skip_wake_irqs)) {
 		if (pctrl->mpm_wake_ctl)
@@ -1913,7 +1910,14 @@ static void msm_gpio_setup_dir_connects(struct msm_pinctrl *pctrl)
 		gpio_irq = irq_create_mapping(child_domain, dc->gpio);
 		irq_set_parent(gpio_irq, dirconn_irq);
 		irq_set_chip_data(gpio_irq, &(pctrl->chip));
-		irq_set_chip_and_handler_name(gpio_irq, &msm_gpio_irq_chip, NULL, NULL);
+		/*
+		 * Use irq_set_chip() instead of irq_set_chip_and_handler_name(..., NULL)
+		 * to avoid resetting desc->handle_irq to handle_bad_irq during resume.
+		 *
+		 * On cold boot, handle_irq is already handle_bad_irq via girq->handler
+		 * (set in msm_gpio_init()).
+		 */
+		irq_set_chip(gpio_irq, &msm_gpio_irq_chip);
 
 		gpio_irq_data = irq_get_irq_data(gpio_irq);
 		if (!gpio_irq_data)
@@ -2117,8 +2121,18 @@ static __maybe_unused int msm_pinctrl_suspend(struct device *dev)
 static __maybe_unused int msm_pinctrl_resume(struct device *dev)
 {
 	struct msm_pinctrl *pctrl = dev_get_drvdata(dev);
+	int ret;
 
-	return pinctrl_force_default(pctrl->pctrl);
+	ret = pinctrl_force_default(pctrl->pctrl);
+	if (ret) {
+		dev_err(pctrl->dev, "Failed to force default pinctrl state: %d\n", ret);
+		return ret;
+	}
+
+	/* Restore Direct Connect routing */
+	msm_gpio_setup_dir_connects(pctrl);
+
+	return 0;
 }
 
 #ifdef CONFIG_HIBERNATION

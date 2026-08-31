@@ -2363,6 +2363,7 @@ static struct platform_driver direwolf_pinctrl_driver = {
 	.driver = {
 		.name = "direwolf-pinctrl",
 		.of_match_table = direwolf_pinctrl_of_match,
+		.pm = &msm_pinctrl_dev_pm_ops,
 	},
 	.probe = direwolf_pinctrl_probe,
 	.remove = msm_pinctrl_remove,
