@@ -6507,8 +6507,10 @@ static int dwc3_msm_core_init(struct dwc3_msm *mdwc)
 	 * dwc3_suspend_common() while operating in host mode.
 	 */
 	mdwc->wakeup_source = of_property_read_bool(node, "wakeup-source");
-	device_init_wakeup(mdwc->dev, mdwc->wakeup_source);
-	device_init_wakeup(dwc->dev, mdwc->wakeup_source);
+	if (mdwc->force_suspend) {
+		device_init_wakeup(mdwc->dev, mdwc->wakeup_source);
+		device_init_wakeup(dwc->dev, mdwc->wakeup_source);
+	}
 
 	mdwc->xhci_pm_ops = kzalloc(sizeof(struct dev_pm_ops), GFP_ATOMIC);
 	if (!mdwc->xhci_pm_ops)
@@ -8567,7 +8569,7 @@ static int dwc3_msm_runtime_resume(struct device *dev)
 	if (mdwc->dwc3)
 		dwc = platform_get_drvdata(mdwc->dwc3);
 
-	if (dwc)
+	if (dwc && mdwc->force_suspend)
 		device_init_wakeup(dwc->dev, mdwc->wakeup_source);
 
 	if (dev->pm_domain) {
