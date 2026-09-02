@@ -753,8 +753,6 @@ static int msm_hsphy_set_suspend(struct usb_phy *uphy, int suspend)
 		return 0;
 	}
 
-	msm_hsphy_enable_clocks(phy, true);
-
 	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg))
 		eud_active = true;
 

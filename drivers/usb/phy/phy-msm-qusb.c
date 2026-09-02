@@ -696,8 +696,6 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 		 * we come here and turn off regulators thinking no cable is connected. Prevent
 		 * this by not turning off regulators while in host mode.
 		 */
-		qusb_phy_enable_clocks(qphy, true);
-
 		if (qphy->cable_connected || (qphy->phy.flags & PHY_HOST_MODE)) {
 			/* Clear all interrupts */
 			writel_relaxed(0x00,
