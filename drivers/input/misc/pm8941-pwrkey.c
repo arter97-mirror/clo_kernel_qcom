@@ -392,6 +392,11 @@ static int pm8941_pwrkey_restore(struct device *dev)
 	return 0;
 }
 
+static int pm8941_pwrkey_thaw(struct device *dev)
+{
+	return pm8941_pwrkey_restore(dev);
+}
+
 static int pm8941_pwrkey_suspend(struct device *dev)
 {
 	struct pm8941_pwrkey *pwrkey = dev_get_drvdata(dev);
@@ -420,6 +425,7 @@ static int pm8941_pwrkey_resume(struct device *dev)
 
 static const struct dev_pm_ops pm8941_pwr_key_pm_ops = {
 	.freeze = pm8941_pwrkey_freeze,
+	.thaw = pm8941_pwrkey_thaw,
 	.restore = pm8941_pwrkey_restore,
 	.suspend = pm8941_pwrkey_suspend,
 	.resume = pm8941_pwrkey_resume,
