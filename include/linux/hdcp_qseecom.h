@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __HDCP_QSEECOM_H
@@ -17,6 +17,11 @@ enum hdcp2_app_cmd {
 	HDCP2_CMD_TIMEOUT,
 	HDCP2_CMD_EN_ENCRYPTION,
 	HDCP2_CMD_QUERY_STREAM,
+};
+
+enum dp_pm_event_cmd {
+	HDCP_OPS_EVENT_SUSPEND,
+	HDCP_OPS_EVENT_RESUME,
 };
 
 struct hdcp2_buffer {
@@ -79,6 +84,16 @@ int hdcp2_open_stream(void *ctx, uint8_t vc_payload_id,
 		uint8_t stream_number, uint32_t *stream_id);
 int hdcp2_close_stream(void *ctx, uint32_t stream_id);
 int hdcp2_force_encryption(void *ctx, uint32_t enable);
+
+/**
+ * Description: Notify suspend or resume events to HDCP Driver
+ * Suspend or Resume events can be notified to TZ
+ * to update the MDSS register for eDP accordingly.
+ *
+ * @param: [IN] uint32_t event_cmd_id
+ * @return: status of notification from TZ
+ */
+int32_t hdcp_ops_event_notify(uint32_t event_cmd_id);
 #else
 static inline void *hdcp1_init(void)
 {
@@ -148,6 +163,12 @@ static inline int hdcp2_force_encryption(void *ctx, uint32_t enable)
 {
 	return 0;
 }
+
+static inline int32_t hdcp_ops_event_notify(uint32_t event_cmd_id)
+{
+	return 0;
+}
+
 #endif /* CONFIG_HDCP_QSEECOM */
 
 #endif /* __HDCP_QSEECOM_H */
