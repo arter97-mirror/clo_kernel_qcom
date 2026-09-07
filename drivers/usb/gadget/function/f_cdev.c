@@ -3,7 +3,7 @@
  * Copyright (c) 2011, 2013-2021, The Linux Foundation. All rights reserved.
  * Linux Foundation chooses to take subject only to the GPLv2 license terms,
  * and distributes only under these terms.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * This code also borrows from drivers/usb/gadget/u_serial.c, which is
  * Copyright (C) 2000 - 2003 Al Borchers (alborchers@steinerpoint.com)
@@ -1707,11 +1707,9 @@ static struct f_cdev *f_cdev_alloc(char *func_name, int portno)
 		}
 	}
 
-	ret = ida_simple_get(&chardev_ida, 0, 0, GFP_KERNEL);
-	if (ret >= NUM_INSTANCE) {
-		ida_simple_remove(&chardev_ida, ret);
+	ret = ida_alloc_range(&chardev_ida, 0, NUM_INSTANCE - 1, GFP_KERNEL);
+	if (ret < 0) {
 		mutex_unlock(&chardev_ida_lock);
-		ret = -ENODEV;
 		goto err_get_ida;
 	}
 
