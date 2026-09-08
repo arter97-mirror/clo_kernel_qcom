@@ -407,6 +407,7 @@ canoe_perf_config = {
     "CONFIG_SM_VIDEOCC_CANOE": "m",
     "CONFIG_SM_VIDEOCC_CHORA": "m",
     "CONFIG_SND_USB_AUDIO_QMI": "m",
+    "CONFIG_SND_USB_AUDIO_QMI_1IR": "m",
     "CONFIG_SPI_MSM_GENI": "m",
     "CONFIG_SPI_QCOM_GENI": "m",
     "CONFIG_SPMI_MSM_PMIC_ARB": "m",

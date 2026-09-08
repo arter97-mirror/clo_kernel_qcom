@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #define pr_fmt(fmt)	"UCSI: %s: " fmt, __func__
 
@@ -510,12 +510,13 @@ static int ucsi_setup(struct ucsi_dev *udev)
 {
 	int rc;
 
+	mutex_lock(&udev->state_lock);
 	if (udev->ucsi) {
 		dev_err(udev->dev, "ucsi is not NULL\n");
+		mutex_unlock(&udev->state_lock);
 		return -EINVAL;
 	}
 
-	mutex_lock(&udev->state_lock);
 	udev->ucsi = ucsi_create(udev->dev, &ucsi_qti_ops);
 	if (IS_ERR(udev->ucsi)) {
 		rc = PTR_ERR(udev->ucsi);
@@ -552,17 +553,32 @@ static void ucsi_qti_unregister_work(struct work_struct *work)
 {
 	struct ucsi_dev *udev = container_of(work, struct ucsi_dev,
 			unregister_work);
+	struct ucsi *ucsi = NULL;
 
-	if (!udev->ucsi) {
+	/*
+	 * NULL out udev->ucsi under state_lock first so that any concurrent
+	 * handle_ucsi_notify() sees NULL and bails out safely, preventing a
+	 * use-after-free on the ucsi object being torn down.
+	 *
+	 * ucsi_unregister() must be called outside state_lock because it
+	 * calls cancel_work_sync() on connector works, which themselves
+	 * acquire state_lock via handle_ucsi_notify() -- holding state_lock
+	 * here would deadlock.
+	 */
+	mutex_lock(&udev->state_lock);
+	if (udev->ucsi) {
+		ucsi = udev->ucsi;
+		udev->ucsi = NULL;
+	}
+	mutex_unlock(&udev->state_lock);
+
+	if (!ucsi) {
 		dev_dbg(udev->dev, "ucsi is NULL\n");
 		return;
 	}
 
-	mutex_lock(&udev->state_lock);
-	ucsi_unregister(udev->ucsi);
-	ucsi_destroy(udev->ucsi);
-	udev->ucsi = NULL;
-	mutex_unlock(&udev->state_lock);
+	ucsi_unregister(ucsi);
+	ucsi_destroy(ucsi);
 }
 
 static void ucsi_qti_state_cb(void *priv, enum pmic_glink_state state)
@@ -676,19 +692,29 @@ static void ucsi_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct ucsi_dev *udev = dev_get_drvdata(dev);
+	struct ucsi *ucsi = NULL;
 	int rc;
 
 	debugfs_remove_recursive(udev->debugfs_dir);
-	cancel_work_sync(&udev->setup_work);
-	if (!cancel_work_sync(&udev->unregister_work)) {
-		ucsi_unregister(udev->ucsi);
-		ucsi_destroy(udev->ucsi);
-	}
-
 	rc = pmic_glink_unregister_client(udev->client);
 	if (rc < 0)
 		dev_err(dev, "pmic_glink_unregister_client failed rc=%d\n",
 			rc);
+
+	cancel_work_sync(&udev->setup_work);
+	cancel_work_sync(&udev->unregister_work);
+
+	mutex_lock(&udev->state_lock);
+	if (udev->ucsi) {
+		ucsi = udev->ucsi;
+		udev->ucsi = NULL;
+	}
+	mutex_unlock(&udev->state_lock);
+
+	if (ucsi) {
+		ucsi_unregister(ucsi);
+		ucsi_destroy(ucsi);
+	}
 
 	ipc_log_context_destroy(ucsi_ipc_log);
 	ucsi_ipc_log = NULL;
