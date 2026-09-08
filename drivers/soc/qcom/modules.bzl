@@ -704,6 +704,7 @@ def register_modules(registry):
         deps = [
             # do not sort
             "drivers/remoteproc/rproc_qcom_common",
+            "drivers/remoteproc/qcom_q6v5_pas",
         ],
     )
 
