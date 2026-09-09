@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/interrupt.h>
@@ -43,7 +43,16 @@ static irqreturn_t etr_handler(int irq, void *data)
 	struct tmc_drvdata *tmcdrvdata = byte_cntr_data->tmcdrvdata;
 
 	if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_USB) {
-		atomic_inc(&byte_cntr_data->irq_cnt);
+		/*
+		 * While usb_recalibrate_irq_cnt() is recomputing irq_cnt from
+		 * the RWP write pointer, do not increment irq_cnt here to avoid
+		 * double-counting the block this IRQ represents (the
+		 * recalibration already accounts for it via the RWP offset).
+		 * Once recalibration finishes, resume incrementing irq_cnt.
+		 * The reader is still woken up so it can make progress.
+		 */
+		if (!atomic_read(&byte_cntr_data->usb_recalibrating))
+			atomic_inc(&byte_cntr_data->irq_cnt);
 		wake_up(&byte_cntr_data->usb_wait_wq);
 	} else if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_MEM) {
 		atomic_inc(&byte_cntr_data->irq_cnt);
