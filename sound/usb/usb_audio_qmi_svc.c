@@ -1463,19 +1463,17 @@ static int check_valid_request(struct qmi_uaudio_stream_req_msg_v01 *req_msg,
 	}
 
 	subs = find_substream(pcm_card_num, pcm_dev_num, direction);
-
-	if (!subs) {
-		uaudio_err("invalid substream\n");
-		return -EFAULT;
-	}
-
 	chip = uadev[pcm_card_num].chip;
-	if (!subs || !chip || atomic_read(&chip->shutdown)) {
+
+	if (!chip || atomic_read(&chip->shutdown)) {
 		uaudio_err("can't find substream for card# %u, dev# %u dir%u\n",
 				pcm_card_num, pcm_dev_num, direction);
 		return -ENODEV;
 	}
-
+	if (!subs) {
+		uaudio_err("invalid substream\n");
+		return -EFAULT;
+	}
 	*info_idx = info_idx_from_ifnum(pcm_card_num, subs->cur_audiofmt ?
 			subs->cur_audiofmt->iface : -1, req_msg->enable);
 
