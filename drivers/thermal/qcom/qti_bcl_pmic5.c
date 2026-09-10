@@ -77,6 +77,12 @@
 #define BCL_IBAT_SCALING_REV5_NA   61037
 #define BCL_IBAT_THRESH_SCALING_REV5_UA   156255L /* 610.37uA * 256 */
 #define BCL_IBAT_SCALING_DONNINGTON       138403  /*  8.333 * 256 * 64.879uA */
+#define BCL_VBAT_SCALING_BARRINGTON_NV 64879
+#define BCL_VBAT_THRESH_SCALING_BARRINGTON_UV \
+	(BCL_VBAT_SCALING_BARRINGTON_NV * 256 / 1000)
+#define BCL_IBAT_SCALING_BARRINGTON_UA    1442U  /*  22.22 * 64.879uA */
+#define BCL_IBAT_THRESH_SCALING_BARRINGTON_UA \
+	(BCL_IBAT_SCALING_BARRINGTON_UA * 256)
 #define BCL_VBAT_TRIP_CNT     3
 
 #define BCL_IBAT_COTTID_SCALING 366220L
@@ -1471,6 +1477,23 @@ static const struct bcl_desc smb2360_data = {
 	.one_byte_reg = true,
 };
 
+static const struct bcl_desc smb2370_data = {
+	.vadc_type = true,
+	.vbat_regs = {
+		[BCLBIG_COMP_VCMP_L0_THR]		= 0x48,
+		[BCLBIG_COMP_VCMP_L1_THR]		= 0x49,
+		[BCLBIG_COMP_VCMP_L2_THR]		= 0x4A,
+	},
+	.vbat_zone_enabled = true,
+	.vcmp_thresh_base = 2250,
+	.vcmp_thresh_max = 3600,
+	.ibat_scaling_factor = BCL_IBAT_SCALING_BARRINGTON_UA,
+	.ibat_thresh_scaling_factor = BCL_IBAT_THRESH_SCALING_BARRINGTON_UA,
+	.vbat_scaling_factor = BCL_VBAT_SCALING_BARRINGTON_NV,
+	.vbat_thresh_scaling_factor = BCL_VBAT_THRESH_SCALING_BARRINGTON_UV,
+	.batt_conf_valid = true,
+};
+
 static const struct bcl_desc pm8550_data = {
 	.vadc_type = false,
 	.vbat_regs = {
@@ -1544,6 +1567,7 @@ static const struct of_device_id bcl_match[] = {
 	{ .compatible = "qcom,pm8550-bcl-v5", .data = &pm8550_data},
 	{ .compatible = "qcom,smb2360-bcl-v5", .data = &smb2360_data},
 	{ .compatible = "qcom,pmw6100-bcl-v5", .data = &pmw6100_data},
+	{ .compatible = "qcom,smb2370-bcl-v5", .data = &smb2370_data},
 	{ }
 };
 MODULE_DEVICE_TABLE(of, bcl_match);
