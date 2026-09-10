@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -210,19 +210,9 @@ static void enable_eud(struct platform_device *pdev)
 	if (priv->eud_enabled)
 		return;
 
-	if (priv->need_phy_clk_vote && priv->eud_ahb2phy_clk) {
-		ret = clk_prepare_enable(priv->eud_ahb2phy_clk);
-		if (ret) {
-			dev_err(&pdev->dev, "Failed to enable eud_ahb2phy_clk rc:%d\n", ret);
-			return;
-		}
-	}
-
 	ret = eud_phy_enable(priv);
 	if (ret) {
 		dev_err(&pdev->dev, "Phy enable failed rc:%d\n", ret);
-		if (priv->need_phy_clk_vote && priv->eud_ahb2phy_clk)
-			clk_disable_unprepare(priv->eud_ahb2phy_clk);
 		return;
 	}
 	/*
@@ -296,9 +286,6 @@ static void disable_eud(struct platform_device *pdev)
 	extcon_set_state_sync(priv->extcon, EXTCON_USB, true);
 	priv->eud_enabled = false;
 	eud_phy_disable(priv);
-
-	if (priv->need_phy_clk_vote && priv->eud_ahb2phy_clk)
-		clk_disable_unprepare(priv->eud_ahb2phy_clk);
 
 	dev_dbg(&pdev->dev, "%s: EUD Disabled!\n", __func__);
 }
@@ -679,7 +666,7 @@ static int msm_eud_suspend(struct device *dev)
 {
 	struct eud_chip *chip = dev_get_drvdata(dev);
 
-	if (chip->eud_enabled && chip->need_phy_clk_vote && chip->eud_ahb2phy_clk)
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk)
 		clk_disable_unprepare(chip->eud_ahb2phy_clk);
 
 	return 0;
@@ -690,7 +677,7 @@ static int msm_eud_resume(struct device *dev)
 	struct eud_chip *chip = dev_get_drvdata(dev);
 	int ret = 0;
 
-	if (chip->eud_enabled && chip->need_phy_clk_vote && chip->eud_ahb2phy_clk) {
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk) {
 		ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
 		if (ret)
 			dev_err(chip->dev, "%s failed to vote ahb2phy clk %d\n",
@@ -772,6 +759,10 @@ static int msm_eud_probe(struct platform_device *pdev)
 			ret = PTR_ERR(chip->eud_ahb2phy_clk);
 			return ret;
 		}
+
+		ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
+		if (ret)
+			return ret;
 	}
 
 	chip->eud_clkref_clk = devm_clk_get(&pdev->dev, "eud_clkref_clk");
@@ -861,20 +852,10 @@ static int msm_eud_probe(struct platform_device *pdev)
 	/* Proceed enable other EUD elements if bootloader has enabled it */
 	if (msm_eud_hw_is_enabled(pdev)) {
 		/*
-		 * EUD was enabled by the bootloader; vote for ahb2phy clock
-		 * so the clk driver can track the use count and we can
-		 * unprepare it cleanly when EUD is disabled later.
+		 * UEFI USB driver should have already enabled this clock, but
+		 * enable it here as well, so the clk driver can track the use
+		 * count if we disable EUD from the module param.
 		 */
-		if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk) {
-			ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
-			if (ret) {
-				dev_err(&pdev->dev,
-					"Failed to enable eud_ahb2phy_clk rc:%d\n",
-					ret);
-				goto error;
-			}
-		}
-
 		msm_eud_clkref_en(chip, true);
 
 		set_eud_utmi_switch_delay(chip);
@@ -904,6 +885,9 @@ static int msm_eud_probe(struct platform_device *pdev)
 	return 0;
 
 error:
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk)
+		clk_disable_unprepare(chip->eud_ahb2phy_clk);
+
 	return ret;
 }
 
@@ -917,6 +901,8 @@ static void msm_eud_remove(struct platform_device *pdev)
 
 	uart_remove_one_port(&eud_uart_driver, port);
 	device_init_wakeup(chip->dev, false);
+	if (chip->need_phy_clk_vote)
+		clk_disable_unprepare(chip->eud_ahb2phy_clk);
 }
 
 static const struct of_device_id msm_eud_dt_match[] = {
