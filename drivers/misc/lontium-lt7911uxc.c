@@ -53,6 +53,7 @@
 #define LT7911_DRAIN_SETTLE_MS    100
 
 #define LT7911_DP_STATE_MS        1000
+#define LT7911_POWER_DOWN_GRACE_MS 1500
 
 /*
  * Bits in the LT7911 interrupt-type / ready-state value (reg 0x84).  The chip
@@ -67,6 +68,7 @@ struct lt7911uxc_data {
 	struct altmode_client *amclient;
 	struct mutex device_lock;
 	struct delayed_work info_work;
+	struct delayed_work delayed_power_down_work;
 	struct work_struct dpalt_work;
 	struct work_struct fw_upgrade_work;
 	atomic_t fw_upgrade_in_progress;
@@ -189,7 +191,9 @@ static int lt7911_power_up(struct lt7911uxc_data *lt7911)
 	}
 
 	lt7911->lt7911_poweron = true;
-	dev_dbg(lt7911->dev, "LT7911 power up complete\n");
+	if (lt7911->cci_handle)
+		cci_util_lt7911_set_power_state(lt7911->cci_handle, true);
+	dev_info(lt7911->dev, "LT7911 power up complete\n");
 
 	return ret;
 }
@@ -235,6 +239,21 @@ static int lt7911_power_down(struct lt7911uxc_data *data)
 	dev_dbg(data->dev, "LT7911 power down complete\n");
 
 	return 0;
+}
+
+static void lt7911_delayed_power_down_work_fn(struct work_struct *work)
+{
+	struct lt7911uxc_data *lt7911 =
+		container_of(to_delayed_work(work), struct lt7911uxc_data,
+			     delayed_power_down_work);
+
+	mutex_lock(&lt7911->device_lock);
+	if (!lt7911->connected && lt7911->lt7911_poweron) {
+		dev_info(lt7911->dev,
+			 "delayed_power_down_work: grace period expired, powering down LT7911\n");
+		lt7911_power_down(lt7911);
+	}
+	mutex_unlock(&lt7911->device_lock);
 }
 
 static void lt7911_notify_event(struct lt7911uxc_data *lt7911, int irq, int w, int h, int fps,
@@ -352,21 +371,25 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 
 	if (!connected) {
 		/* Cable detach */
-		dev_dbg(lt7911->dev, "dpalt_work: cable detached, powering down\n");
+		dev_info(lt7911->dev, "dpalt_work: cable detached, scheduling delayed power down\n");
 		usbmux_setmode(lt7911->usbmux_handle, lanes, orientation);
 		usbmux_sethpd(lt7911->usbmux_handle, false);
 
 		mutex_lock(&lt7911->device_lock);
-		lt7911_power_down(lt7911);
 		lt7911->have_video_info = false;
 		lt7911->have_audio_info = false;
-		mutex_unlock(&lt7911->device_lock);
-
 		/*
 		 * Notify userspace that the stream is gone: all fields zeroed
 		 * signals VIDEO_OR_AUDIO_NOT_READY / disconnected.
 		 */
 		lt7911_notify_event(lt7911, 0, 0, 0, 0, 0, 0, 0);
+
+		/* Defer cutting power by 1500ms to allow streamoff I2C transfers to finish cleanly */
+		queue_delayed_work(system_freezable_wq,
+				   &lt7911->delayed_power_down_work,
+				   msecs_to_jiffies(LT7911_POWER_DOWN_GRACE_MS));
+		mutex_unlock(&lt7911->device_lock);
+
 		lt7911uxc_send_pan_ack(lt7911, DPIN_PAN_ACK, port_index);
 	} else {
 		/* Cable attach */
@@ -374,6 +397,8 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 			    lanes, orientation);
 
 		mutex_lock(&lt7911->device_lock);
+		/* Cancel pending delayed power-down if cable is reconnected */
+		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 		rc = lt7911_power_up(lt7911);
 		if (rc) {
 			dev_err(lt7911->dev,
@@ -1926,6 +1951,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 
 	mutex_init(&lt7911->device_lock);
 	INIT_DELAYED_WORK(&lt7911->info_work, lt7911_info_work_fn);
+	INIT_DELAYED_WORK(&lt7911->delayed_power_down_work, lt7911_delayed_power_down_work_fn);
 	INIT_WORK(&lt7911->dpalt_work, lt7911uxc_dpalt_work_fn);
 	INIT_WORK(&lt7911->fw_upgrade_work, lt7911_fw_upgrade_work_fn);
 	atomic_set(&lt7911->fw_upgrade_in_progress, 0);
@@ -1958,6 +1984,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 		if (lt7911->lt7911_gpio0_irq > 0)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
+		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 		altmode_deregister_client(lt7911->amclient);
 		return rc;
 	}
@@ -1977,6 +2004,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 		if (lt7911->lt7911_gpio0_irq > 0)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
+		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 		altmode_deregister_client(lt7911->amclient);
 		return -EPROBE_DEFER;
 	}
@@ -1997,6 +2025,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 		if (lt7911->lt7911_gpio0_irq > 0)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
+		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 		altmode_deregister_client(lt7911->amclient);
 		return -EPROBE_DEFER;
 	}
@@ -2024,6 +2053,7 @@ static int lt7911uxc_remove(struct platform_device *pdev)
 		if (lt7911->lt7911_gpio0_irq > 0)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
+		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 		cancel_work_sync(&lt7911->fw_upgrade_work);
 		cancel_work_sync(&lt7911->dpalt_work);
 		atomic_set(&lt7911->int_event_cnt, 0);
@@ -2055,6 +2085,8 @@ static int lt7911uxc_suspend(struct device *dev)
 		dev_warn(dev, "Suspend aborted: firmware upgrade in progress\n");
 		return -EBUSY;
 	}
+
+	cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 
 	mutex_lock(&lt7911->device_lock);
 	if (lt7911->cci_handle)
