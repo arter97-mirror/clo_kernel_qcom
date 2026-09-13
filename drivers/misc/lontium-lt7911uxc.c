@@ -258,6 +258,8 @@ static void lt7911_notify_event(struct lt7911uxc_data *lt7911, int irq, int w, i
 		snprintf(state, sizeof(state), "STATE=VIDEO_AUDIO_READY");
 	else if (irq > 3)
 		snprintf(state, sizeof(state), "STATE=HDR_STR_READY");
+	else if (irq == -2)
+		snprintf(state, sizeof(state), "STATE=DISCONNECT");
 	else
 		snprintf(state, sizeof(state), "STATE=UNKNOWN");
 	snprintf(width, sizeof(width), "WIDTH=%d", w);
@@ -400,7 +402,7 @@ static void lt7911_info_work_fn(struct work_struct *work)
 		container_of(to_delayed_work(work), struct lt7911uxc_data, info_work);
 	int irq = 0, width = 0, height = 0, fps = 0, format = 0, afreq = 0, ach = 0;
 	int snapshot, rc, retries = 0;
-	bool video_live, audio_live, suppress;
+	bool video_live, audio_live, suppress, disconnected;
 
 	/*
 	 * Drain-loop for hotplug robustness:
@@ -503,13 +505,17 @@ static void lt7911_info_work_fn(struct work_struct *work)
 		 * Only a connected cable with nothing at all reported is treated
 		 * as a spurious read worth dropping.
 		 */
-		suppress = lt7911->connected && !irq;
+		suppress = lt7911->connected && !irq && !lt7911->have_video_info;
+		disconnected = lt7911->connected && !irq;
 
 		mutex_unlock(&lt7911->device_lock);
 
 		if (suppress) {
 			dev_dbg(lt7911->dev,
 				"Ignore notification when connected and registers indicate 0\n");
+		} else if (disconnected) {
+			lt7911_mipi_enable(lt7911, 0);
+			lt7911_notify_event(lt7911, -2, width, height, fps, format, afreq, ach);
 		} else {
 			lt7911_mipi_enable(lt7911, 1);
 			lt7911_notify_event(lt7911, irq, width, height, fps, format, afreq, ach);
