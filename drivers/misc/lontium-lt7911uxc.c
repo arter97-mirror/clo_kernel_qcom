@@ -132,6 +132,21 @@ static bool lt7911_sysfs_registered;
 
 static int lt7911_mipi_enable(struct lt7911uxc_data *lt7911, int enable);
 
+static bool android_boot_mode_charger(void)
+{
+	const char *cmdline = NULL;
+	struct device_node *np = of_find_node_by_path("/chosen");
+
+	if (np) {
+		cmdline = of_get_property(np, "bootargs", NULL);
+		of_node_put(np);
+		if (cmdline && strstr(cmdline, "androidboot.mode=charger"))
+			return true;
+	}
+
+	return false;
+}
+
 static int lt7911_power_up(struct lt7911uxc_data *lt7911)
 {
 	int ret = 0;
@@ -454,6 +469,11 @@ static void lt7911_info_work_fn(struct work_struct *work)
 		mutex_lock(&lt7911->device_lock);
 		if (!lt7911->lt7911_poweron) {
 			mutex_unlock(&lt7911->device_lock);
+			if (android_boot_mode_charger()) {
+				dev_err(lt7911->dev,
+					"device powered off in charge mode, skip setting DP state\n");
+				return;
+			}
 			dev_dbg(lt7911->dev, "device powered off, set DP state\n");
 			if (usbmux_setdpstate(lt7911->usbmux_handle, true))
 				dev_warn(lt7911->dev,
