@@ -151,14 +151,32 @@ static int smmuv2_s2cr_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 	}
 	i = ARM_SMMU_GR0_S2CR_INDEX(offset);
 
+	/* Extract current S2CR type from the original value */
+	current_type = FIELD_GET(ARM_SMMU_S2CR_TYPE, val);
+
+	/*
+	 * Validate CBNDX for translation streams to prevent host from pointing
+	 * streams at unvalidated or firmware-configured context banks.
+	 */
+	if (current_type == S2CR_TYPE_TRANS) {
+		u32 cbndx = FIELD_GET(ARM_SMMU_S2CR_CBNDX, val);
+
+		if (cbndx >= smmu->num_cbar) {
+			smmu_v2_debug_print("smmu_v2_s2cr_write: invalid cbndx: %u (max: %u)\n",
+					    cbndx, smmu->num_cbar);
+			return -EINVAL;
+		}
+	} else if (current_type != S2CR_TYPE_BYPASS &&
+		   current_type != S2CR_TYPE_FAULT) {
+		smmu_v2_debug_print("smmu_v2_s2cr_write: invalid type: %u\n", current_type);
+		return -EINVAL;
+	}
+
 	/*
 	 * Save the ORIGINAL value for later read operations.
 	 * This is what EL1 will see on reads.
 	 */
 	smmu->s2cr_pool[i] = val;
-
-	/* Extract current S2CR type from the original value */
-	current_type = (val & ARM_SMMU_S2CR_TYPE) >> 16;
 
 	/* If type is BYPASS, modify hardware value to TRANS with host CB */
 	if (current_type == S2CR_TYPE_BYPASS) {
@@ -200,7 +218,7 @@ static int smmuv2_cbar_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 	/* Extract current CBAR type from the original value */
 	current_type = FIELD_GET(ARM_SMMU_CBAR_TYPE, val);
 
-	/* If type is S1_TRANS_S2_BYPASS, modify hardware value for nested translation */
+	/* If type is not FAULT, modify hardware value for nested stage-2 translation */
 	if (current_type == CBAR_TYPE_S2_TRANS ||
 		current_type == CBAR_TYPE_S1_TRANS_S2_BYPASS ||
 		current_type == CBAR_TYPE_S1_TRANS_S2_TRANS) {
@@ -216,10 +234,10 @@ static int smmuv2_cbar_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 
 		/* Set bits [8:15] to host_s2_cb_idx (S2 host context bank) */
 		hw_val |= (smmu->host_s2_cb_idx << 8);
-
-		/* Write the (possibly modified) value to hardware */
-		arm_smmu_gr1_write(smmu, offset, hw_val);
 	}
+
+	/* Write the (possibly modified) value to hardware */
+	arm_smmu_gr1_write(smmu, offset, hw_val);
 
 	smmu_v2_debug_print("cbar_write: idx: %d, EL1_val: 0x%x, HW_val: 0x%x, stored: 0x%x\n",
 			    i, val, hw_val, smmu->cbar_pool[i]);
@@ -262,8 +280,9 @@ static int smmuv2_read_global_region_0(struct smmu_v2_nested *smmu, u64 offset, 
 		/* Extract current type */
 		u32 current_type = (*buf & ARM_SMMU_S2CR_TYPE) >> 16;
 
-		/* If hardware has TRANS, convert to BYPASS for EL1 */
-		if (current_type == S2CR_TYPE_TRANS) {
+		/* If hardware has TRANS pointing at host_s2_cb_idx, convert back to BYPASS for EL1 */
+		if (current_type == S2CR_TYPE_TRANS &&
+		    FIELD_GET(ARM_SMMU_S2CR_CBNDX, *buf) == smmu->host_s2_cb_idx) {
 			/* Clear type and CBNDX fields */
 			*buf &= ~(ARM_SMMU_S2CR_TYPE | ARM_SMMU_S2CR_CBNDX);
 
@@ -516,7 +535,9 @@ static int update_s2cr_profile(struct smmu_v2_nested *smmu)
 
 static int update_cbar_profile(struct smmu_v2_nested *smmu)
 {
-	int i;
+	int i, j;
+	u32 fault_val = FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_FAULT);
+
 	/* Get available number of context banks from cbar register */
 	for (i = smmu->num_cbar - 1; i >= 0; i--) {
 		u32 cbar_val = arm_smmu_gr1_read(smmu, ARM_SMMU_GR1_CBAR(i));
@@ -530,6 +551,13 @@ static int update_cbar_profile(struct smmu_v2_nested *smmu)
 	}
 	smmu->num_cbar = i + 1;
 	smmu->num_cb = smmu->num_cbar; /* cbar == cb */
+
+	/* Sanitize all admitted context banks to fault until configured by host */
+	for (j = 0; j < smmu->num_cbar; j++) {
+		smmu->cbar_pool[j] = fault_val;
+		arm_smmu_gr1_write(smmu, ARM_SMMU_GR1_CBAR(j), fault_val);
+	}
+
 	return 0;
 }
 
