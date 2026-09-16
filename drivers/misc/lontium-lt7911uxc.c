@@ -54,6 +54,8 @@
 
 #define LT7911_DP_STATE_MS        1000
 #define LT7911_POWER_DOWN_GRACE_MS 1500
+#define LT7911_ATTENTION_DELAY_DEFAULT_MS 400
+#define LT7911_ATTENTION_DELAY_MAX_MS 10000
 #define LT7911_DP_TRAINING_CHECK_DELAY_MS       5000
 #define LT7911_DP_TRAINING_CHECK_INTERVAL_MS     500
 #define LT7911_DP_TRAINING_CHECK_MAX_RETRIES       6
@@ -73,6 +75,7 @@ struct lt7911uxc_data {
 	struct delayed_work info_work;
 	struct delayed_work delayed_power_down_work;
 	struct delayed_work dp_training_check_work;
+	unsigned int attention_delay_ms;
 	struct work_struct dpalt_work;
 	struct work_struct fw_upgrade_work;
 	atomic_t fw_upgrade_in_progress;
@@ -370,6 +373,7 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 	bool connected;
 	bool usb_mux;
 	int lanes, orientation;
+	unsigned int delay_ms;
 	u8 port_index;
 
 	mutex_lock(&lt7911->device_lock);
@@ -422,9 +426,11 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 		dev_dbg(lt7911->dev, "dpalt_work: cable attached, lanes=%d orientation=%d\n",
 			    lanes, orientation);
 
-		mutex_lock(&lt7911->device_lock);
 		/* Cancel pending delayed power-down if cable is reconnected */
 		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
+		mutex_lock(&lt7911->device_lock);
+		if (!lt7911->lt7911_poweron)
+			atomic_set(&lt7911->int_event_cnt, 0);
 		rc = lt7911_power_up(lt7911);
 		if (rc) {
 			dev_err(lt7911->dev,
@@ -440,8 +446,23 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 		dev_dbg(lt7911->dev, "dpalt_work: powered up LT7911, switching usbmux to %d+%d\n",
 			    lanes, orientation);
 		usbmux_setmode(lt7911->usbmux_handle, lanes, orientation);
-		usbmux_sethpd(lt7911->usbmux_handle, true);
 		lt7911uxc_send_pan_ack(lt7911, DPIN_PAN_ACK, port_index);
+		mutex_lock(&lt7911->device_lock);
+		delay_ms = lt7911->attention_delay_ms;
+		mutex_unlock(&lt7911->device_lock);
+		if (delay_ms)
+			msleep(delay_ms);
+
+		mutex_lock(&lt7911->device_lock);
+		connected = lt7911->connected && lt7911->lt7911_poweron &&
+			lt7911->lanes == lanes && lt7911->orientation == orientation &&
+			lt7911->pan_ack_port_index == port_index &&
+			!atomic_read(&lt7911->fw_upgrade_in_progress);
+		mutex_unlock(&lt7911->device_lock);
+		if (!connected)
+			return;
+
+		usbmux_sethpd(lt7911->usbmux_handle, true);
 		dev_dbg(lt7911->dev, "sending the Attention Message ack to ADSP PD\n");
 		trace_lt7911_attention_ack(port_index, DPIN_SEND_ATTENTION);
 		lt7911uxc_send_pan_ack(lt7911, DPIN_SEND_ATTENTION, port_index);
@@ -811,7 +832,6 @@ static int lt7911uxc_parse_dts(struct lt7911uxc_data *lt7911)
 static irqreturn_t lt7911_gpio0_irq_handler(int irq, void *dev_id)
 {
 	struct lt7911uxc_data *lt7911 = dev_id;
-	int event_cnt;
 
 	dev_dbg(lt7911->dev, "GPIO0 IRQ fired (irq=%d)\n", irq);
 
@@ -828,13 +848,16 @@ static irqreturn_t lt7911_gpio0_irq_handler(int irq, void *dev_id)
 	}
 
 	/*
-	 * Atomically record that an interrupt has arrived.  The drain-loop in
-	 * lt7911_info_work_fn() reads this counter before and after the I2C
-	 * transaction; if it changed, at least one interrupt was coalesced and
-	 * the loop re-reads the hardware state.
+	 * Atomically count IRQs so info_work can detect new events during reads.
+	 * DP attach resets the counter before powering up the chip. Skip the
+	 * first IRQ, observed to carry no valid stream information at startup,
+	 * to avoid I2C register accesses interfering with DP link training.
 	 */
-	event_cnt = atomic_inc_return(&lt7911->int_event_cnt);
-	trace_lt7911_gpio0_irq(irq, event_cnt);
+	if (atomic_inc_return(&lt7911->int_event_cnt) == 1) {
+		dev_info(lt7911->dev, "Ignore first GPIO0 IRQ after power up\n");
+		return IRQ_HANDLED;
+	}
+	trace_lt7911_gpio0_irq(irq, atomic_read(&lt7911->int_event_cnt));
 	cancel_delayed_work(&lt7911->info_work);
 	queue_delayed_work(system_freezable_wq, &lt7911->info_work,
 			msecs_to_jiffies(LT7911_DRAIN_SETTLE_MS));
@@ -2267,6 +2290,39 @@ static ssize_t lt7911_replay_uevent_store(struct device *dev,
 	return count;
 }
 
+static ssize_t attention_delay_ms_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	unsigned int delay_ms;
+
+	mutex_lock(&lt7911->device_lock);
+	delay_ms = lt7911->attention_delay_ms;
+	mutex_unlock(&lt7911->device_lock);
+	return sysfs_emit(buf, "%u\n", delay_ms);
+}
+
+static ssize_t attention_delay_ms_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	unsigned int delay_ms;
+	int rc;
+
+	rc = kstrtouint(buf, 0, &delay_ms);
+	if (rc)
+		return rc;
+	if (delay_ms > LT7911_ATTENTION_DELAY_MAX_MS)
+		return -ERANGE;
+
+	mutex_lock(&lt7911->device_lock);
+	/* Applies to the next HPD/Attention wait. */
+	lt7911->attention_delay_ms = delay_ms;
+	mutex_unlock(&lt7911->device_lock);
+	return count;
+}
+
+static DEVICE_ATTR_RW(attention_delay_ms);
 static DEVICE_ATTR_RW(firmware_upgrade);
 static DEVICE_ATTR_RW(firmware_debug_flag);
 static DEVICE_ATTR_RW(lt7911_cc_switch);
@@ -2282,6 +2338,7 @@ static DEVICE_ATTR_RW(lt7911_reg_access);
 static DEVICE_ATTR_WO(lt7911_replay_uevent);
 
 static struct attribute *lt7911_sysfs_attrs[] = {
+	&dev_attr_attention_delay_ms.attr,
 	&dev_attr_firmware_upgrade.attr,
 	&dev_attr_firmware_debug_flag.attr,
 	&dev_attr_lt7911_cc_switch.attr,
@@ -2430,6 +2487,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mutex_init(&lt7911->device_lock);
+	lt7911->attention_delay_ms = LT7911_ATTENTION_DELAY_DEFAULT_MS;
 	INIT_DELAYED_WORK(&lt7911->info_work, lt7911_info_work_fn);
 	INIT_DELAYED_WORK(&lt7911->delayed_power_down_work, lt7911_delayed_power_down_work_fn);
 	INIT_DELAYED_WORK(&lt7911->dp_training_check_work,
