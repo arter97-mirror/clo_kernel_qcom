@@ -288,6 +288,13 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 			pr_err("smci_bwprof_license_check failed : %d\n", ret);
 			return -EIO;
 		}
+	} else if (sampling_ms == SAMPLING_10MS) {
+		ret = smci_bwprof_license_check(bwprof_data->bwprof_profiler,
+					BWMON_FEATURE_10MS, NULL, 0);
+		if (ret) {
+			pr_err("smci_bwprof_license_check failed : %d\n", ret);
+			return -EIO;
+		}
 	}
 
 	if (hist_enable) {
