@@ -118,6 +118,7 @@
 
 /* MACSEC WRAPPER bits */
 #define MACSEC_BIT_DATA_BYPASS		BIT(2)
+#define MACSEC_PWR_ON_RESET		BIT(9)
 
 #define SGMII_10M_RX_CLK_DVDR			0x31
 
@@ -764,9 +765,11 @@ static void ethqos_force_macsec_bypass(struct qcom_ethqos *ethqos)
 		return;
 
 	val = readl_relaxed(macsec_base + MACSEC_CTRL0_OFFSET);
+	val |= MACSEC_PWR_ON_RESET;
+	writel_relaxed(val, macsec_base + MACSEC_CTRL0_OFFSET);
 
+	val = readl_relaxed(macsec_base + MACSEC_CTRL0_OFFSET);
 	val |= MACSEC_BIT_DATA_BYPASS;
-
 	writel_relaxed(val, macsec_base + MACSEC_CTRL0_OFFSET);
 }
 
