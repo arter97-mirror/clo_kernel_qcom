@@ -85,6 +85,15 @@ def register_modules(registry):
         ],
     )
     registry.register(
+        name = "drivers/dma-buf/heaps/system_heap",
+        out = "system_heap.ko",
+        config = "CONFIG_DMABUF_HEAPS_SYSTEM",
+        srcs = [
+            # do not sort
+            "drivers/dma-buf/heaps/system_heap.c",
+        ],
+    )
+    registry.register(
         name = "drivers/dma-buf/heaps/deferred-free-helper",
         out = "deferred-free-helper.ko",
         config = "CONFIG_QCOM_DMABUF_HEAPS_DEFERRED_FREE",
