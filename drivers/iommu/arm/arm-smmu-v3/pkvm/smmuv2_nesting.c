@@ -323,33 +323,40 @@ static int smmuv2_write_global_region_0(struct smmu_v2_nested *smmu,
 					unsigned int len,
 					u64 val)
 {
-	/* Handle special register ranges first */
+	if (len != sizeof(u32) && len != sizeof(u64))
+		return -EINVAL;
+
+	/* Handle SMR and S2CR register ranges */
 	if (offset >= ARM_SMMU_GR0_SMR(0) && offset <= ARM_SMMU_GR0_SMR(ARM_SMMU_MAX_SMRS - 1))
 		return smmuv2_smr_write(smmu, offset, (u32)val);
 	if (offset >= ARM_SMMU_GR0_S2CR(0) && offset <= ARM_SMMU_GR0_S2CR(ARM_SMMU_MAX_S2CRS - 1))
 		return smmuv2_s2cr_write(smmu, offset, (u32)val);
-	/* Check if access is to fault registers which are handled by TZ */
-	if ((offset >= ARM_SMMU_GFAR0 && offset <= ARM_SMMU_GFSR) ||
-	    (offset >= ARM_SMMU_GR0_sGFSYNR0 && offset <= ARM_SMMU_GR0_sGFSYNR2) ||
-	    (offset >= ARM_SMMU_GPAR0 && offset <= ARM_SMMU_GPAR1) ||
-	    (offset >= ARM_SMMU_TRANSBUF_READSW && offset <= ARM_SMMU_TRANSBUF_DR2)) {
+
+	/* Explicit allowlist for Global Region 0 registers (default-deny) */
+	switch (offset) {
+	case ARM_SMMU_GR0_sCR0: {
+		u32 hw_val = (u32)val;
+
+		/*
+		 * Enforce SMMU enabled (CLIENTPD=0), unidentified stream fault
+		 * (USFCFG=1), and stream match conflict fault (SMCFCFG=1).
+		 */
+		hw_val &= ~ARM_SMMU_sCR0_CLIENTPD;
+		hw_val |= ARM_SMMU_sCR0_USFCFG | ARM_SMMU_sCR0_SMCFCFG;
+		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, hw_val);
+		return 0;
+	}
+	case ARM_SMMU_GR0_sACR:
+	case ARM_SMMU_GR0_sGFSR:
+	case ARM_SMMU_GR0_TLBIVMID:
+	case ARM_SMMU_GR0_TLBIALLNSNH:
+	case ARM_SMMU_GR0_TLBIALLH:
+	case ARM_SMMU_GR0_sTLBGSYNC:
+		arm_smmu_gr0_write(smmu, offset, (u32)val);
+		return 0;
+	default:
 		return -EPERM;
 	}
-	/* Handle general register writes based on access size */
-	void *reg_addr = (void *)((u64)smmu->base_va + offset);
-
-	if (len == sizeof(u32)) {
-		writel((u32)val, reg_addr);
-		smmu_v2_debug_print("SMMU_EL2_WRITE32, offset: 0x%llx, val: 0x%x\n",
-				    ((u64)smmu->base_pa + offset), (u32)val);
-	} else if (len == sizeof(u64)) {
-		writel((u64)val, reg_addr);
-		smmu_v2_debug_print("SMMU_EL2_WRITE64, offset: 0x%llx, val: 0x%llx\n",
-				    ((u64)smmu->base_pa + offset), val);
-	} else {
-		return -EINVAL; /* Invalid access size */
-	}
-	return 0;
 }
 
 static int smmuv2_write_global_region_1(struct smmu_v2_nested *smmu,
