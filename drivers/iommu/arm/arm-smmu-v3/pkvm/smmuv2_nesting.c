@@ -308,8 +308,14 @@ static int smmuv2_read_global_region_1(struct smmu_v2_nested *smmu, u64 offset, 
 {
 	if (offset >= ARM_SMMU_GR1_CBAR(0) &&
 	    offset <= ARM_SMMU_GR1_CBAR(ARM_SMMU_MAX_CBARS - 1)) {
-		/* TBD need to maskout "nested" here. */
 		smmuv2_cbar_read(smmu, offset, buf);
+	} else if (offset >= ARM_SMMU_GR1_CBA2R(0) &&
+		   offset <= ARM_SMMU_GR1_CBA2R(ARM_SMMU_MAX_CBARS - 1)) {
+		if (!ARM_SMMU_GR1_CBA2R_VALID(offset, smmu->num_cbar)) {
+			*buf = 0;
+			return 0;
+		}
+		*buf = arm_smmu_gr1_read(smmu, offset);
 	} else {
 		*buf = arm_smmu_gr1_read(smmu, offset);
 		smmu_v2_debug_print("smmu_v2_read_global_region_1, addr: %llx, buf: %llx\n",
@@ -364,27 +370,30 @@ static int smmuv2_write_global_region_1(struct smmu_v2_nested *smmu,
 					unsigned int len,
 					u64 val)
 {
-	/* Handle CBAR registers specially */
+	if (len != sizeof(u32) && len != sizeof(u64))
+		return -EINVAL;
+
+	/* Handle CBAR registers */
 	if (offset >= ARM_SMMU_GR1_CBAR(0) &&
-	    offset <= ARM_SMMU_GR1_CBAR(ARM_SMMU_MAX_CBARS - 1)) {
+	    offset <= ARM_SMMU_GR1_CBAR(ARM_SMMU_MAX_CBARS - 1))
 		return smmuv2_cbar_write(smmu, offset, (u32)val);
+
+	/*
+	 * Handle CBA2R registers: only allow writes to host-owned stage-1
+	 * context banks (< num_cbar) so the host cannot clear VA64 on
+	 * CBA2R(host_s2_cb_idx) or firmware context banks.
+	 */
+	if (offset >= ARM_SMMU_GR1_CBA2R(0) &&
+	    offset <= ARM_SMMU_GR1_CBA2R(ARM_SMMU_MAX_CBARS - 1)) {
+		if (!ARM_SMMU_GR1_CBA2R_VALID(offset, smmu->num_cbar))
+			return -EINVAL;
+
+		arm_smmu_gr1_write(smmu, offset, (u32)val);
+		return 0;
 	}
 
-	/* Handle general register writes based on access size */
-	void *reg_addr = (void *)((u64)smmu->base_va + ARM_SMMU_GLOBAL_REGION1_OFFSET + offset);
-
-	if (len == sizeof(u32)) {
-		writel((u32)val, reg_addr);
-		smmu_v2_debug_print("SMMU_EL2_WRITE32, offset: 0x%llx, val: 0x%x\n",
-				    ((u64)smmu->base_pa + offset), (u32)val);
-	} else if (len == sizeof(u64)) {
-		writel((u64)val, reg_addr);
-		smmu_v2_debug_print("SMMU_EL2_WRITE64, offset: 0x%llx, val: 0x%llx\n",
-				    ((u64)smmu->base_pa + offset), val);
-	} else {
-		return -EINVAL; /* Invalid access size */
-	}
-	return 0;
+	/* Default-deny all other Global Region 1 writes */
+	return -EPERM;
 }
 
 /* Device access and fault handling */

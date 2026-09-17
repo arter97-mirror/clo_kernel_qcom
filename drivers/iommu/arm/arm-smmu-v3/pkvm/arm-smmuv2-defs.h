@@ -189,6 +189,15 @@ enum arm_smmu_cbar_type {
 #define ARM_SMMU_CBA2R_VMID16 GENMASK(31, 16)
 #define ARM_SMMU_CBA2R_VA64 BIT(0)
 
+/* Inverse helpers: get CBA2R index from a GR1 offset */
+#define ARM_SMMU_GR1_CBA2R_FIRST       ARM_SMMU_GR1_CBA2R(0)
+#define ARM_SMMU_GR1_CBA2R_INDEX(off)  (((off) - ARM_SMMU_GR1_CBA2R_FIRST) >> 2)
+/* Validate a CBA2R offset given runtime max (num_cbar) */
+#define ARM_SMMU_GR1_CBA2R_VALID(off, max) \
+	((off) >= ARM_SMMU_GR1_CBA2R_FIRST && \
+	 ((off) - ARM_SMMU_GR1_CBA2R_FIRST) < ((max) << 2) && \
+	 !((off) & 0x3))
+
 #define ARM_SMMU_CB_SCTLR 0x0
 #define ARM_SMMU_SCTLR_S1_ASIDPNE BIT(12)
 #define ARM_SMMU_SCTLR_CFCFG BIT(7)
