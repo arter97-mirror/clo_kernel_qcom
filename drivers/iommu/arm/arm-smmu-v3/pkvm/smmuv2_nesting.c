@@ -255,12 +255,17 @@ static int smmuv2_read_global_region_0(struct smmu_v2_nested *smmu, u64 offset, 
 		*buf = (*buf & ~ARM_SMMU_ID0_NUMSMRG) | (smmu->num_smr & ARM_SMMU_ID0_NUMSMRG);
 		*buf = (*buf & ~ARM_SMMU_ID0_S2TS);
 		*buf = (*buf & ~ARM_SMMU_ID0_NTS);
+		*buf = (*buf & ~ARM_SMMU_ID0_EXIDS);
 		smmu_v2_debug_print("smmu_v2_id0_read, addr: %llx, buf: %llx\n",
 				    smmu->base_pa + offset, *buf);
 	} else if (offset == ARM_SMMU_GR0_ID1) {
 		*buf = (*buf & ~ARM_SMMU_ID1_NUMCB) | (smmu->num_cb & ARM_SMMU_ID1_NUMCB);
 		*buf = (*buf & ~ARM_SMMU_ID1_NUMS2CB);
 		smmu_v2_debug_print("smmu_v2_id1_read, addr: %llx, buf: %llx\n",
+				    smmu->base_pa + offset, *buf);
+	} else if (offset == ARM_SMMU_GR0_ID2) {
+		*buf &= ~ARM_SMMU_ID2_VMID16;
+		smmu_v2_debug_print("smmu_v2_id2_read, addr: %llx, buf: %llx\n",
 				    smmu->base_pa + offset, *buf);
 	} else if (offset >= ARM_SMMU_GR0_SMR(0) &&
 		   offset <= ARM_SMMU_GR0_SMR(ARM_SMMU_MAX_SMRS - 1)) {
@@ -345,9 +350,12 @@ static int smmuv2_write_global_region_0(struct smmu_v2_nested *smmu,
 
 		/*
 		 * Enforce SMMU enabled (CLIENTPD=0), unidentified stream fault
-		 * (USFCFG=1), and stream match conflict fault (SMCFCFG=1).
+		 * (USFCFG=1), stream match conflict fault (SMCFCFG=1), and
+		 * disallow extended stream IDs (EXIDENABLE=0) and 16-bit VMIDs
+		 * (VMID16EN=0).
 		 */
-		hw_val &= ~ARM_SMMU_sCR0_CLIENTPD;
+		hw_val &= ~(ARM_SMMU_sCR0_CLIENTPD | ARM_SMMU_sCR0_EXIDENABLE |
+			    ARM_SMMU_sCR0_VMID16EN);
 		hw_val |= ARM_SMMU_sCR0_USFCFG | ARM_SMMU_sCR0_SMCFCFG;
 		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, hw_val);
 		return 0;
@@ -381,14 +389,15 @@ static int smmuv2_write_global_region_1(struct smmu_v2_nested *smmu,
 	/*
 	 * Handle CBA2R registers: only allow writes to host-owned stage-1
 	 * context banks (< num_cbar) so the host cannot clear VA64 on
-	 * CBA2R(host_s2_cb_idx) or firmware context banks.
+	 * CBA2R(host_s2_cb_idx) or firmware context banks. Also clear VMID16
+	 * to prevent upper VMID bits from diverging from HOST_S2_VMID.
 	 */
 	if (offset >= ARM_SMMU_GR1_CBA2R(0) &&
 	    offset <= ARM_SMMU_GR1_CBA2R(ARM_SMMU_MAX_CBARS - 1)) {
 		if (!ARM_SMMU_GR1_CBA2R_VALID(offset, smmu->num_cbar))
 			return -EINVAL;
 
-		arm_smmu_gr1_write(smmu, offset, (u32)val);
+		arm_smmu_gr1_write(smmu, offset, (u32)val & ~ARM_SMMU_CBA2R_VMID16);
 		return 0;
 	}
 
@@ -722,10 +731,13 @@ static int hw_profile_init(void)
 		smmu_v2_debug_print("After reservation, available guests' CBs: %d & CBARs: %d\n",
 				    smmu->num_cb, smmu->num_cbar);
 
-		/* Enable SMMU by default.
-		 * And enable unidentified stream and Stream match conflicts by default
+		/*
+		 * Enable SMMU by default, enable unidentified stream and
+		 * stream match conflicts by default, and disallow EXIDENABLE
+		 * and VMID16EN.
 		 */
-		scr_val &= ~(ARM_SMMU_sCR0_CLIENTPD);
+		scr_val &= ~(ARM_SMMU_sCR0_CLIENTPD | ARM_SMMU_sCR0_EXIDENABLE |
+			     ARM_SMMU_sCR0_VMID16EN);
 		scr_val |= FIELD_PREP(ARM_SMMU_sCR0_USFCFG, 1) |
 			   FIELD_PREP(ARM_SMMU_sCR0_SMCFCFG, 1);
 		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, scr_val);
