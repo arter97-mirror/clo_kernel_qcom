@@ -50,8 +50,8 @@ static void smmuv2_cbar_read(struct smmu_v2_nested *smmu, u32 offset, u64 *buf)
 
 	/* If hardware has S1_TRANS_S2_TRANS, convert back to S1_TRANS_S2_BYPASS for EL1 */
 	if (current_type == CBAR_TYPE_S1_TRANS_S2_TRANS) {
-		/* Clear TYPE and VMID fields, and bits [8:15] */
-		*buf &= ~(ARM_SMMU_CBAR_TYPE | ARM_SMMU_CBAR_VMID | 0xFF00);
+		/* Clear TYPE, VMID, and CBNDX fields (bits [8:15]) */
+		*buf &= ~(ARM_SMMU_CBAR_TYPE | ARM_SMMU_CBAR_VMID | ARM_SMMU_CBAR_CBNDX);
 
 		/* Set BYPASS type */
 		*buf |= FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_BYPASS);
@@ -222,18 +222,18 @@ static int smmuv2_cbar_write(struct smmu_v2_nested *smmu, u32 offset, u32 val)
 	if (current_type == CBAR_TYPE_S2_TRANS ||
 		current_type == CBAR_TYPE_S1_TRANS_S2_BYPASS ||
 		current_type == CBAR_TYPE_S1_TRANS_S2_TRANS) {
-		/* Clear the TYPE, VMID, and S1-specific fields (bits [8:15]) in hardware value */
-		hw_val &= ~(ARM_SMMU_CBAR_TYPE | ARM_SMMU_CBAR_VMID |
-			    ARM_SMMU_CBAR_S1_MEMATTR | ARM_SMMU_CBAR_S1_BPSHCFG);
-
-		/* Set type to S1_TRANS_S2_TRANS for nested translation */
-		hw_val |= FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_TRANS);
-
-		/* Set VMID to HOST_S2_VMID (0x3) */
-		hw_val |= FIELD_PREP(ARM_SMMU_CBAR_VMID, HOST_S2_VMID);
-
-		/* Set bits [8:15] to host_s2_cb_idx (S2 host context bank) */
-		hw_val |= (smmu->host_s2_cb_idx << 8);
+		/*
+		 * Build hardware CBAR from scratch keeping only IRPTNDX so
+		 * host-supplied bits in [23:18] or [15:8] (e.g. bits [11:10]
+		 * outside S1_MEMATTR | S1_BPSHCFG) cannot corrupt CBNDX.
+		 */
+		hw_val = (val & ARM_SMMU_CBAR_IRPTNDX) |
+			 FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_TRANS) |
+			 FIELD_PREP(ARM_SMMU_CBAR_CBNDX, smmu->host_s2_cb_idx) |
+			 FIELD_PREP(ARM_SMMU_CBAR_VMID, HOST_S2_VMID);
+	} else {
+		hw_val = (val & ARM_SMMU_CBAR_IRPTNDX) |
+			 FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S1_TRANS_S2_FAULT);
 	}
 
 	/* Write the (possibly modified) value to hardware */
