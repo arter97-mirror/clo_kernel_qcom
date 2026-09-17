@@ -591,6 +591,31 @@ static bool smmuv2_owns_iommu(struct kvm_hyp_iommu *iommu)
 	return false;
 }
 
+static struct kvm_hyp_iommu *smmuv2_get_iommu_by_id(pkvm_handle_t smmu_id)
+{
+	struct smmu_v2_nested *smmu;
+
+	for_each_smmu(smmu)
+		if (smmu->base_pa == smmu_id)
+			return &smmu->iommu;
+
+	return NULL;
+}
+
+static int smmuv2_id_to_token(pkvm_handle_t smmu_id, u64 *out_token)
+{
+	struct smmu_v2_nested *smmu;
+
+	for_each_smmu(smmu) {
+		if (smmu->base_pa == smmu_id) {
+			*out_token = smmu->base_pa;
+			return 0;
+		}
+	}
+
+	return -ENODEV;
+}
+
 /* TLB maintenance */
 /* Wait for any pending TLB invalidations to complete */
 static int __arm_smmu_tlb_sync(struct smmu_v2_nested *smmu, int cb_idx,
@@ -1186,6 +1211,8 @@ const struct smmu_vendor_callbacks v2callbacks = {
 	.get_cfg = NULL, /* fix me */
 	.post_init = smmu_attach_stage_2,
 	.dabt_hdl = smmuv2_nesting_dabt_handler,
+	.get_iommu_by_id = smmuv2_get_iommu_by_id,
+	.get_iommu_token_by_id = smmuv2_id_to_token,
 	.attach_dev = smmuv2_attach_dev,
 	.detach_dev = smmuv2_detach_dev,
 };

@@ -175,7 +175,35 @@ static int qcom_smmu_nestinc_init_pgt(struct smmu_nested_domain *smmu_domain)
 
 static struct kvm_hyp_iommu *qcom_nesting_id_to_iommu(pkvm_handle_t smmu_id)
 {
+	struct kvm_hyp_iommu *iommu;
+	int i;
+
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->get_iommu_by_id)
+			continue;
+
+		iommu = registered_drivers[i]->callbacks->get_iommu_by_id(smmu_id);
+		if (iommu)
+			return iommu;
+	}
+
 	return NULL;
+}
+
+static int qcom_nesting_id_to_token(pkvm_handle_t smmu_id, u64 *out_token)
+{
+	int i, ret = -ENODEV;
+
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->get_iommu_token_by_id)
+			continue;
+
+		ret = registered_drivers[i]->callbacks->get_iommu_token_by_id(smmu_id, out_token);
+		if (ret != -ENODEV)
+			return ret;
+	}
+
+	return ret;
 }
 
 static int qcom_smmu_nesting_alloc_domain(struct kvm_hyp_iommu_domain *domain, int type)
@@ -452,6 +480,7 @@ bool qcom_dispatcher_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 struct kvm_iommu_ops qcom_smmu_hyp_nesting_ops = {
 	.init				= qcom_smmu_nesting_init,
 	.get_iommu_by_id		= qcom_nesting_id_to_iommu,
+	.get_iommu_token_by_id		= qcom_nesting_id_to_token,
 	.alloc_domain			= qcom_smmu_nesting_alloc_domain,
 	.free_domain			= qcom_smmu_nesting_free_domain,
 	.dabt_handler                   = qcom_dispatcher_dabt_handler,

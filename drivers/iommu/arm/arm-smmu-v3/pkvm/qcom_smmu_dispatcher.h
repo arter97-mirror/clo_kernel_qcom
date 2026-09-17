@@ -55,6 +55,8 @@ struct smmu_vendor_callbacks {
 	void (*get_cfg)(struct io_pgtable_cfg *ncfg);
 	int (*post_init)(void);
 	bool (*dabt_hdl)(struct user_pt_regs *regs, u64 esr, u64 addr);
+	struct kvm_hyp_iommu *(*get_iommu_by_id)(pkvm_handle_t smmu_id);
+	int (*get_iommu_token_by_id)(pkvm_handle_t smmu_id, u64 *out_token);
 	int (*attach_dev)(struct kvm_hyp_iommu *iommu,
 			  struct kvm_hyp_iommu_domain *domain,
 			  u32 sid, u32 pasid, u32 pasid_bits, unsigned long flags);
