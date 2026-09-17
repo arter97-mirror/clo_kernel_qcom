@@ -79,6 +79,12 @@ struct child_spec {
 	u32		enable_mask;
 };
 
+struct spel_desc {
+	struct child_spec *spec;
+	size_t num_specs;
+	bool dynamic_enable_support;
+};
+
 static struct child_spec children_nodes[] = {
 	{ CHILD_NODE_SYS,       CHILD_NODE_SYS_NAME,       0x40, 4, ENABLE_SYS_BIT_MASK   },
 	{ CHILD_NODE_SOC,       CHILD_NODE_SOC_NAME,       0x00, 4, ENABLE_SOC_BIT_MASK   },
@@ -91,6 +97,36 @@ static struct child_spec children_nodes[] = {
 	{ CHILD_NODE_SOC_INFRA, CHILD_NODE_SOC_INFRA_NAME, 0x18, 0, ENABLE_INFRA_BIT_MASK },
 	{ CHILD_NODE_SOC_DRAM,  CHILD_NODE_SOC_DRAM_NAME,  0x1C, 0, ENABLE_DRAM_BIT_MASK  },
 	{ CHILD_NODE_SOC_MODEM, CHILD_NODE_SOC_MODEM_NAME, 0x68, 0, ENABLE_MODEM_BIT_MASK },
+};
+
+static struct child_spec children_nodes_glymur[] = {
+	{ CHILD_NODE_SYS,       CHILD_NODE_SYS_NAME,       0x40, 4 },
+	{ CHILD_NODE_SOC,       CHILD_NODE_SOC_NAME,       0x00, 4 },
+	{ CHILD_NODE_SOC_CL0,   CHILD_NODE_SOC_CL0_NAME,   0x5C, 0 },
+	{ CHILD_NODE_SOC_CL1,   CHILD_NODE_SOC_CL1_NAME,   0x60, 0 },
+	{ CHILD_NODE_SOC_CL2,   CHILD_NODE_SOC_CL2_NAME,   0x64, 0 },
+	{ CHILD_NODE_SOC_IGPU,  CHILD_NODE_SOC_IGPU_NAME,  0x08, 0 },
+	{ CHILD_NODE_SOC_DGPU,  CHILD_NODE_SOC_DGPU_NAME,  0x44, 0 },
+	{ CHILD_NODE_SOC_NSP,   CHILD_NODE_SOC_NSP_NAME,   0x0C, 0 },
+	{ CHILD_NODE_SOC_MMCX,  CHILD_NODE_SOC_MMCX_NAME,  0x10, 0 },
+	{ CHILD_NODE_SOC_INFRA, CHILD_NODE_SOC_INFRA_NAME, 0x18, 0 },
+	{ CHILD_NODE_SOC_DRAM,  CHILD_NODE_SOC_DRAM_NAME,  0x1C, 0 },
+	{ CHILD_NODE_SOC_MDM,   CHILD_NODE_SOC_MDM_NAME,   0x48, 0 },
+	{ CHILD_NODE_SOC_WLAN,  CHILD_NODE_SOC_WLAN_NAME,  0x4C, 0 },
+	{ CHILD_NODE_SOC_USB1,  CHILD_NODE_SOC_USB1_NAME,  0x50, 0 },
+	{ CHILD_NODE_SOC_USB2,  CHILD_NODE_SOC_USB2_NAME,  0x54, 0 },
+	{ CHILD_NODE_SOC_USB3,  CHILD_NODE_SOC_USB3_NAME,  0x58, 0 },
+};
+
+static const struct spel_desc hawi_desc = {
+	.spec = children_nodes,
+	.num_specs = ARRAY_SIZE(children_nodes),
+	.dynamic_enable_support = true,
+};
+static const struct spel_desc glymur_desc = {
+	.spec = children_nodes_glymur,
+	.num_specs = ARRAY_SIZE(children_nodes_glymur),
+	.dynamic_enable_support = false,
 };
 
 struct constraint_spec {
@@ -119,6 +155,7 @@ static struct spel_units budget_units;
 static struct spel_units report_units;
 static LIST_HEAD(spel_list);
 static DEFINE_MUTEX(spel_list_lock);
+
 void *ipc_log;
 
 struct spel_hierarchy {
@@ -127,6 +164,7 @@ struct spel_hierarchy {
 	struct powercap_control_type *pct;
 	struct spel_node *hierarchy;
 	struct spel *root;
+	const struct spel_desc *hw_desc;
 };
 
 static struct spel_hierarchy *sh;
@@ -478,7 +516,7 @@ remove_priority:
 
 static int get_spel_count(void)
 {
-	return ARRAY_SIZE(children_nodes);
+	return sh->hw_desc->num_specs;
 }
 
 static int get_constraint_count(void)
@@ -575,12 +613,15 @@ static void spel_init_constraints(void __iomem *address)
 			constraints[i].supported = true;
 
 	for (int i = 0; i < get_spel_count(); ++i)
-		if (children_nodes[i].nr_constraints)
-			update_constraints(&children_nodes[i]);
+		if (sh->hw_desc->spec[i].nr_constraints)
+			update_constraints(&sh->hw_desc->spec[i]);
 }
 
 static int hw_spel_set_enable(bool enable)
 {
+	if (!sh->hw_desc->dynamic_enable_support)
+		return 0;
+
 	if (enable)
 		global_enable_mask |= ENABLE_SPEL_BIT_MASK;
 	else
@@ -601,6 +642,9 @@ static int hw_spel_get_enable(bool *enable)
 {
 	u32 val;
 
+	if (!sh->hw_desc->dynamic_enable_support)
+		return 0;
+
 	val = spel_readl(MMIO_OFFSET(base_address.constraints, ENABLE_SPEL_OFFSET));
 
 	*enable = (bool)((val & ENABLE_SPEL_BIT_MASK) != 0);
@@ -616,6 +660,9 @@ static int hw_spel_get_enable(bool *enable)
 static int hw_zone_set_enable(struct spel *spel, bool enable)
 {
 	u32 val;
+
+	if (!sh->hw_desc->dynamic_enable_support)
+		return 0;
 
 	if (enable)
 		global_enable_mask |= spel->enable_bitmask;
@@ -654,6 +701,9 @@ static int hw_zone_set_enable(struct spel *spel, bool enable)
 static int hw_zone_get_enable(struct spel *spel, bool *enable)
 {
 	u32 val;
+
+	if (!sh->hw_desc->dynamic_enable_support)
+		return 0;
 
 	val = spel_readl(MMIO_OFFSET(base_address.constraints, ENABLE_SPEL_OFFSET));
 
@@ -1324,19 +1374,22 @@ static int of_each_spel_child(void)
 {
 	struct spel_node *sys = NULL;
 	struct spel_node *soc = NULL;
+	struct child_spec *spec;
 
 	for (int i = 0; i < sh->count; ++i) {
+		spec = &sh->hw_desc->spec[i];
+
 		strscpy(sh->hierarchy[sh->cur_index].name,
-			children_nodes[i].name, SPEL_NAME_MAX);
+			spec->name, SPEL_NAME_MAX);
 		sh->hierarchy[sh->cur_index].type =
 			SPEL_NODE_VIRTUAL;
 		sh->hierarchy[sh->cur_index].enable_bitmask =
-			children_nodes[i].enable_mask;
+			spec->enable_mask;
 		sh->hierarchy[sh->cur_index].address = MMIO_OFFSET(
-			base_address.nodes, children_nodes[i].offset);
+			base_address.nodes, spec->offset);
 		sh->hierarchy[sh->cur_index].nr_constraints =
-			children_nodes[i].nr_constraints;
-		switch (children_nodes[i].index) {
+			spec->nr_constraints;
+		switch (spec->index) {
 		case CHILD_NODE_SYS:
 			sys = &sh->hierarchy[sh->cur_index];
 			sh->hierarchy[sh->cur_index].parent = NULL;
@@ -1354,6 +1407,12 @@ static int of_each_spel_child(void)
 		case CHILD_NODE_SOC_INFRA:
 		case CHILD_NODE_SOC_DRAM:
 		case CHILD_NODE_SOC_MODEM:
+		case CHILD_NODE_SOC_DGPU:
+		case CHILD_NODE_SOC_MDM:
+		case CHILD_NODE_SOC_WLAN:
+		case CHILD_NODE_SOC_USB1:
+		case CHILD_NODE_SOC_USB2:
+		case CHILD_NODE_SOC_USB3:
 			sh->hierarchy[sh->cur_index].parent = soc;
 			break;
 		}
@@ -1429,11 +1488,18 @@ static int spel_init(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	spel_init_constraints((void __iomem *)base_address.config);
-
 	sh = kzalloc(sizeof(*sh), GFP_KERNEL);
 	if (!sh)
 		return -ENOMEM;
+
+	sh->hw_desc = of_device_get_match_data(&pdev->dev);
+	if (!sh->hw_desc) {
+		dev_err(&pdev->dev, "No matching SPEL hardware descriptor\n");
+		ret = -ENODEV;
+		goto release_sh;
+	}
+
+	spel_init_constraints((void __iomem *)base_address.config);
 
 	ret = get_spel_count();
 	if (ret <= 1) {
@@ -1525,7 +1591,8 @@ static void spel_device_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id qti_spel_device_match[] = {
-	{.compatible = "qcom,power-telemetry-spel"},
+	{.compatible = "qcom,power-telemetry-spel", .data = &hawi_desc},
+	{.compatible = "qcom,glymur-spel", .data = &glymur_desc},
 	{}
 };
 
