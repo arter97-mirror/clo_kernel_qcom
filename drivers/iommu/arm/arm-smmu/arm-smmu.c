@@ -4002,6 +4002,7 @@ out_power_off:
 static void arm_smmu_device_shutdown(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
+	int i;
 
 	if (!bitmap_empty(smmu->context_map, ARM_SMMU_MAX_CBS))
 		dev_notice(&pdev->dev, "disabling translation\n");
@@ -4012,6 +4013,27 @@ static void arm_smmu_device_shutdown(struct platform_device *pdev)
 	arm_smmu_rpm_get(smmu);
 	/* Turn the thing off */
 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, ARM_SMMU_sCR0_CLIENTPD);
+
+	/*
+	 * Free the page-table ops for all active secure-VMID domains here so
+	 * that io_pgtable_pool_release calls io_pgtable_hyp_unassign_page() for
+	 * every pooled page before the GVM hands control back to the hypervisor.
+	 */
+	for (i = 0; i < smmu->num_context_banks; i++) {
+		struct arm_smmu_domain *smmu_domain;
+
+		if (!smmu->cbs[i].cfg)
+			continue;
+		smmu_domain = container_of(smmu->cbs[i].cfg,
+					   struct arm_smmu_domain, cfg);
+		if (!arm_smmu_has_secure_vmid(smmu_domain))
+			continue;
+		if (!smmu_domain->pgtbl_ops)
+			continue;
+		qcom_free_io_pgtable_ops(smmu_domain->pgtbl_ops);
+		smmu_domain->pgtbl_ops = NULL;
+	}
+
 	arm_smmu_rpm_put(smmu);
 
 	if (pm_runtime_enabled(smmu->dev)) {
