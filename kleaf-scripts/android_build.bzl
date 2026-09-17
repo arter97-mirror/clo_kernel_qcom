@@ -57,8 +57,7 @@ def define_single_android_build(
         ddk_config_deps = None,
         implicit_config_fragment = None,
         config_path = None,
-        module_lists_name = None,
-        desktop_build = None):
+        module_lists_name = None):
     stem = "{}_{}".format(name, variant)
     module_lists_name = module_lists_name or name
 
@@ -296,9 +295,6 @@ def define_single_android_build(
         ":{}_{}_dtbo_image".format(stem, dtbo_img["name"])
         for dtbo_img in custom_dtbo_img_list
     ]
-
-    if desktop_build != None:
-        dist_data.append(desktop_build)
 
     vendor_dlkm_module_unprotected_list = get_unprotected_vendor_modules_list(stem)
     vendor_unprotected_dlkm = " ".join(vendor_dlkm_module_unprotected_list)
