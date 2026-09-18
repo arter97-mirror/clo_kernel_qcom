@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __QCOM_IOMMU_UTIL_H
@@ -38,6 +38,14 @@
 /* Attributes are not supported, so render them ineffective. */
 #define IOMMU_SYS_CACHE		(0)
 #define IOMMU_SYS_CACHE_NWA	(0)
+#define IOMMU_SYS_CACHE_NRA	(0)
+#else
+#ifndef IOMMU_SYS_CACHE_NWA
+#define IOMMU_SYS_CACHE_NWA	(0)
+#endif
+#ifndef IOMMU_SYS_CACHE_NRA
+#define IOMMU_SYS_CACHE_NRA	(0)
+#endif
 #endif
 
 /* vendor iommu fault flags */
