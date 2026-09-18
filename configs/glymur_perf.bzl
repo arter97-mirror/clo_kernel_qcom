@@ -152,6 +152,7 @@ glymur_perf_config = {
     "CONFIG_QCOM_SPMI_TEMP_ALARM": "m",
     "CONFIG_QCOM_STATS": "m",
     "CONFIG_QCOM_SYSMON": "m",
+    "CONFIG_QCOM_TSENS": "m",
     "CONFIG_QCOM_TZMEM": "m",
     "CONFIG_QCOM_TZMEM_FFA": "y",
     "CONFIG_QCOM_TZMEM_MODE_SHMBRIDGE": "y",
