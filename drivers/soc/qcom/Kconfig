@@ -1271,4 +1271,13 @@ config QTI_CRYPTO_FDE
           encryption. this is control only for enable inline crypto engine for Full
           Disk Encryption.
 
+config QCOM_WEAR_CONFIG
+	tristate "Qualcomm Wear configuration driver"
+	depends on NVMEM
+	help
+	  This driver provides a stable sysfs class interface to bridge
+	  userspace clients and kernel subsystems on Qualcomm wearable platforms.
+	  Platform parameters are exposed as class attributes that
+	  can be queried and updated at runtime.
+
 endmenu

@@ -300,9 +300,7 @@ static void drm_dp_cec_unregister_work(struct work_struct *work)
 void drm_dp_cec_set_edid(struct drm_dp_aux *aux, const struct edid *edid)
 {
 	struct drm_connector *connector = aux->cec.connector;
-	u32 cec_caps = CEC_CAP_DEFAULTS | CEC_CAP_NEEDS_HPD |
-		       CEC_CAP_CONNECTOR_INFO;
-	struct cec_connector_info conn_info;
+	u32 cec_caps = CEC_CAP_DEFAULTS | CEC_CAP_NEEDS_HPD;
 	unsigned int num_las = 1;
 	u8 cap;
 
@@ -349,9 +347,6 @@ void drm_dp_cec_set_edid(struct drm_dp_aux *aux, const struct edid *edid)
 		aux->cec.adap = NULL;
 		goto unlock;
 	}
-
-	cec_fill_conn_info_from_drm(&conn_info, connector);
-	cec_s_conn_info(aux->cec.adap, &conn_info);
 
 	if (cec_register_adapter(aux->cec.adap, connector->dev->dev)) {
 		cec_delete_adapter(aux->cec.adap);
@@ -419,7 +414,8 @@ EXPORT_SYMBOL(drm_dp_cec_unset_edid);
 void drm_dp_cec_register_connector(struct drm_dp_aux *aux,
 				   struct drm_connector *connector)
 {
-	WARN_ON(aux->cec.adap);
+	if (WARN_ON(aux->cec.adap))
+		return;
 	if (WARN_ON(!aux->transfer))
 		return;
 	aux->cec.connector = connector;

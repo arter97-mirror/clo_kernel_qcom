@@ -149,6 +149,7 @@ def define_monaco():
         "drivers/soc/qcom/sps/sps_drv.ko",
         "drivers/soc/qcom/sysmon_subsystem_stats.ko",
         "drivers/soc/qcom/wcd_usbss_i2c.ko",
+        "drivers/soc/qcom/wear_config.ko",
         "drivers/spi/spi-msm-geni.ko",
         "drivers/spmi/spmi-pmic-arb.ko",
         "drivers/thermal/qcom/bcl_off_cdev.ko",
