@@ -779,6 +779,28 @@ static void arm_smmu_tlb_sync_context(struct smmu_v2_nested *smmu)
 	}
 }
 
+static void arm_smmu_tlb_sync_global(struct smmu_v2_nested *smmu)
+{
+	unsigned int inc, delay;
+	u32 reg;
+
+	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sTLBGSYNC, QCOM_DUMMY_VAL);
+
+	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
+		reg = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_sTLBGSTATUS);
+		if (!(reg & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
+			return;
+
+		pkvm_udelay(inc);
+
+		if (inc < TLB_LOOP_INC_MAX)
+			inc *= 2;
+	}
+
+	/* Fatal assertion in case of TLB sync failure */
+	BUG_ON(1);
+}
+
 static void arm_smmu_tlb_inv_range_s2(struct smmu_v2_nested *smmu,
 				      unsigned long iova, size_t size,
 				      size_t granule, void *cookie, int reg)
@@ -802,6 +824,8 @@ static void arm_smmu_tlb_add_page_s2(struct iommu_iotlb_gather *gather,
 		arm_smmu_tlb_inv_range_s2(smmu, iova, granule, granule, cookie,
 					  ARM_SMMU_CB_S2_TLBIIPAS2L);
 		arm_smmu_tlb_sync_context(smmu);
+		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, HOST_S2_VMID);
+		arm_smmu_tlb_sync_global(smmu);
 		kvm_iommu_unlock(&smmu->iommu);
 	}
 }
@@ -816,6 +840,8 @@ static void arm_smmu_tlb_inv_walk_s2(unsigned long iova, size_t size,
 		arm_smmu_tlb_inv_range_s2(smmu, iova, size, granule, cookie,
 					  ARM_SMMU_CB_S2_TLBIIPAS2);
 		arm_smmu_tlb_sync_context(smmu);
+		arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIVMIDS1, HOST_S2_VMID);
+		arm_smmu_tlb_sync_global(smmu);
 		kvm_iommu_unlock(&smmu->iommu);
 	}
 }
