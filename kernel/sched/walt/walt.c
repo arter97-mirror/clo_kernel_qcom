@@ -684,7 +684,7 @@ static inline u64 freq_policy_load(struct rq *rq, unsigned int *reason,
 	struct walt_sched_cluster *cluster = wrq->cluster;
 	u64 aggr_grp_load = cluster->aggr_grp_load;
 	u64 load, tt_load = 0, kload = 0;
-	struct task_struct *cpu_ksoftirqd = per_cpu(ksoftirqd, cpu_of(rq));
+	struct task_struct *cpu_ksoftirqd;
 
 	if (walt_rotation_enabled) {
 		load = sched_ravg_window;
@@ -714,6 +714,17 @@ static inline u64 freq_policy_load(struct rq *rq, unsigned int *reason,
 			mult_frac(wrq->grp_time.prev_runnable_sum, sysctl_topapp_weight_pct, 100);
 	}
 
+	/*
+	 * ksoftirqd for a remote CPU can be concurrently torn down/freed while
+	 * we inspect it here (this runs from irq-work / load-sync context on a
+	 * different CPU than @rq). Hold the RCU read-side lock across the whole
+	 * dereference: task_structs are freed via call_rcu()
+	 * (delayed_put_task_struct), so an RCU read-side critical section
+	 * guarantees the task cannot be freed while we access it. Without this,
+	 * KASAN/MTE flags a use-after-free (tag-check fault) on the task_struct.
+	 */
+	rcu_read_lock();
+	cpu_ksoftirqd = READ_ONCE(per_cpu(ksoftirqd, cpu_of(rq)));
 	if (cpu_ksoftirqd && READ_ONCE(cpu_ksoftirqd->__state) == TASK_RUNNING) {
 		kload = task_load(cpu_ksoftirqd);
 		if (kload > load) {
@@ -721,6 +732,7 @@ static inline u64 freq_policy_load(struct rq *rq, unsigned int *reason,
 			*reason = CPUFREQ_REASON_KSOFTIRQD_BIT;
 		}
 	}
+	rcu_read_unlock();
 
 	tt_load = top_task_load(rq);
 	if (tt_load > load) {
