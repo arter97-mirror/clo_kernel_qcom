@@ -5917,6 +5917,7 @@ static ssize_t dynamic_disable_store(struct device *dev, struct device_attribute
 			return count;
 		}
 
+		mdwc->dynamic_disable = true;
 		flush_work(&mdwc->sm_work);
 		set_bit(ID, &mdwc->inputs);
 		clear_bit(B_SESS_VLD, &mdwc->inputs);
@@ -5924,7 +5925,6 @@ static ssize_t dynamic_disable_store(struct device *dev, struct device_attribute
 		flush_work(&mdwc->sm_work);
 		while (test_bit(WAIT_FOR_LPM, &mdwc->inputs))
 			msleep(20);
-		mdwc->dynamic_disable = true;
 		dbg_log_string("Dynamic USB disable\n");
 	} else {
 		if (!mdwc->dynamic_disable) {
