@@ -698,6 +698,7 @@ struct dwc3_msm {
 	bool			disable_xhci_runtime_pm;
 
 	bool			wakeup_source;
+	bool			in_concurrent_mode;
 };
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
@@ -5686,6 +5687,37 @@ static int dwc3_msm_usb_role_switch_set_role(struct usb_role_switch *sw, enum us
 	return dwc3_msm_set_role(mdwc, role);
 }
 
+int dwc3_msm_set_ss_mode(struct device *dev, bool mode)
+{
+	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
+	struct dwc3 *dwc = NULL;
+
+	if (mdwc == NULL) {
+		dev_err(dev, "dwc3-msm is not initialized yet.\n");
+		return -EAGAIN;
+	}
+
+	if (mdwc->dwc3)
+		dwc = platform_get_drvdata(mdwc->dwc3);
+
+	if (dwc == NULL) {
+		dev_err(dev, "dwc3 controller is not initialized yet.\n");
+		return -EAGAIN;
+	}
+
+	if (mode) {//device
+		mdwc->vbus_active = true;
+		mdwc->id_state = DWC3_ID_FLOAT;
+	} else {
+		mdwc->vbus_active = false;
+		mdwc->id_state = DWC3_ID_GROUND;
+	}
+
+	dwc3_ext_event_notify(mdwc);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(dwc3_msm_set_ss_mode);
+
 static ssize_t orientation_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -6925,7 +6957,10 @@ static int dwc3_msm_parse_params(struct platform_device *pdev, struct device_nod
 				"qcom,dis-sending-cm-l1-quirk");
 
 	mdwc->disable_force_pull_up_down_quirk = of_property_read_bool(node,
-					"qcom,disable-force-pull-up-down-quirk");
+				"qcom,disable-force-pull-up-down-quirk");
+
+	mdwc->in_concurrent_mode = of_property_read_bool(node,
+				"qcom,usb-dp-concurrent-mode-enable");
 
 	mdwc->disable_xhci_runtime_pm = of_property_read_bool(node,
 			"qcom,disable-xhci-runtime-pm");
