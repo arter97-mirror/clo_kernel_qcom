@@ -142,6 +142,7 @@ lahaina_perf_config = {
     "CONFIG_NVMEM_QCOM_QFPROM": "m",
     "CONFIG_NVMEM_SPMI_SDAM": "m",
     "CONFIG_NVMEM_SYSFS": "n",
+    "CONFIG_PARADA_PD_FL7112": "m",
     "CONFIG_PCI_MSM": "m",
     "CONFIG_PDR_INDICATION_NOTIF_TIMEOUT": "9000",
     "CONFIG_PHY_QCOM_UFS": "m",
