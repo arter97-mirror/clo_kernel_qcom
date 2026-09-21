@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries. */
 
 #ifndef __MSM_PCIE_H
 #define __MSM_PCIE_H
@@ -218,6 +218,18 @@ int msm_pcie_debug_info(struct pci_dev *dev, u32 option, u32 base,
 int msm_pcie_reg_dump(struct pci_dev *pci_dev, u8 *buff, u32 len);
 
 /*
+ * msm_pcie_dsp_link_control - enable/disable DSP link
+ * @pci_dev:	pci device structure, endpoint of this DSP
+ * @link_enable true to enable, false to disable
+ *
+ * This function enable(include training)/disable link between PCIe
+ * switch DSP and endpoint attached.
+ * Return: 0 on success, negative value on error
+ */
+int msm_pcie_dsp_link_control(struct pci_dev *pci_dev,
+				    bool link_enable);
+
+/*
  * msm_pcie_fmd_enable - deassert perst and enable FMD bit
  * @pci_dev:	pci device structure
  *
@@ -282,6 +294,12 @@ static inline int msm_pcie_debug_info(struct pci_dev *dev, u32 option, u32 base,
 }
 
 static inline int msm_pcie_reg_dump(struct pci_dev *pci_dev, u8 *buff, u32 len)
+{
+	return -ENODEV;
+}
+
+static inline int msm_pcie_dsp_link_control(struct pci_dev *pci_dev,
+						  bool link_enable)
 {
 	return -ENODEV;
 }
