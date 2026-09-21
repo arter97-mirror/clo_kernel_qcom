@@ -28,6 +28,11 @@ static int stmmac_adjust_freq(struct ptp_clock_info *ptp, long scaled_ppm)
 	unsigned long flags;
 	u32 addend;
 
+	if (priv->plat->mac_suspended) {
+		pr_err("eth clocks suspended while accessing ptp register\n");
+		return 0;
+	}
+
 	addend = adjust_by_scaled_ppm(priv->default_addend, scaled_ppm);
 
 	spin_lock_irqsave(&priv->ptp_lock, flags);
@@ -55,6 +60,11 @@ static int stmmac_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 	int neg_adj = 0;
 	bool xmac, est_rst = false;
 	int ret;
+
+	if (priv->plat->mac_suspended) {
+		pr_err("eth clocks suspended while accessing ptp register\n");
+		return 0;
+	}
 
 	xmac = priv->plat->has_gmac4 || priv->plat->has_xgmac;
 
@@ -128,6 +138,11 @@ static int stmmac_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts)
 	unsigned long flags;
 	u64 ns = 0;
 
+	if (priv->plat->mac_suspended) {
+		pr_err("eth clocks suspended while accessing ptp register\n");
+		return 0;
+	}
+
 	spin_lock_irqsave(&priv->ptp_lock, flags);
 	stmmac_get_systime(priv, priv->ptpaddr, &ns);
 	spin_unlock_irqrestore(&priv->ptp_lock, flags);
@@ -152,6 +167,10 @@ static int stmmac_set_time(struct ptp_clock_info *ptp,
 	struct stmmac_priv *priv =
 	    container_of(ptp, struct stmmac_priv, ptp_clock_ops);
 	unsigned long flags;
+	if (priv->plat->mac_suspended) {
+		pr_err("eth clocks suspended while accessing ptp register\n");
+		return 0;
+	}
 
 	spin_lock_irqsave(&priv->ptp_lock, flags);
 	stmmac_init_systime(priv, priv->ptpaddr, ts->tv_sec, ts->tv_nsec);
@@ -172,6 +191,10 @@ static int stmmac_enable(struct ptp_clock_info *ptp,
 	int ret = -EOPNOTSUPP;
 	unsigned long flags;
 
+	if (priv->plat->mac_suspended) {
+		pr_err("eth clocks suspended while accessing ptp register\n");
+		return 0;
+	}
 	switch (rq->type) {
 	case PTP_CLK_REQ_PEROUT:
 		/* Reject requests with unsupported flags */
@@ -258,7 +281,10 @@ static int stmmac_getcrosststamp(struct ptp_clock_info *ptp,
 {
 	struct stmmac_priv *priv =
 		container_of(ptp, struct stmmac_priv, ptp_clock_ops);
-
+	if (priv->plat->mac_suspended) {
+		pr_err("eth clocks suspended while accessing ptp register\n");
+		return 0;
+	}
 	return get_device_system_crosststamp(stmmac_get_syncdevicetime,
 					     priv, NULL, xtstamp);
 }
