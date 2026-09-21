@@ -17,6 +17,8 @@ pinctrl-msm.ko
 pinctrl-glymur.ko
 debug_symbol.ko
 qcom-dcvs.ko
+memory_dump_v2.ko
+dcc_v2.ko
 qcom-dload-mode.ko
 qcom_cpu_vendor_hooks.ko
 icc-bcm-voter.ko
