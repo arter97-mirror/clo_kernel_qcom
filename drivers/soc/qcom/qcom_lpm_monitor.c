@@ -300,6 +300,14 @@ static int qlpmm_probe(struct platform_device *pdev)
 	if (!qlpmm_pd)
 		return -ENOMEM;
 
+	qlpmm_pd->connected_client_num = 0;
+	init_completion(&qlpmm_pd->comp);
+	mutex_init(&qlpmm_pd->lock);
+	INIT_LIST_HEAD(&qlpmm_pd->subsystem_list);
+	ret = qlpmm_ss_info_init(dev, SUBSYSTEM_ADSP_V01);
+	if (ret)
+		return ret;
+
 	ret = qmi_handle_init(&qlpmm_pd->handle,
 		LPM_MONITOR_REPORT_TO_APPS_REQ_MSG_V01_MAX_MSG_LEN,
 		&server_ops, handlers);
@@ -320,12 +328,7 @@ static int qlpmm_probe(struct platform_device *pdev)
 	debugfs_create_file("adsp_clks", 0400, qlpmm_pd->root,
 		NULL, &qlpmm_get_adsp_clks_stats_fops);
 
-	qlpmm_pd->connected_client_num = 0;
-	init_completion(&qlpmm_pd->comp);
-	mutex_init(&qlpmm_pd->lock);
-	INIT_LIST_HEAD(&qlpmm_pd->subsystem_list);
-
-	return qlpmm_ss_info_init(dev, SUBSYSTEM_ADSP_V01);
+	return ret;
 }
 
 static void qlpmm_remove(struct platform_device *pdev)
