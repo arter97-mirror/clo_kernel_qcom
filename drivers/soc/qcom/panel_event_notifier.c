@@ -140,6 +140,13 @@ void panel_event_notification_trigger(enum panel_event_notifier_tag tag,
 		mutex_lock(&panel_event_notifier_entries_lock);
 		entry = &panel_event_notifier_entries[i];
 
+		/* skip unregistered client entries */
+		if (!entry->handler) {
+			pr_debug("Skipping unregistered client: %d\n", i);
+			mutex_unlock(&panel_event_notifier_entries_lock);
+			continue;
+		}
+
 		/* skip if the notification panel and the registered panel are different */
 		if (entry->panel && notification->panel != entry->panel) {
 			pr_warn("invalid panel found notification_panel:%p entry_panel:%p\n",
