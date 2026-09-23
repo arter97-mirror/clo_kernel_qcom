@@ -111,6 +111,11 @@ thermal_pause.ko
 slim-qcom-ngd-ctrl.ko
 slimbus.ko
 bam_dma.ko
+qti_pmic_glink.ko
+panel_event_notifier.ko
+altmode-glink.ko
+ucsi_qti_glink.ko
+qti-battery-charger.ko
 phy-qcom-ufs.ko
 phy-qcom-ufs-qmp-v4-glymur.ko
 ufs-qcom.ko
