@@ -92,6 +92,10 @@
 #include "dev.h"
 #include "sock_destructor.h"
 
+#if IS_ENABLED(CONFIG_WIRELESS)
+#include <linux/skb_wireless.h>
+#endif
+
 struct kmem_cache *skbuff_cache __ro_after_init;
 
 struct kmem_cache *skb_data_cache;
@@ -5267,6 +5271,9 @@ static const u8 skb_ext_type_len[] = {
 #endif
 #if IS_ENABLED(CONFIG_MCTP_FLOWS)
 	[SKB_EXT_MCTP] = SKB_EXT_CHUNKSIZEOF(struct mctp_flow),
+#endif
+#if IS_ENABLED(CONFIG_WIRELESS)
+	[SKB_EXT_WIRELESS] = SKB_EXT_CHUNKSIZEOF(struct wireless_skb_ext)
 #endif
 };
 
