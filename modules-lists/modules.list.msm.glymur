@@ -121,3 +121,8 @@ phy-qcom-ufs-qmp-v4-glymur.ko
 ufs-qcom.ko
 qcom_ice.ko
 ufshcd-crypto-qti.ko
+qcom_q6v5.ko
+qcom_sysmon.ko
+qcom_ramdump.ko
+qcom_pil_info.ko
+qcom_q6v5_pas.ko
