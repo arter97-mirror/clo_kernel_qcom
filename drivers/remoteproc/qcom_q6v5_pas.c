@@ -1280,6 +1280,39 @@ static inline int bus_bw_init(struct qcom_adsp *adsp)
 }
 #endif
 
+int hibernation_rproc_early_boot_ping(struct rproc *rproc)
+{
+	struct qcom_adsp *adsp;
+	struct platform_device *pdev;
+
+	if (!rproc || !rproc->priv)
+		return -EINVAL;
+
+	adsp = (struct qcom_adsp *)rproc->priv;
+	if (!adsp->q6v5.early_boot)
+		return 0;
+
+	if (!adsp || !adsp->dev)
+		return -EINVAL;
+
+	/*
+	 * early_boot requires detached state and get smem stage
+	 * before calling rproc_boot() on hibernation-exit path.
+	 */
+	adsp->rproc->state = RPROC_DETACHED;
+	pdev = to_platform_device(adsp->dev);
+	adsp->q6v5.ping_state = devm_qcom_smem_state_get(&pdev->dev,
+					 "ping", &adsp->q6v5.ping_bit);
+	if (IS_ERR(adsp->q6v5.ping_state)) {
+		dev_err(adsp->dev, "failed to acquire smem state %ld\n",
+				PTR_ERR(adsp->q6v5.ping_state));
+		return -ENODEV;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(hibernation_rproc_early_boot_ping);
+
 static int rproc_panic_handler(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/module.h>
@@ -26,7 +26,6 @@ static const struct msm_pinctrl_soc_data diwali_pinctrl = {
  */
 	.wakeirq_map = diwali_pdc_map,
 	.nwakeirq_map = ARRAY_SIZE(diwali_pdc_map),
-	.egpio_func = 11,
 };
 
 static const struct msm_pinctrl_soc_data diwali_vm_pinctrl = {
