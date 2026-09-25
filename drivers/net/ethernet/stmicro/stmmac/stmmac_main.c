@@ -1964,7 +1964,7 @@ static void __free_dma_rx_desc_resources(struct stmmac_priv *priv,
 	/* Release the DMA RX socket buffers */
 	if (rx_q->xsk_pool)
 		dma_free_rx_xskbufs(priv, dma_conf, queue);
-	else
+	else if (rx_q->buf_pool)
 		dma_free_rx_skbufs(priv, dma_conf, queue);
 
 	rx_q->buf_alloc_num = 0;
@@ -2014,7 +2014,8 @@ static void __free_dma_tx_desc_resources(struct stmmac_priv *priv,
 	void *addr;
 
 	/* Release the DMA TX socket buffers */
-	dma_free_tx_skbufs(priv, dma_conf, queue);
+	if (tx_q->tx_skbuff_dma && tx_q->tx_skbuff)
+		dma_free_tx_skbufs(priv, dma_conf, queue);
 
 	if (priv->extend_desc) {
 		size = sizeof(struct dma_extended_desc);
