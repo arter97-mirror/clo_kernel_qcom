@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/workqueue.h>
@@ -43,9 +43,13 @@ static void si_object_do_release(struct si_object *object)
 
 	ret = si_object_do_invoke(&oic, object, SI_OBJECT_OP_RELEASE, args, &result);
 
-	if (ret == -EAGAIN) {
+	if (ret == -EAGAIN || ret == -ENOMEM) {
 
-		/* On faioure, failure no callback response is in progress. */
+		/* On failure, no callback response is in progress: -EAGAIN means the
+		 * transport asked us to retry, and -ENOMEM means we failed to get the
+		 * SMC buffers before anything was sent to QTEE. Either way it's safe
+		 * to requeue instead of abandoning the object as a zombie.
+		 */
 
 		pr_debug("%s rescheduled for release.\n", si_object_name(object));
 
