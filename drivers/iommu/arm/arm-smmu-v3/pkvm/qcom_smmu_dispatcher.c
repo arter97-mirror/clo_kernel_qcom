@@ -259,7 +259,7 @@ static size_t smmu_pgsize_idmap(size_t size, u64 paddr, size_t pgsize_bitmap)
 static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 				    phys_addr_t start, phys_addr_t end, int prot)
 {
-	size_t size = end - start;
+	size_t size;
 	size_t pgsize, pgcount;
 	size_t mapped, unmapped;
 	int ret;
@@ -271,6 +271,7 @@ static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 	end = min(end, BIT(pgtable->cfg.oas));
 	if (start >= end)
 		return;
+	size = end - start;
 
 	if (prot) {
 		if (!(prot & IOMMU_MMIO) && pgtable->cfg.coherent_walk)
@@ -283,10 +284,15 @@ static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 
 			ret = pgtable->ops.map_pages(&pgtable->ops, start, start,
 						     pgsize, pgcount, prot, 0, &mapped);
+			/*
+			 * Failing to map isn't compromising security. Make sure we don't crash for
+			 * that.
+			 */
+			if (ret || !mapped)
+				return;
+
 			size -= mapped;
 			start += mapped;
-			if (!mapped || ret)
-				return;
 		}
 	} else {
 		while (size) {
@@ -295,11 +301,14 @@ static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 			pgcount = size / pgsize;
 			unmapped = pgtable->ops.unmap_pages(&pgtable->ops, start,
 							    pgsize, pgcount, &gather);
+			if (!unmapped)
+				break;
+
 			size -= unmapped;
 			start += unmapped;
-			if (!unmapped)
-				return;
 		}
+		/* Some memory were not unmapped. */
+		WARN_ON(size);
 	}
 }
 
