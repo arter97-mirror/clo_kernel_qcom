@@ -219,15 +219,38 @@ static int __free_si_object(struct si_object *object)
 	if (object->release)
 		object->release(object);
 
-	synchronize_rcu();
-
 	switch (typeof_si_object(object)) {
 	case SI_OT_USER:
+		/*
+		 * SI_OT_USER objects are never inserted into xa_si_objects, so
+		 * there are no RCU readers (qtee__get_si_object) that could hold
+		 * a stale pointer to them.  No grace period is needed here.
+		 *
+		 * Exception: SI_OT_USER objects returned to kernel clients via
+		 * si_object_do_invoke() are held in kernel data structures and
+		 * may be dereferenced across RCU read-side critical sections
+		 * (e.g. a concurrent qtee__get_si_object() call walking
+		 * xa_si_objects under rcu_read_lock() could race with the free).
+		 * Without a grace period the object memory could be freed while
+		 * an RCU reader still holds a pointer to it, causing a kernel
+		 * crash.  kernel_client is set in update_args() when the oic
+		 * does not carry OIC_FLAG_USERSPACE, i.e. the caller is not
+		 * process_invoke_req() in the smcinvoke driver.
+		 */
+		if (object->kernel_client)
+			synchronize_rcu();
 		if (object->info.object_cookie != cookie)
 			break;
 		release_user_object(object);
 		break;
 	case SI_OT_CB_OBJECT: {
+		/*
+		 * SI_OT_CB_OBJECT entries ARE stored in xa_si_objects and are
+		 * looked up under rcu_read_lock() in qtee__get_si_object().
+		 * Wait for all readers to finish before calling ops->release(),
+		 * which frees the object.
+		 */
+		synchronize_rcu();
 		/* Keep the name in case 'release' needs it! */
 		const char *name = object->name;
 
@@ -355,6 +378,13 @@ static int init_si_object(struct si_object **object, unsigned int object_id)
 			t_object->name = kasprintf(GFP_KERNEL, "qtee-%u", object_id);
 
 			SET_SI_OBJECT(t_object, SI_OT_USER, object_id, cookie);
+
+			/*
+			 * Objects created via init_si_object() are QTEE-originated
+			 * (i.e. received on the return path from QTEE).  They are
+			 * NOT kernel-client-created objects, so kernel_client = false.
+			 */
+			t_object->kernel_client = false;
 
 			*object = t_object;
 
@@ -661,6 +691,17 @@ static int update_args(struct si_arg u[], struct si_object_invoke_ctx *oic)
 		if (err)
 			ret = err;
 
+		/*
+		 * Mark SI_OT_USER output objects for kernel clients so that
+		 * __free_si_object() calls synchronize_rcu() before releasing
+		 * them.  Userspace callers set OIC_FLAG_USERSPACE on the oic
+		 * before calling si_object_do_invoke(); all other callers are
+		 * kernel clients.
+		 */
+		if (!(oic->flags & OIC_FLAG_USERSPACE) &&
+		    u[i].o && typeof_si_object(u[i].o) == SI_OT_USER)
+			u[i].o->kernel_client = true;
+
 		oo++;
 	}
 
@@ -902,6 +943,12 @@ int si_object_do_invoke(struct si_object_invoke_ctx *oic,
 		typeof_si_object(object) != SI_OT_ROOT)
 		return -EINVAL;
 
+	/*
+	 * Preserve caller-set flags (e.g. OIC_FLAG_USERSPACE) across the
+	 * memset inside si_object_invoke_ctx_init() so that update_args()
+	 * can still distinguish userspace from kernel-client invocations.
+	 */
+	unsigned int caller_flags = oic->flags;
 	if (typeof_si_object(object) == SI_OT_USER &&
 		object->info.object_cookie != cookie)
 		return -EINVAL;
@@ -909,6 +956,8 @@ int si_object_do_invoke(struct si_object_invoke_ctx *oic,
 	ret = si_object_invoke_ctx_init(oic, u);
 	if (ret)
 		return ret;
+
+	oic->flags |= caller_flags;
 
 	pr_debug("start an invocation for %s.\n", si_object_name(object));
 

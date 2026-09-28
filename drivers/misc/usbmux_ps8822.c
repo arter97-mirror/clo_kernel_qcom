@@ -12,6 +12,9 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/kobject.h>
+#include <linux/platform_device.h>
+#include <linux/of_platform.h>
+#include <linux/usb/dwc3-msm.h>
 #include "usbmux_ps8822.h"
 
 static const char * const mode_names[] = {
@@ -146,10 +149,65 @@ static int usbmux_read_reg(struct usbmux_ps8822_data *data, u8 page_addr, u8 reg
 	return 0;
 }
 
+static void usbmux_put_dwc3_device(void *data)
+{
+	put_device(data);
+}
+
+static int usbmux_get_dwc3_msm(struct usbmux_ps8822_data *data)
+{
+	struct device_node *np;
+	struct platform_device *pdev;
+	int ret;
+
+	np = of_parse_phandle(data->dev->of_node, "usbmux,dwc3-controller", 0);
+	if (!np)
+		return dev_err_probe(data->dev, -EINVAL,
+				     "missing usbmux,dwc3-controller phandle\n");
+
+	pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!pdev || !dev_get_drvdata(&pdev->dev)) {
+		if (pdev)
+			put_device(&pdev->dev);
+		return dev_err_probe(data->dev, -EPROBE_DEFER,
+				     "DWC3 MSM driver not ready\n");
+	}
+
+	data->dwc3_msm_dev = &pdev->dev;
+	ret = devm_add_action_or_reset(data->dev, usbmux_put_dwc3_device,
+				       data->dwc3_msm_dev);
+	if (ret)
+		data->dwc3_msm_dev = NULL;
+
+	return ret;
+}
+
+static int usbmux_set_dwc3_dp_mode(struct usbmux_ps8822_data *data,
+				    bool enable)
+{
+	int ret;
+
+	if (data->dwc3_dp_mode == enable)
+		return 0;
+
+	ret = dwc3_msm_set_dp_mode(data->dwc3_msm_dev, enable, 4);
+	if (ret) {
+		dev_err(data->dev, "failed to set DWC3 DP mode to %d: %d\n",
+			enable, ret);
+		return ret;
+	}
+
+	data->dwc3_dp_mode = enable;
+	return 0;
+}
+
 static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mode,
 			   int orientation)
 {
-	int ret = 0;
+	bool enable_dwc3_dp;
+	bool dwc3_dp_changed = false;
+	int ret = 0, dwc3_ret = 0;
 	u8 mode_reg = 0;
 
 	if (!data)
@@ -161,6 +219,15 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 	}
 
 	mutex_lock(&data->lock);
+	enable_dwc3_dp = mode == USBMUX_MODE_DP4_LANE;
+	if (enable_dwc3_dp && !data->dwc3_dp_mode) {
+		dwc3_ret = usbmux_set_dwc3_dp_mode(data, true);
+		if (dwc3_ret) {
+			ret = dwc3_ret;
+			goto unlock;
+		}
+		dwc3_dp_changed = true;
+	}
 
 	/*
 	 * Update orientation under data->lock so it is always consistent
@@ -201,6 +268,8 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 			       PS8822_P0_MODE_CTRL, mode_reg);
 	if (ret) {
 		dev_err(data->dev, "Failed to set mode: %d\n", ret);
+		if (dwc3_dp_changed)
+			usbmux_set_dwc3_dp_mode(data, false);
 		goto unlock;
 	}
 
@@ -209,6 +278,11 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 
 	data->current_mode = mode;
 	dev_dbg(data->dev, "Mode changed to: %s (reg=0x%02x)\n", mode_names[mode], mode_reg);
+
+	if (!enable_dwc3_dp)
+		dwc3_ret = usbmux_set_dwc3_dp_mode(data, false);
+	if (!ret)
+		ret = dwc3_ret;
 
 unlock:
 	mutex_unlock(&data->lock);
@@ -576,6 +650,10 @@ static int usbmux_probe(struct i2c_client *client, const struct i2c_device_id *i
 		dev_err(&client->dev, "Failed to parse device tree: %d\n", ret);
 		return ret;
 	}
+
+	ret = usbmux_get_dwc3_msm(data);
+	if (ret)
+		return ret;
 
 	ret = usbmux_hw_init(data);
 	if (ret) {

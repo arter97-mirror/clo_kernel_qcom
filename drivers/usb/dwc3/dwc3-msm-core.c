@@ -6673,7 +6673,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	mdwc->dwc3_wq = alloc_ordered_workqueue("dwc3_wq", 0);
 	if (!mdwc->dwc3_wq) {
 		pr_err("%s: Unable to create workqueue dwc3_wq\n", __func__);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto put_dbg;
 	}
 
 	/*
@@ -6685,7 +6686,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	mdwc->sm_usb_wq = alloc_ordered_workqueue("k_sm_usb", WQ_FREEZABLE);
 	if (!mdwc->sm_usb_wq) {
 		destroy_workqueue(mdwc->dwc3_wq);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto put_dbg;
 	}
 
 	ret = dwc3_msm_parse_params(pdev, node);
@@ -6832,13 +6834,37 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 put_dwc3:
 	usb_role_switch_unregister(mdwc->role_switch);
+
+err:
+	msm_dwc3_perf_vote_enable(mdwc, false);
+	/*
+	 * destroy_workqueue() drains, so any pending dwc3_resume_work runs
+	 * here. It reaches dwc3_ext_event_notify() ->
+	 * queue_work(mdwc->sm_usb_wq, &mdwc->sm_work) and, via
+	 * pm_runtime_resume(), __dwc3_msm_resume() ->
+	 * dwc3_msm_update_bus_bw() -> icc_set_bw(mdwc->icc_paths[i]).
+	 * Both must therefore still be valid while dwc3_wq is drained.
+	 *
+	 * Drain dwc3_wq first: resume_work queues onto sm_usb_wq, never the
+	 * other way round. sm_usb_wq is then drained rather than cancelled
+	 * because dwc3_otg_sm_work() re-queues itself, which
+	 * cancel_work_sync() would not cover.
+	 */
+	destroy_workqueue(mdwc->dwc3_wq);
+	destroy_workqueue(mdwc->sm_usb_wq);
+
+	/*
+	 * Release the interconnect paths only once no work can reach them.
+	 * Doing this after the drain also covers the earlier failure paths
+	 * which jump straight to err:, which previously leaked all three
+	 * paths on every -EPROBE_DEFER retry.
+	 */
 	for (i = 0; i < ARRAY_SIZE(mdwc->icc_paths); i++)
 		icc_put(mdwc->icc_paths[i]);
 
-err:
-	destroy_workqueue(mdwc->sm_usb_wq);
-	destroy_workqueue(mdwc->dwc3_wq);
 	usb_put_redriver(mdwc->redriver);
+put_dbg:
+	dwc3_msm_debug_exit(mdwc);
 put_pd:
 	dwc3_msm_modeled_domain_detach(mdwc);
 	return ret;

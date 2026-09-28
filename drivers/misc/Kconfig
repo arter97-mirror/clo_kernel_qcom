@@ -553,6 +553,7 @@ config KINECTICS_XR_NORDIC
 config USBMUX_PS8822
         tristate "Parade PS8822 DP/USB Mux chip"
         depends on I2C && OF
+	depends on USB_DWC3_MSM
         select REGMAP_I2C
         help
           This driver provides mode switching support for the Parade

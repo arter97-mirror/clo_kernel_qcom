@@ -125,6 +125,8 @@ struct usbmux_ps8822_data {
 	bool orientation_flip;
 	bool hpd_state;
 	bool dp_state;    /* DP state for sink-only mode control */
+	bool dwc3_dp_mode;
+	struct device *dwc3_msm_dev;
 };
 
 /**
