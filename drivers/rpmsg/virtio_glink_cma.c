@@ -698,3 +698,4 @@ module_virtio_driver(virtio_glink_bridge_driver);
 MODULE_DEVICE_TABLE(virtio, id_table);
 MODULE_DESCRIPTION("Virtio glink cma driver");
 MODULE_LICENSE("GPL");
+MODULE_SOFTDEP("pre: qcom-ipcc");
