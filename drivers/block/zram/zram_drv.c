@@ -39,6 +39,7 @@
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/list.h>
+#include <linux/workqueue.h>
 #include <uapi/linux/sched/types.h>
 
 #include "zram_drv.h"
@@ -1580,13 +1581,14 @@ struct qpace_control {
 	qpace_queue_op qpace_queue_op;
 	int (*request_submit)(struct qpace_request_meta *zmeta);
 	struct mutex queue_lock;
-	struct list_head queue_overflow_list;
-	struct mutex queue_overflow_list_lock;
-	int overflow_list_count;
+	struct list_head queue_pending_list;
+	struct mutex queue_pending_list_lock;
+	int pending_list_count;
 	struct qpace_request_queue *output_queue;
 	struct completion work_available;
 	spinlock_t work_available_lock;
 	struct timer_list work_available_timer;
+	struct delayed_work dwork;
 };
 
 /* Compression and copy control */
@@ -1604,9 +1606,11 @@ static DECLARE_WAIT_QUEUE_HEAD(qpace_compress_wait);
 
 static struct task_struct *comp_thread;
 static void signal_comp_work_available(struct timer_list *unused);
+static void pending_list_work_fn(struct work_struct *work);
 static int comp_request_submit(struct qpace_request_meta *zmeta);
 static int qpace_queue_compress_wrapper(int tr_num, struct page *bio_page,
 					struct page *tmp_output_page);
+static int enqueue_from_pending_list(struct qpace_control *qpace_ctl);
 
 struct qpace_control comp_control = {
 	.queue_size = 0,
@@ -1615,13 +1619,14 @@ struct qpace_control comp_control = {
 	.qpace_queue_op = qpace_queue_compress_wrapper,
 	.request_submit = comp_request_submit,
 	.queue_lock = __MUTEX_INITIALIZER(comp_control.queue_lock),
-	.queue_overflow_list = LIST_HEAD_INIT(comp_control.queue_overflow_list),
-	.queue_overflow_list_lock = __MUTEX_INITIALIZER(comp_control.queue_overflow_list_lock),
-	.overflow_list_count = 0,
+	.queue_pending_list = LIST_HEAD_INIT(comp_control.queue_pending_list),
+	.queue_pending_list_lock = __MUTEX_INITIALIZER(comp_control.queue_pending_list_lock),
+	.pending_list_count = 0,
 	.output_queue = &comp_out_queue,
 	.work_available = COMPLETION_INITIALIZER(comp_control.work_available),
 	.work_available_lock = __SPIN_LOCK_UNLOCKED(comp_control.work_available_lock),
 	.work_available_timer = __TIMER_INITIALIZER(signal_comp_work_available, 0),
+	.dwork = __DELAYED_WORK_INITIALIZER(comp_control.dwork, pending_list_work_fn, 0),
 };
 
 static long qpace_congestion_wait(unsigned long timeout)
@@ -1638,15 +1643,15 @@ static long qpace_congestion_wait(unsigned long timeout)
 	return ret;
 }
 
-/* after enqueue_from_overflow_list, we get hw slot */
-static void clear_qpace_congested(int overflow_consumed)
+/* after enqueue_from_pending_list, we get hw slot */
+static void clear_qpace_congested(int pending_consumed)
 {
 	/*
 	 * avoid wake_up*() when no waiters, safe because missing wakeup
 	 * one time is fine.
 	 */
 	if (waitqueue_active(&qpace_compress_wait))
-		wake_up_nr(&qpace_compress_wait, overflow_consumed);
+		wake_up_nr(&qpace_compress_wait, pending_consumed);
 }
 
 static inline void do_end_bio(struct qpace_request_meta *zmeta)
@@ -1724,6 +1729,27 @@ static inline void zram_ring_increment(struct qpace_request_queue *queue)
 		queue->arr_offset++;
 }
 
+static void pending_list_work_fn(struct work_struct *work)
+{
+	struct qpace_control *qpace_ctl =
+		container_of(work, struct qpace_control, dwork.work);
+
+	/* hold wakelock before touching HW ring */
+	get_qpace();
+	mutex_lock(&qpace_ctl->queue_lock);
+	enqueue_from_pending_list(qpace_ctl);
+
+	/*
+	 * If pending_list still has entries it means the HW ring was
+	 * full and enqueue_from_pending_list() stopped early.  Do NOT
+	 * reschedule here: the zram_qpace kthread will call
+	 * enqueue_from_pending_list() again after it consumes the ring,
+	 * which will drain the remainder naturally.
+	 */
+	mutex_unlock(&qpace_ctl->queue_lock);
+	put_qpace();
+}
+
 static inline void _signal_work_available(struct qpace_control *qpace_ctl)
 {
 	timer_delete(&qpace_ctl->work_available_timer);
@@ -1794,14 +1820,12 @@ static inline int _zram_req_queue(struct qpace_control *qpace_ctl,
 	return 0;
 }
 
-static int _zram_req_queue_overflow_list_insert(struct qpace_control *qpace_ctl,
+static void _zram_req_queue_pending_list_insert(struct qpace_control *qpace_ctl,
 						struct qpace_request_meta *zmeta)
 {
-	lockdep_assert_held(&qpace_ctl->queue_overflow_list_lock);
-	list_add(&zmeta->list_node, &qpace_ctl->queue_overflow_list);
-	qpace_ctl->overflow_list_count++;
-
-	return 0;
+	lockdep_assert_held(&qpace_ctl->queue_pending_list_lock);
+	list_add(&zmeta->list_node, &qpace_ctl->queue_pending_list);
+	qpace_ctl->pending_list_count++;
 }
 
 static int qpace_queue_compress_wrapper(int tr_num, struct page *bio_page,
@@ -1813,74 +1837,92 @@ static int qpace_queue_compress_wrapper(int tr_num, struct page *bio_page,
 
 static int comp_request_submit(struct qpace_request_meta *zmeta)
 {
-	int queue_ret;
-
 	pr_debug("%s: queueing page\n", __func__);
 
-	mutex_lock(&comp_control.queue_lock);
-	queue_ret = _zram_req_queue(&comp_control, zmeta);
-
 	/*
-	 * suspend errors are not placed on overflow_list
-	 * which will be handled by upper layer function
+	 * Always insert into the pending_list first. The dwork will
+	 * drain it into the HW ring in batches. This keeps the submit
+	 * path out of direct HW ring manipulation and avoids calling
+	 * dev_pm_qos_update_request() from direct-reclaim context.
 	 */
-	if (queue_ret == -ENOMEM) {
-		mutex_lock(&comp_control.queue_overflow_list_lock);
-		queue_ret = _zram_req_queue_overflow_list_insert(&comp_control, zmeta);
-		mutex_unlock(&comp_control.queue_overflow_list_lock);
-	}
-	mutex_unlock(&comp_control.queue_lock);
+	mutex_lock(&comp_control.queue_pending_list_lock);
+	_zram_req_queue_pending_list_insert(&comp_control, zmeta);
+	/*
+	 * Trigger immediately if we hit the threshold,
+	 * otherwise arm a 1-jiffie (≈4ms at HZ=250) timer so
+	 * that small bursts are coalesced before hitting the HW.
+	 */
+	if (comp_control.pending_list_count == DESCRIPTORS_PER_RING - 1)
+		mod_delayed_work(system_highpri_wq, &comp_control.dwork, 0);
+	else if (comp_control.pending_list_count == 1)
+		mod_delayed_work(system_highpri_wq, &comp_control.dwork, 1);
+	mutex_unlock(&comp_control.queue_pending_list_lock);
 
-	return queue_ret;
+	return 0;
 }
 
 static void zram_abandon_requests(struct qpace_control *qpace_ctl)
 {
-	/* Brownout detected, drop older half of the overflow list */
+	/* Brownout detected, drop older half of the pending list */
 	struct qpace_request_meta *zmeta, *tmp;
 	int i = 0, num_to_drop;
 
-	mutex_lock(&qpace_ctl->queue_overflow_list_lock);
-	num_to_drop = qpace_ctl->overflow_list_count / 2;
+	mutex_lock(&qpace_ctl->queue_pending_list_lock);
+	num_to_drop = qpace_ctl->pending_list_count / 2;
 	list_for_each_entry_safe(zmeta, tmp,
-				 &qpace_ctl->queue_overflow_list,
+				 &qpace_ctl->queue_pending_list,
 				 list_node) {
 		if (++i >= num_to_drop)
 			break;
 		list_del(&zmeta->list_node);
-		qpace_ctl->overflow_list_count--;
+		qpace_ctl->pending_list_count--;
 		zram_qpace_req_err_handler(zmeta);
 	}
-	mutex_unlock(&qpace_ctl->queue_overflow_list_lock);
+	mutex_unlock(&qpace_ctl->queue_pending_list_lock);
 }
 
-static int enqueue_from_overflow_list(struct qpace_control *qpace_ctl)
+static int enqueue_from_pending_list(struct qpace_control *qpace_ctl)
 {
 	lockdep_assert_held(&qpace_ctl->queue_lock);
 	int consumed = 0;
 	/*
-	 * Check overflow list. Grab its contents and queue it up, oldest
+	 * Check pending list. Grab its contents and queue it up, oldest
 	 * submissions are at the tail of the list.
 	 */
-	mutex_lock(&qpace_ctl->queue_overflow_list_lock);
+	mutex_lock(&qpace_ctl->queue_pending_list_lock);
 
-	if (!list_empty(&qpace_ctl->queue_overflow_list)) {
+	if (!list_empty(&qpace_ctl->queue_pending_list)) {
 		struct qpace_request_meta *zmeta, *tmp;
 
 		list_for_each_entry_safe_reverse(zmeta, tmp,
-			&qpace_ctl->queue_overflow_list,
+			&qpace_ctl->queue_pending_list,
 						 list_node) {
 			if (qpace_ctl->queue_size == DESCRIPTORS_PER_RING - 1)
 				break;
 
 			list_del(&zmeta->list_node);
-			qpace_ctl->overflow_list_count--;
-			/* wait lock hold, no need to check return value */
-			_zram_req_queue(qpace_ctl, zmeta);
+			qpace_ctl->pending_list_count--;
+			/*
+			 * _zram_req_queue() can fail with -EBUSY if QPaCE is
+			 * suspended (get_ring() checks qpace_suspended). Since
+			 * we use system_highpri_wq (non-freezable), this dwork
+			 * may run during suspend. Put the entry back at the
+			 * front of the pending list so it is retried after
+			 * resume, and stop draining for now.
+			 */
+			if (_zram_req_queue(qpace_ctl, zmeta)) {
+				list_add(&zmeta->list_node,
+					 &qpace_ctl->queue_pending_list);
+				qpace_ctl->pending_list_count++;
+				break;
+			}
 			consumed++;
 		}
 	}
-	mutex_unlock(&qpace_ctl->queue_overflow_list_lock);
+	mutex_unlock(&qpace_ctl->queue_pending_list_lock);
+
+	if (consumed)
+		clear_qpace_congested(consumed);
 
 	return consumed;
 }
@@ -2007,7 +2049,6 @@ static int zram_qpace_comp(void *unused)
 {
 	int n_entries_consumed = 0;
 	size_t triggered_compress;
-	int overflow_consumed;
 
 	struct sched_attr attr = {
 		.sched_policy = SCHED_NORMAL,
@@ -2049,21 +2090,17 @@ static int zram_qpace_comp(void *unused)
 
 		/*
 		* Protects comp_control.queue_size and the compression queue itself, if
-		* we end up placing items into the queue from the overflow list.
+		* we end up placing items into the queue from the pending list.
 		* Grabbing this lock also prevents starvation for the requests coming
-		* from the overflow list, by preventing new submissions going to the
-		* now-empty compression queue until we fully empty the overflow list.
+		* from the pending list, by preventing new submissions going to the
+		* now-empty compression queue until we fully empty the pending list.
 		*
 		* As get_qpace() called, it is holding wakelock.
 		*/
 		mutex_lock(&comp_control.queue_lock);
 		comp_control.queue_size -= n_entries_consumed;
-		overflow_consumed = enqueue_from_overflow_list(&comp_control);
+		enqueue_from_pending_list(&comp_control);
 		mutex_unlock(&comp_control.queue_lock);
-
-		/* get sw slots in overflow_list now, wake up */
-		if (overflow_consumed)
-			clear_qpace_congested(overflow_consumed);
 
 wait_for_comp_request:
 		put_qpace();
