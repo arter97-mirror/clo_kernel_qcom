@@ -232,9 +232,9 @@ static int entry_dwc3_gadget_run_stop(struct kretprobe_instance *ri,
 			}
 		}
 	} else {
+		dwc3_msm_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_CLEAR_DB, 0);
 		dwc3_core_stop_hw_active_transfers(dwc);
 		dwc3_msm_notify_event(dwc, DWC3_GSI_EVT_BUF_CLEAR, 0);
-		dwc3_msm_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_CLEAR_DB, 0);
 	}
 
 	return 0;
