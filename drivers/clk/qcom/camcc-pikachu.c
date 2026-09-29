@@ -150,11 +150,11 @@ static struct clk_alpha_pll_postdiv cam_cc_pll0_out_odd = {
 	},
 };
 
-/* 255.0 MHz Configuration */
+/* 510.0 MHz Configuration */
 static struct alpha_pll_config cam_cc_pll1_config = {
-	.l = 0xd,
+	.l = 0x1a,
 	.cal_l = 0x48,
-	.alpha = 0x4800,
+	.alpha = 0x9000,
 	.config_ctl_val = 0x25c400e7,
 	.config_ctl_hi_val = 0x0a8062e0,
 	.config_ctl_hi1_val = 0xf51dea20,
@@ -969,7 +969,6 @@ static struct clk_rcg2 cam_cc_ife_lite_0_csid_clk_src = {
 
 static const struct freq_tbl ftbl_cam_cc_ipe_nps_clk_src[] = {
 	F(19200000, P_BI_TCXO, 1, 0, 0),
-	F(127500000, P_CAM_CC_PLL1_OUT_EVEN, 1, 0, 0),
 	F(255000000, P_CAM_CC_PLL1_OUT_EVEN, 1, 0, 0),
 	F(364000000, P_CAM_CC_PLL1_OUT_EVEN, 1, 0, 0),
 	F(500000000, P_CAM_CC_PLL1_OUT_EVEN, 1, 0, 0),
@@ -998,7 +997,6 @@ static struct clk_rcg2 cam_cc_ipe_nps_clk_src = {
 		.num_vdd_classes = ARRAY_SIZE(cam_cc_pikachu_regulators_1),
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1_1] = 127500000,
 			[VDD_LOWER_D1] = 255000000,
 			[VDD_LOWER] = 364000000,
 			[VDD_LOW] = 500000000,
