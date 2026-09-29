@@ -255,6 +255,7 @@ struct tmc_drvdata {
 	struct clk		*atclk;
 	struct pm_config	pm_config;
 	struct list_head	link;
+	u32 status_wait_time;
 };
 
 struct etr_buf_operations {

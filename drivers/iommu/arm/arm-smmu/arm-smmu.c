@@ -2050,17 +2050,28 @@ static void arm_smmu_master_free_smes(struct arm_smmu_master_cfg *cfg,
 	mutex_unlock(&smmu->stream_map_mutex);
 }
 
-static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
+static int arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 					  enum arm_smmu_s2cr_type type,
 					  u8 cbndx, struct iommu_fwspec *fwspec)
 {
 	struct arm_smmu_device *smmu = cfg->smmu;
 	struct arm_smmu_s2cr *s2cr = smmu->s2crs;
-	int i, idx;
+	int i, idx, ret = 0;
 
 	mutex_lock(&smmu->stream_map_mutex);
 
 	for_each_cfg_sme(cfg, fwspec, i, idx) {
+		if (s2cr[idx].pinned) {
+			if (cbndx != s2cr[idx].cbndx) {
+				dev_err(smmu->dev,
+					"asymmetric group: S2CR[%d] pinned to cbndx=%d but device attaching with cbndx=%d - fix DT qcom,iommu-group\n",
+					idx, s2cr[idx].cbndx, cbndx);
+				ret = -EINVAL;
+				break;
+			}
+			continue;
+		}
+
 		if (type == s2cr[idx].type && cbndx == s2cr[idx].cbndx)
 			continue;
 
@@ -2071,6 +2082,7 @@ static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 	}
 
 	mutex_unlock(&smmu->stream_map_mutex);
+	return ret;
 }
 
 static bool arm_smmu_qcom_validate_secure_pool_node(struct device *dev,
@@ -2374,8 +2386,10 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	}
 
 	/* Looks ok, so add the device to the domain */
-	arm_smmu_master_install_s2crs(cfg, S2CR_TYPE_TRANS,
-				      smmu_domain->cfg.cbndx, fwspec);
+	ret = arm_smmu_master_install_s2crs(cfg, S2CR_TYPE_TRANS,
+					    smmu_domain->cfg.cbndx, fwspec);
+	if (ret)
+		goto rpm_put;
 	if (iommu_logger_register(domain, dev, smmu_domain->pgtbl_ops))
 		dev_err(dev, "Registering iommu debug info failed, continuing.\n");
 
@@ -2414,10 +2428,11 @@ static int arm_smmu_attach_dev_type(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	arm_smmu_master_install_s2crs(cfg, type, 0, fwspec);
-	arm_smmu_rpm_use_autosuspend(smmu);
+	ret = arm_smmu_master_install_s2crs(cfg, type, 0, fwspec);
+	if (!ret)
+		arm_smmu_rpm_use_autosuspend(smmu);
 	arm_smmu_rpm_put(smmu);
-	return 0;
+	return ret;
 }
 
 static int arm_smmu_attach_dev_identity(struct iommu_domain *domain,

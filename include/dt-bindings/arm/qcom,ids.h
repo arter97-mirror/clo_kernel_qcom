@@ -301,6 +301,7 @@
 #define QCOM_ID_SUNP			639
 #define QCOM_ID_IPQ5300			624
 #define QCOM_ID_X1P42100		635
+#define QCOM_ID_X1P42100_CANIM		799
 #define QCOM_ID_IPQ5321			650
 #define QCOM_ID_SG_RAVELIN		653
 #define QCOM_ID_SG_RAVELINP		654
@@ -325,6 +326,9 @@
 #define QCOM_ID_CHORAP			744
 #define QCOM_ID_MALABAR			733
 #define QCOM_ID_PIKACHU			736
+#define QCOM_ID_PIKACHUP                737
+#define QCOM_ID_PIKACHUS                784
+#define QCOM_ID_PIKACHUPS               783
 #define QCOM_ID_CANOEPSG		743
 #define QCOM_ID_SHIKRA			756
 #define QCOM_ID_MALABARP                757

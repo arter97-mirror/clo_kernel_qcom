@@ -1,7 +1,12 @@
 glymur_consolidate_config = {
     # keep sorted
+    "CONFIG_HOTPLUG_CPU": "y",
     "CONFIG_MHI_BUS_DEBUG": "y",
     "CONFIG_MSM_GPI_DMA_DEBUG": "y",
+    "CONFIG_QTI_CPU_HOTPLUG_COOLING_DEVICE": "m",
+    "CONFIG_QTI_CPU_PAUSE_COOLING_DEVICE": "m",
+    "CONFIG_QTI_QMI_COOLING_DEVICE": "m",
     "CONFIG_REGMAP_QTI_DEBUGFS_ALLOW_WRITE": "y",
     "CONFIG_SCHED_WALT_DEBUG": "m",
+    "CONFIG_UFS_DBG": "y",
 }

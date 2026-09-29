@@ -40,6 +40,7 @@ gcc-glymur.ko
 tcsrcc-glymur.ko
 icc-clk.ko
 phy-qcom-eusb2-repeater.ko
+phy-nxp-ptn3222.ko
 phy-qcom-m31-eusb2.ko
 phy-qcom-qmp-usb.ko
 phy-qcom-qmp-combo.ko
@@ -99,7 +100,19 @@ qcom_scmi_client.ko
 qcom_ipc_logging.ko
 qcom_glink_smem.ko
 qcom_glink.ko
+qcom-pm8008.ko
+qcom-pm8008-regulator.ko
 qrtr.ko
 qrtr-smd.ko
 qcom_logbuf_vendor_hooks.ko
 qcom_logbuf_boot_log.ko
+qcom_tsens.ko
+thermal_pause.ko
+slim-qcom-ngd-ctrl.ko
+slimbus.ko
+bam_dma.ko
+phy-qcom-ufs.ko
+phy-qcom-ufs-qmp-v4-glymur.ko
+ufs-qcom.ko
+qcom_ice.ko
+ufshcd-crypto-qti.ko

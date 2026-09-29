@@ -47,6 +47,7 @@ def register_modules(registry):
         ],
         deps = [
             # do not sort
+            "kernel/trace/qcom_ipc_logging",
             "drivers/soc/qcom/smem",
             "drivers/soc/qcom/debug_symbol",
             "drivers/dma-buf/heaps/qcom_dma_heaps",

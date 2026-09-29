@@ -356,23 +356,16 @@ static int pm8941_pwrkey_hw_init(struct pm8941_pwrkey *pwrkey)
 	return 0;
 }
 
-static int pm8941_pwrkey_freeze(struct device *dev)
+static int pm8941_pwrkey_restore(struct device *dev)
 {
 	struct pm8941_pwrkey *pwrkey = dev_get_drvdata(dev);
+	int error = 0;
 
 	if (pwrkey->irq > 0) {
 		pr_debug("Disabling and freeing pwrkey interrupts\n");
 		disable_irq(pwrkey->irq);
 		devm_free_irq(dev, pwrkey->irq, pwrkey);
 	}
-
-	return 0;
-}
-
-static int pm8941_pwrkey_restore(struct device *dev)
-{
-	struct pm8941_pwrkey *pwrkey = dev_get_drvdata(dev);
-	int error = 0;
 
 	error = pm8941_pwrkey_hw_init(pwrkey);
 	if (error) {
@@ -396,9 +389,6 @@ static int pm8941_pwrkey_suspend(struct device *dev)
 {
 	struct pm8941_pwrkey *pwrkey = dev_get_drvdata(dev);
 
-	if (pm_suspend_target_state == PM_SUSPEND_MEM)
-		return pm8941_pwrkey_freeze(dev);
-
 	if (device_may_wakeup(dev))
 		enable_irq_wake(pwrkey->irq);
 
@@ -419,7 +409,6 @@ static int pm8941_pwrkey_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops pm8941_pwr_key_pm_ops = {
-	.freeze = pm8941_pwrkey_freeze,
 	.restore = pm8941_pwrkey_restore,
 	.suspend = pm8941_pwrkey_suspend,
 	.resume = pm8941_pwrkey_resume,

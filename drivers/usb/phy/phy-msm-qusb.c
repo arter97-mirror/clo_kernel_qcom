@@ -174,6 +174,7 @@ struct qusb_phy {
 	bool			suspended;
 	bool			ulpi_mode;
 	bool			dpdm_enable;
+	bool			charger_detection_in_progress;
 	bool			is_se_clk;
 	bool			scm_lvl_shifter;
 
@@ -490,6 +491,11 @@ static int qusb_phy_init(struct usb_phy *phy)
 	u8 reg;
 	bool pll_lock_fail = false;
 
+	if (READ_ONCE(qphy->charger_detection_in_progress)) {
+		dev_dbg(phy->dev, "charger detection in progress, skip init\n");
+		return 0;
+	}
+
 	qusb_phy_enable_clocks(qphy, true);
 	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
@@ -679,6 +685,11 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
 	u32 linestate = 0, intr_mask = 0;
+
+	if (READ_ONCE(qphy->charger_detection_in_progress)) {
+		dev_dbg(phy->dev, "charger detection in progress, skip suspend\n");
+		return 0;
+	}
 
 	if (qphy->suspended == suspend) {
 		dev_dbg(phy->dev, "%s: USB PHY is already suspended\n",
@@ -1248,6 +1259,14 @@ static int qusb_phy_enable_phy(struct qusb_phy *qphy)
 {
 	int ret;
 
+	/*
+	 * Mark charger detection as in-progress so that concurrent
+	 * qusb_phy_init()/qusb_phy_set_suspend() calls from the dwc3
+	 * core back off instead of reprogramming PLL/POWERDOWN regs
+	 * while the charge-detection state machine is polling them.
+	 */
+	WRITE_ONCE(qphy->charger_detection_in_progress, true);
+
 	ret = qusb_phy_enable_power(qphy, true);
 	if (ret)
 		return ret;
@@ -1277,6 +1296,8 @@ static void qusb_phy_disable_phy(struct qusb_phy *qphy)
 	if (qphy->tcsr_clamp_dig_n)
 		writel_relaxed(0x0, qphy->tcsr_clamp_dig_n);
 	qusb_phy_enable_power(qphy, false);
+
+	WRITE_ONCE(qphy->charger_detection_in_progress, false);
 }
 
 static void qusb_phy_port_state_work(struct work_struct *w)
@@ -1369,6 +1390,7 @@ static void qusb_phy_port_state_work(struct work_struct *w)
 		} else {
 			qusb_phy_notify_charger(qphy,
 						POWER_SUPPLY_TYPE_USB_CDP);
+			qusb_phy_drive_dp_pulse(&qphy->phy);
 			qusb_phy_disable_phy(qphy);
 			qusb_phy_notify_extcon(qphy, EXTCON_USB, 1);
 		}

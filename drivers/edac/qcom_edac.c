@@ -4,6 +4,7 @@
  */
 
 #include <linux/edac.h>
+#include <linux/bitfield.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
@@ -44,7 +45,16 @@
 #define SB_DB_TRP_INTERRUPT_ENABLE      0x3
 #define TRP0_INTERRUPT_ENABLE           0x1
 #define DRP0_INTERRUPT_ENABLE           BIT(6)
+#define SRP_INTERRUPT_ENABLE            BIT(7)
 #define SB_DB_DRP_INTERRUPT_ENABLE      0x3
+
+/* LCP/SRP DDR DRAM ECC - guarded by CONFIG_EDAC_QCOM_LCP */
+#define LCP_SB_ECC_ERROR                BIT(0)
+#define LCP_DB_ECC_ERROR                BIT(1)
+#define LCP_SRP_SB_DB_INTERRUPT_ENABLE  0x3
+#define LCP_DB_ERR_COUNT_MASK           GENMASK(4, 0)
+#define LCP_SB_ERR_COUNT_MASK           GENMASK(23, 16)
+#define LCP_SB_ERR_COUNT_SHIFT          16
 
 #define ECC_POLL_MSEC			5000
 
@@ -93,7 +103,7 @@ static int qcom_llcc_core_setup(struct llcc_drv_data *drv, struct regmap *llcc_b
 
 	/*
 	 * Configure interrupt enable registers such that Tag, Data RAM related
-	 * interrupts are propagated to interrupt controller for servicing
+	 * interrupts are propagated to interrupt controller for servicing.
 	 */
 	ret = regmap_update_bits(llcc_bcast_regmap, drv->edac_reg_offset->cmn_interrupt_0_enable,
 				 TRP0_INTERRUPT_ENABLE,
@@ -121,6 +131,29 @@ static int qcom_llcc_core_setup(struct llcc_drv_data *drv, struct regmap *llcc_b
 
 	ret = regmap_write(llcc_bcast_regmap, drv->edac_reg_offset->drp_interrupt_enable,
 			   SB_DB_DRP_INTERRUPT_ENABLE);
+	if (ret)
+		return ret;
+
+	if (IS_ENABLED(CONFIG_EDAC_QCOM_LCP)) {
+		/*
+		 * Enable LCP/SRP SB/DB interrupt generation and route SRP to LLCC common
+		 * interrupt output.
+		 * Skip silently if the platform has not populated LCP offsets.
+		 */
+		if (drv->edac_reg_offset->lcp_srp_interrupt_enable) {
+			ret = regmap_update_bits(llcc_bcast_regmap,
+						 drv->edac_reg_offset->cmn_interrupt_2_enable,
+						 SRP_INTERRUPT_ENABLE,
+						 SRP_INTERRUPT_ENABLE);
+			if (ret)
+				return ret;
+
+			ret = regmap_update_bits(llcc_bcast_regmap,
+						 drv->edac_reg_offset->lcp_srp_interrupt_enable,
+						 LCP_SRP_SB_DB_INTERRUPT_ENABLE,
+						 LCP_SRP_SB_DB_INTERRUPT_ENABLE);
+		}
+	}
 	return ret;
 }
 
@@ -334,6 +367,61 @@ static void llcc_ecc_check(struct edac_device_ctl_info *edev_ctl)
 	llcc_ecc_irq_handler(0, edev_ctl);
 }
 
+/*
+ * LCP/SRP DDR DRAM ECC handler.
+ *
+ * Fires on the optional platform LCP IRQ entry. Reads the broadcast
+ * LCP/SRP interrupt status and error-count registers, reports correctable (SB)
+ * and uncorrectable (DB) errors via EDAC, then clears interrupt status.
+ */
+static irqreturn_t llcc_lcp_ecc_irq_handler(int irq, void *edev_ctl)
+{
+	struct edac_device_ctl_info *edac_dev_ctl = edev_ctl;
+	struct llcc_drv_data *drv = edac_dev_ctl->dev->platform_data;
+	const struct llcc_edac_reg_offset *reg = drv->edac_reg_offset;
+	u32 intr_status, err_status;
+	int ret;
+
+	ret = regmap_read(drv->bcast_regmap, reg->lcp_srp_interrupt_status,
+			  &intr_status);
+	if (ret || !intr_status)
+		return IRQ_NONE;
+
+	ret = regmap_read(drv->bcast_regmap, reg->lcp_srp_ecc_error_status1,
+			  &err_status);
+	if (ret)
+		goto clear;
+
+	if (intr_status & LCP_DB_ECC_ERROR) {
+		u32 db_cnt = FIELD_GET(LCP_DB_ERR_COUNT_MASK, err_status);
+
+		edac_printk(KERN_CRIT, EDAC_LLCC,
+			    "LCP/SRP DDR DRAM Double-bit ECC error: count=%u status=0x%08x\n",
+			    db_cnt, err_status);
+		edac_device_handle_ue(edac_dev_ctl, 0, 0,
+				      "LCP/SRP DDR DRAM uncorrectable Error");
+	}
+
+	if (intr_status & LCP_SB_ECC_ERROR) {
+		u32 sb_cnt = (err_status & LCP_SB_ERR_COUNT_MASK) >> LCP_SB_ERR_COUNT_SHIFT;
+
+		edac_printk(KERN_CRIT, EDAC_LLCC,
+			    "LCP/SRP DDR DRAM Single-bit ECC error: count=%u status=0x%08x\n",
+			    sb_cnt, err_status);
+		edac_device_handle_ce(edac_dev_ctl, 0, 0,
+				      "LCP/SRP DDR DRAM correctable Error");
+	}
+
+clear:
+	/* Clear the interrupt status register */
+	if (reg->lcp_srp_interrupt_clear)
+		regmap_write(drv->bcast_regmap, reg->lcp_srp_interrupt_clear, intr_status);
+	else
+		regmap_write(drv->bcast_regmap, reg->lcp_srp_interrupt_status, intr_status);
+
+	return IRQ_HANDLED;
+}
+
 static int qcom_llcc_edac_probe(struct platform_device *pdev)
 {
 	struct llcc_drv_data *llcc_driv_data = pdev->dev.platform_data;
@@ -342,9 +430,19 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 	int ecc_irq;
 	int rc;
 
-	rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
-	if (rc)
-		return rc;
+	if (!llcc_driv_data || !llcc_driv_data->bcast_regmap ||
+	    !llcc_driv_data->edac_reg_offset) {
+		dev_err(dev, "invalid LLCC platform data, EDAC probe aborted\n");
+		return -EINVAL;
+	}
+
+	if (!llcc_driv_data->ecc_irq_configured) {
+		rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
+		if (rc) {
+			dev_err(dev, "EDAC core setup failed: %d\n", rc);
+			return rc;
+		}
+	}
 
 	/* Allocate edac control info */
 	edev_ctl = edac_device_alloc_ctl_info(0, "qcom-llcc", 1, "bank",
@@ -359,9 +457,12 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 	edev_ctl->dev_name = dev_name(dev);
 	edev_ctl->ctl_name = "llcc";
 	edev_ctl->panic_on_ue = LLCC_ERP_PANIC_ON_UE;
+	edev_ctl->edac_check = NULL;
+	edev_ctl->poll_msec = 0;
 
 	/* Check if LLCC driver has passed ECC IRQ */
 	ecc_irq = llcc_driv_data->ecc_irq;
+
 	if (ecc_irq > 0) {
 		/* Use interrupt mode if IRQ is available */
 		rc = devm_request_irq(dev, ecc_irq, llcc_ecc_irq_handler,
@@ -370,11 +471,14 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 			edac_op_state = EDAC_OPSTATE_INT;
 			goto irq_done;
 		}
+
+		dev_warn(dev, "failed to request LLCC ECC irq %d: %d, falling back to polling\n",
+			 ecc_irq, rc);
 	}
 
 	/* Fall back to polling mode otherwise */
-	edev_ctl->poll_msec = ECC_POLL_MSEC;
 	edev_ctl->edac_check = llcc_ecc_check;
+	edev_ctl->poll_msec = ECC_POLL_MSEC;
 	edac_op_state = EDAC_OPSTATE_POLL;
 
 irq_done:
@@ -386,7 +490,24 @@ irq_done:
 
 	platform_set_drvdata(pdev, edev_ctl);
 
-	return rc;
+	if (IS_ENABLED(CONFIG_EDAC_QCOM_LCP)) {
+		/*
+		 * LCP/SRP IRQ is optional: not all platforms wire ddrss_apps_interrupt[1].
+		 * A missing or invalid IRQ is not a probe failure — TRP/DRP reporting
+		 * continues unaffected.
+		 */
+		if (llcc_driv_data->lcp_irq > 0) {
+			rc = devm_request_irq(dev, llcc_driv_data->lcp_irq,
+					      llcc_lcp_ecc_irq_handler,
+					      IRQF_TRIGGER_HIGH, "llcc_lcp_ecc", edev_ctl);
+			if (rc)
+				dev_warn(dev,
+					 "failed to request LCP ECC irq %d: %d, DDR DRAM ECC reporting disabled\n",
+					 llcc_driv_data->lcp_irq, rc);
+		}
+	}
+
+	return 0;
 }
 
 static void qcom_llcc_edac_remove(struct platform_device *pdev)

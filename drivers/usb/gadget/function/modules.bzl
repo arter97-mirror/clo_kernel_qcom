@@ -161,3 +161,20 @@ def register_modules(registry):
             "drivers/soc/qcom/bam_dmux",
         ],
     )
+
+    registry.register(
+        name = "drivers/usb/gadget/function/usb_f_rndis",
+        out = "usb_f_rndis.ko",
+        config = "CONFIG_USB_F_RNDIS",
+        srcs = [
+            # do not sort
+            "drivers/usb/gadget/function/f_rndis.c",
+            "drivers/usb/gadget/function/ndis.h",
+            "drivers/usb/gadget/function/rndis.c",
+            "drivers/usb/gadget/function/rndis.h",
+            "drivers/usb/gadget/function/u_rndis.h",
+            "drivers/usb/gadget/function/u_ether.c",
+            "drivers/usb/gadget/function/u_ether.h",
+            "drivers/usb/gadget/function/u_ether_configfs.h",
+        ],
+    )

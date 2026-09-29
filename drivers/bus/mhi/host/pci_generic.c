@@ -548,7 +548,7 @@ static void mhi_pci_status_cb(struct mhi_controller *mhi_cntrl,
 	case MHI_CB_SYS_ERROR:
 		dev_warn(&pdev->dev, "firmware crashed (%u)\n", cb);
 		fallthrough;
-	case MHI_CB_EE_SBL:
+	case MHI_CB_EE_SBL_MODE:
 		dev_dbg(&pdev->dev, "EE SBL, forbid runtime suspend\n");
 		pm_runtime_forbid(&pdev->dev);
 		break;

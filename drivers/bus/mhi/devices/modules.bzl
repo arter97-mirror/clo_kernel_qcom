@@ -65,3 +65,18 @@ def register_modules(registry):
             "kernel/trace/qcom_ipc_logging",
         ],
     )
+
+    registry.register(
+        name = "drivers/bus/mhi/devices/mhi_netdev",
+        out = "mhi_netdev.ko",
+        config = "CONFIG_MHI_NETDEV",
+        srcs = [
+            # do not sort
+            "drivers/bus/mhi/devices/mhi_netdev.c",
+        ],
+        deps = [
+            # do not sort
+            "drivers/bus/mhi/host/mhi",
+            "kernel/trace/qcom_ipc_logging",
+        ],
+    )

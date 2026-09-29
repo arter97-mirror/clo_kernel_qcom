@@ -2078,7 +2078,7 @@ static int qcom_ethqos_check_mdio_and_fix_link(struct platform_device *pdev,
 	}
 
 	/* Restore DT-provided mdio node for phylink phy-handle resolution. */
-	if (dt_mdio)
+	if (!plat->has_virtio_mdio && dt_mdio)
 		plat->mdio_node = dt_mdio;
 
 	return 0;
@@ -2370,6 +2370,9 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	ethqos->pdev = pdev;
 	ethqos->speed = SPEED_1000;
 
+	if (of_property_read_bool(np, "virtio-mdio"))
+		plat_dat->has_virtio_mdio = true;
+
 	qcom_ethqos_check_mdio_and_fix_link(pdev, plat_dat);
 
 	ethqos->rgmii_base = devm_platform_ioremap_resource_byname(pdev, "rgmii");
@@ -2502,8 +2505,6 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->safety_irq = ethqos_safety_feature;
 		plat_dat->safety_pcs_stats = ethqos_xpcs_safety_stats;
 	}
-	if (of_property_read_bool(np, "virtio-mdio"))
-		plat_dat->has_virtio_mdio = true;
 	if (of_property_read_bool(np, "snps,tso"))
 		plat_dat->flags |= STMMAC_FLAG_TSO_EN;
 	if (of_device_is_compatible(np, "qcom,qcs404-ethqos"))

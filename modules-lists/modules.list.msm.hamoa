@@ -83,6 +83,7 @@ pinctrl-spmi-gpio.ko
 ps883x.ko
 phy-qcom-eusb2-repeater.ko
 phy-qcom-snps-eusb2.ko
+eom_driver.ko
 phy-qcom-qmp-combo.ko
 phy-nxp-ptn3222.ko
 phy-qcom-qmp-usb.ko

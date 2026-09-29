@@ -822,6 +822,8 @@ void mhi_pm_st_worker(struct work_struct *work)
 			mhi_cntrl->ee = MHI_EE_SBL;
 			write_unlock_irq(&mhi_cntrl->pm_lock);
 
+			mhi_cntrl->status_cb(mhi_cntrl, MHI_CB_EE_SBL_MODE);
+
 			mhi_process_sleeping_events(mhi_cntrl);
 
 			/*

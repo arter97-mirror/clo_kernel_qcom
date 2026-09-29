@@ -96,6 +96,7 @@ def register_modules(registry):
             # do not sort
             "drivers/interconnect/qcom/shikra.c",
             "drivers/interconnect/qcom/icc-rpm.h",
+            "drivers/interconnect/qcom/icc-debug.h",
             "drivers/interconnect/qcom/rpm-ids.h",
             "drivers/interconnect/qcom/qnoc-qos-rpm.h",
         ],

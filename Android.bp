@@ -19,3 +19,12 @@ sh_binary_host {
     src: ":gen-headers_install.sh",
     required: ["unifdef"],
 }
+
+filegroup {
+    name: "hab_drv_headers",
+    srcs: [
+        "include/uapi/linux/habmmid.h",
+        "include/uapi/linux/hab_ioctl.h",
+    ],
+    visibility: ["//visibility:public"],
+}

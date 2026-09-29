@@ -207,6 +207,22 @@ struct llcc_edac_reg_offset {
 	u32 drp_ecc_error_status1;
 	u32 drp_ecc_sb_err_syn0;
 	u32 drp_ecc_db_err_syn0;
+
+	/*
+	 * LCP/SRP DDR DRAM ECC registers (LLCC broadcast space).
+	 * Zero means LCP reporting is not available on this platform.
+	 * Populated only when CONFIG_EDAC_QCOM_LCP is enabled.
+	 */
+	u32 cmn_interrupt_1_enable;
+	u32 lcp_clock_ctrl;
+	u32 lcp_srp_ecc_error_cfg;
+	u32 lcp_srp_ecc_error_cntr_clear;
+	u32 lcp_srp_ecc_error_inject_0;
+	u32 lcp_srp_ecc_error_inject_1;
+	u32 lcp_srp_interrupt_clear;
+	u32 lcp_srp_interrupt_enable;
+	u32 lcp_srp_interrupt_status;
+	u32 lcp_srp_ecc_error_status1;
 };
 
 struct llcc_uid_slice_pair {
@@ -228,6 +244,8 @@ struct llcc_uid_slice_pair {
  * @num_banks: Number of llcc banks
  * @bitmap: Bit map to track the active slice ids
  * @ecc_irq: interrupt for llcc cache error detection and reporting
+ * @lcp_irq: interrupt for LCP/SRP DDR DRAM ECC error reporting (or -ENXIO)
+ * @ecc_irq_configured: true when firmware already configured LLCC ECC routing
  * @version: Indicates the LLCC version
  * @desc: Array pointer of llcc_slice_desc
  * @uid_slice_lookup: Lookup form UID to slice desc
@@ -246,6 +264,8 @@ struct llcc_drv_data {
 	u32 num_banks;
 	unsigned long *bitmap;
 	int ecc_irq;
+	int lcp_irq;
+	bool ecc_irq_configured;
 	u32 version;
 	bool cap_based_alloc_and_pwr_collapse;
 	struct llcc_slice_desc *desc;

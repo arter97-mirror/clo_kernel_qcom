@@ -1851,6 +1851,9 @@ static int etm4_cpu_save(struct etmv4_drvdata *drvdata)
 {
 	int ret = 0;
 
+	if (pm_save_enable != PARAM_PM_SAVE_SELF_HOSTED)
+		return 0;
+
 	/* Save the TRFCR irrespective of whether the ETM is ON */
 	if (drvdata->trfcr)
 		drvdata->save_trfcr = read_trfcr();
@@ -1965,6 +1968,9 @@ static void __etm4_cpu_restore(struct etmv4_drvdata *drvdata)
 
 static void etm4_cpu_restore(struct etmv4_drvdata *drvdata)
 {
+	if (pm_save_enable != PARAM_PM_SAVE_SELF_HOSTED)
+		return;
+
 	if (drvdata->trfcr)
 		write_trfcr(drvdata->save_trfcr);
 	if (drvdata->state_needs_restore)

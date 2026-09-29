@@ -52,7 +52,8 @@ config QTI_POLICY_ENGINE_SENSOR
 
 config QTI_QMI_COOLING_DEVICE
 	tristate "QTI QMI cooling devices"
-	depends on QCOM_QMI_HELPERS && THERMAL
+	depends on THERMAL
+	select QCOM_QMI_HELPERS
 	help
 	   This enables the QTI remote subsystem cooling devices. These cooling
 	   devices will be used by QTI chipset to place various remote
