@@ -8,4 +8,5 @@ glymur_consolidate_config = {
     "CONFIG_QTI_QMI_COOLING_DEVICE": "m",
     "CONFIG_REGMAP_QTI_DEBUGFS_ALLOW_WRITE": "y",
     "CONFIG_SCHED_WALT_DEBUG": "m",
+    "CONFIG_UFS_DBG": "y",
 }

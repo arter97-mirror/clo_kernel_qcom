@@ -114,3 +114,8 @@ qti_qmi_cdev.ko
 slim-qcom-ngd-ctrl.ko
 slimbus.ko
 bam_dma.ko
+phy-qcom-ufs.ko
+phy-qcom-ufs-qmp-v4-glymur.ko
+ufs-qcom.ko
+qcom_ice.ko
+ufshcd-crypto-qti.ko

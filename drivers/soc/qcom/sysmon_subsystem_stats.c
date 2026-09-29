@@ -412,7 +412,7 @@ static int add_delta_time(
 }
 
 /*Updates SMEM pointers for all the sysmon Master stats*/
-static void update_sysmon_smem_pointers(void *smem_pointer, enum dsp_id_t dsp_id, size_t size)
+static int update_sysmon_smem_pointers(void *smem_pointer, enum dsp_id_t dsp_id, size_t size)
 {
 	u32 featureId;
 	int feature, size_rcvd;
@@ -421,6 +421,11 @@ static void update_sysmon_smem_pointers(void *smem_pointer, enum dsp_id_t dsp_id
 	featureId = *(unsigned int *)smem_pointer;
 	feature = featureId >> 28;
 	size_rcvd = (featureId >> 16) & 0xFFF;
+
+	if (IS_ERR_OR_NULL(smem_pointer)) {
+		pr_err("%s: Update smem pointers Failed\n", __func__);
+		return -EINVAL;
+	}
 
 	while ((size > 0) && (size >= size_rcvd)) {
 		switch (feature) {
@@ -547,6 +552,8 @@ static void update_sysmon_smem_pointers(void *smem_pointer, enum dsp_id_t dsp_id
 			size = 0;
 		}
 	}
+
+	return 0;
 }
 
 static void sysmon_smem_init_adsp(void)
@@ -598,30 +605,27 @@ static void sysmon_smem_init_adsp(void)
 		g_sysmon_stats.smem_init_adsp = false;
 	}
 
-	update_sysmon_smem_pointers(smem_pointer_adsp, ADSP, size);
+	if (!update_sysmon_smem_pointers(smem_pointer_adsp, ADSP, size)) {
+		if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_event_stats_adsp)) {
+			pr_err("%s:Failed to get stats from SMEM for ADSP:\n"
+					"event stats:%lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.sysmon_event_stats_adsp));
+			g_sysmon_stats.smem_init_adsp = false;
+		}
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_event_stats_adsp)) {
+		if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_power_stats_adsp)) {
+			pr_err("%s:Failed to get stats from SMEM for ADSP:\n"
+					"power stats: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.sysmon_power_stats_adsp));
+			g_sysmon_stats.smem_init_adsp = false;
+		}
 
-		pr_err("%s:Failed to get stats from SMEM for ADSP:\n"
-				"event stats:%lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.sysmon_event_stats_adsp));
-		g_sysmon_stats.smem_init_adsp = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_power_stats_adsp)) {
-
-		pr_err("%s:Failed to get stats from SMEM for ADSP:\n"
-				"power stats: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.sysmon_power_stats_adsp));
-		g_sysmon_stats.smem_init_adsp = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.q6_avg_load_adsp)) {
-
-		pr_err("%s:Failed to get stats from SMEM for ADSP:\n"
-				"q6_avg_load: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.q6_avg_load_adsp));
-		g_sysmon_stats.smem_init_adsp = false;
+		if (IS_ERR_OR_NULL(g_sysmon_stats.q6_avg_load_adsp)) {
+			pr_err("%s:Failed to get stats from SMEM for ADSP:\n"
+					"q6_avg_load: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.q6_avg_load_adsp));
+			g_sysmon_stats.smem_init_adsp = false;
+		}
 	}
 }
 
@@ -664,48 +668,42 @@ static void sysmon_smem_init_cdsp(void)
 		g_sysmon_stats.smem_init_cdsp = false;
 	}
 
-	update_sysmon_smem_pointers(smem_pointer_cdsp, CDSP, size);
+	if (!update_sysmon_smem_pointers(smem_pointer_cdsp, CDSP, size)) {
+		if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_event_stats_cdsp)) {
+			pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+					"event stats:%lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.sysmon_event_stats_cdsp));
+			g_sysmon_stats.smem_init_cdsp = false;
+		}
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_event_stats_cdsp)) {
+		if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_power_stats_cdsp)) {
+			pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+					" power stats: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.sysmon_power_stats_cdsp));
+			g_sysmon_stats.smem_init_cdsp = false;
+		}
 
-		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
-				"event stats:%lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.sysmon_event_stats_cdsp));
-		g_sysmon_stats.smem_init_cdsp = false;
+		if (IS_ERR_OR_NULL(g_sysmon_stats.q6_avg_load_cdsp)) {
+			pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+					"q6_avg_load: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.q6_avg_load_cdsp));
+			g_sysmon_stats.smem_init_cdsp = false;
+		}
+
+		if (IS_ERR_OR_NULL(g_sysmon_stats.hmx_util)) {
+			pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+					"hmx_util: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.hmx_util));
+			g_sysmon_stats.smem_init_cdsp_v2 = false;
+		}
+
+		if (IS_ERR_OR_NULL(g_sysmon_stats.hvx_util)) {
+			pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
+					"hvx_util: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.hvx_util));
+			g_sysmon_stats.smem_init_cdsp_v2 = false;
+		}
 	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_power_stats_cdsp)) {
-
-		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
-				" power stats: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.sysmon_power_stats_cdsp));
-		g_sysmon_stats.smem_init_cdsp = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.q6_avg_load_cdsp)) {
-
-		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
-				"q6_avg_load: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.q6_avg_load_cdsp));
-		g_sysmon_stats.smem_init_cdsp = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.hmx_util)) {
-
-		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
-				"hmx_util: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.hmx_util));
-		g_sysmon_stats.smem_init_cdsp_v2 = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.hvx_util)) {
-
-		pr_err("%s:Failed to get stats from SMEM for CDSP:\n"
-				"hmx_util: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.hvx_util));
-		g_sysmon_stats.smem_init_cdsp_v2 = false;
-	}
-
 }
 static void sysmon_smem_init_slpi(void)
 {
@@ -744,30 +742,27 @@ static void sysmon_smem_init_slpi(void)
 				__func__, PTR_ERR(smem_pointer_slpi), size);
 	}
 
-	update_sysmon_smem_pointers(smem_pointer_slpi, SLPI, size);
+	if (!update_sysmon_smem_pointers(smem_pointer_slpi, SLPI, size)) {
+		if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_event_stats_slpi)) {
+			pr_err("%s:Failed to get stats from SMEM for SLPI:\n"
+					"event stats:%lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.sysmon_event_stats_slpi));
+			g_sysmon_stats.smem_init_slpi = false;
+		}
 
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_event_stats_slpi)) {
+		if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_power_stats_slpi)) {
+			pr_err("%s:Failed to get stats from SMEM for SLPI:\n"
+					"power stats: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.sysmon_power_stats_slpi));
+			g_sysmon_stats.smem_init_slpi = false;
+		}
 
-		pr_err("%s:Failed to get stats from SMEM for SLPI:\n"
-				"event stats:%lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.sysmon_event_stats_slpi));
-		g_sysmon_stats.smem_init_slpi = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.sysmon_power_stats_slpi)) {
-
-		pr_err("%s:Failed to get stats from SMEM for SLPI:\n"
-				"power stats: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.sysmon_power_stats_slpi));
-		g_sysmon_stats.smem_init_slpi = false;
-	}
-
-	if (IS_ERR_OR_NULL(g_sysmon_stats.q6_avg_load_slpi)) {
-
-		pr_err("%s:Failed to get stats from SMEM for SLPI:\n"
-				"q6_avg_load: %lx\n",
-				__func__, PTR_ERR(g_sysmon_stats.q6_avg_load_slpi));
-		g_sysmon_stats.smem_init_slpi = false;
+		if (IS_ERR_OR_NULL(g_sysmon_stats.q6_avg_load_slpi)) {
+			pr_err("%s:Failed to get stats from SMEM for SLPI:\n"
+					"q6_avg_load: %lx\n",
+					__func__, PTR_ERR(g_sysmon_stats.q6_avg_load_slpi));
+			g_sysmon_stats.smem_init_slpi = false;
+		}
 	}
 }
 /**

@@ -195,29 +195,3 @@ def register_modules(registry):
             # do not sort
         ],
     )
-
-    registry.register(
-        name = "drivers/regulator/renesas-slg5bleft",
-        out = "renesas-slg5bleft.ko",
-        config = "CONFIG_REGULATOR_RENESAS_SLG5BLEFT",
-        srcs = [
-            # do not sort
-            "drivers/regulator/renesas-slg5bleft.c",
-        ],
-        deps = [
-            # do not sort
-        ],
-    )
-
-    registry.register(
-        name = "drivers/regulator/renesas-slg5bright",
-        out = "renesas-slg5bright.ko",
-        config = "CONFIG_REGULATOR_RENESAS_SLG5BRIGHT",
-        srcs = [
-            # do not sort
-            "drivers/regulator/renesas-slg5bright.c",
-        ],
-        deps = [
-            # do not sort
-        ],
-    )

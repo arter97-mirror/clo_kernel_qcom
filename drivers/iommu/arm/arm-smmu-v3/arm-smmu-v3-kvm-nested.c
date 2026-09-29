@@ -79,6 +79,8 @@ static int smmuv3_nesting_probe(struct platform_device *pdev)
 	struct hyp_arm_smmu_v3_device *smmu = &kvm_arm_smmu_array[kvm_arm_smmu_cur];
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
 	smmu->mmio_addr = res->start;
 	smmu->mmio_size = resource_size(res);
 	if (smmu->mmio_size < SZ_128K) {

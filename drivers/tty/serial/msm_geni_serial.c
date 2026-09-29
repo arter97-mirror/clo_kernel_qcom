@@ -879,7 +879,7 @@ int msm_geni_serial_resources_on(struct msm_geni_serial_port *port)
 	if (ret) {
 		UART_LOG_DBG(port->ipc_log_misc, port->uport.dev,
 			     "%s: Error %d geni_icc_enable failed\n", __func__, ret);
-		return ret;
+		goto err_pinctrl;
 	}
 
 	UART_LOG_DBG(port->ipc_log_misc, port->uport.dev, "%s: ICC BW voting\n", __func__);
@@ -887,7 +887,7 @@ int msm_geni_serial_resources_on(struct msm_geni_serial_port *port)
 	if (ret) {
 		UART_LOG_DBG(port->ipc_log_misc, port->uport.dev,
 			     "%s: Error %d ICC BW voting failed\n", __func__, ret);
-		return ret;
+		goto err_icc_enable;
 	}
 
 	UART_LOG_DBG(port->ipc_log_misc, port->uport.dev, "%s: geni_se_common_clks_on\n", __func__);
@@ -895,7 +895,7 @@ int msm_geni_serial_resources_on(struct msm_geni_serial_port *port)
 	if (ret) {
 		UART_LOG_DBG(port->ipc_log_misc, port->uport.dev,
 			    "%s: Error %d geni_se_common_clks_on failed\n", __func__, ret);
-		return ret;
+		goto err_icc_enable;
 	}
 
 	UART_LOG_DBG(port->ipc_log_misc, port->uport.dev, "%s: GENI_OUTPUT_CTRL write\n", __func__);
@@ -909,6 +909,12 @@ int msm_geni_serial_resources_on(struct msm_geni_serial_port *port)
 	geni_capture_stop_time(&port->se, port->ipc_log_kpi, __func__,
 			       port->uart_kpi, start_time, 0, 0);
 
+	return ret;
+
+err_icc_enable:
+	geni_icc_disable(&port->se);
+err_pinctrl:
+	pinctrl_select_state(rsc->geni_pinctrl, rsc->geni_gpio_sleep);
 	return ret;
 }
 
@@ -5049,6 +5055,12 @@ static int msm_geni_serial_startup(struct uart_port *uport)
 			dev_err(uport->dev, "%s:Failed to power on %d\n", __func__, ret);
 			return ret;
 		}
+
+		if (atomic_read(&msm_port->is_clock_off)) {
+			dev_err(uport->dev, "%s: clocks are off, resources_on failed earlier\n",
+				__func__);
+			return -EIO;
+		}
 	}
 
 	get_tx_fifo_size(msm_port);
@@ -5713,11 +5725,21 @@ static void msm_geni_serial_cons_pm(struct uart_port *uport,
 	struct msm_geni_serial_port *msm_port = GET_DEV_PORT(uport);
 
 	if (new_state == UART_PM_STATE_ON && old_state == UART_PM_STATE_OFF) {
-		msm_geni_serial_resources_on(msm_port);
+		if (msm_geni_serial_resources_on(msm_port)) {
+			UART_LOG_DBG(msm_port->ipc_log_misc, msm_port->uport.dev,
+				"%s: resources_on failed, skipping se_clk enable\n", __func__);
+			atomic_set(&msm_port->is_clock_off, 1);
+			return;
+		}
 		msm_geni_enable_disable_se_clk(uport, true);
 		atomic_set(&msm_port->is_clock_off, 0);
 	} else if (new_state == UART_PM_STATE_OFF &&
 			old_state == UART_PM_STATE_ON) {
+		if (atomic_read(&msm_port->is_clock_off)) {
+			UART_LOG_DBG(msm_port->ipc_log_misc, msm_port->uport.dev,
+				"%s: clocks already off, skipping se_clk disable\n", __func__);
+			return;
+		}
 		atomic_set(&msm_port->is_clock_off, 1);
 		msm_geni_enable_disable_se_clk(uport, false);
 		msm_geni_serial_resources_off(msm_port);
@@ -5743,11 +5765,21 @@ static void msm_geni_serial_hs_pm(struct uart_port *uport,
 	if (old_state == UART_PM_STATE_UNDEFINED)
 		old_state = UART_PM_STATE_OFF;
 	if (new_state == UART_PM_STATE_ON && old_state == UART_PM_STATE_OFF) {
-		msm_geni_serial_resources_on(msm_port);
+		if (msm_geni_serial_resources_on(msm_port)) {
+			UART_LOG_DBG(msm_port->ipc_log_misc, msm_port->uport.dev,
+				"%s: resources_on failed, skipping se_clk enable\n", __func__);
+			atomic_set(&msm_port->is_clock_off, 1);
+			return;
+		}
 		msm_geni_enable_disable_se_clk(uport, true);
 		atomic_set(&msm_port->is_clock_off, 0);
 	} else if (new_state == UART_PM_STATE_OFF &&
 			old_state == UART_PM_STATE_ON) {
+		if (atomic_read(&msm_port->is_clock_off)) {
+			UART_LOG_DBG(msm_port->ipc_log_misc, msm_port->uport.dev,
+				"%s: clocks already off, skipping se_clk disable\n", __func__);
+			return;
+		}
 		atomic_set(&msm_port->is_clock_off, 1);
 		msm_geni_enable_disable_se_clk(uport, false);
 		msm_geni_serial_resources_off(msm_port);
@@ -5871,8 +5903,13 @@ static int msm_geni_se_clks_on_off(struct msm_geni_serial_port *msm_port, bool c
 			return ret;
 		}
 
-		geni_se_common_clks_on(msm_port->serial_rsc.se_clk,
+		ret = geni_se_common_clks_on(msm_port->serial_rsc.se_clk,
 			msm_port->serial_rsc.m_ahb_clk, msm_port->serial_rsc.s_ahb_clk);
+		if (ret) {
+			UART_LOG_DBG(msm_port->ipc_log_misc, msm_port->uport.dev,
+				"%s: Error %d geni_se_common_clks_on failed\n", __func__, ret);
+			return ret;
+		}
 		msm_geni_enable_disable_se_clk(&msm_port->uport, true);
 	} else {
 		msm_geni_enable_disable_se_clk(&msm_port->uport, false);
@@ -5901,7 +5938,12 @@ static int msm_geni_serial_get_ver_info(struct uart_port *uport)
 	if (!msm_port->is_console) {
 		/* By default Enable clk divider value */
 		msm_port->ser_clk_cfg = 0x21;
-		msm_geni_se_clks_on_off(msm_port, true);
+		ret = msm_geni_se_clks_on_off(msm_port, true);
+		if (ret) {
+			UART_LOG_DBG(msm_port->ipc_log_misc, uport->dev,
+				"%s: Error %d clks_on failed\n", __func__, ret);
+			return ret;
+		}
 	}
 
 	/* Basic HW and FW info */
@@ -6509,9 +6551,13 @@ static int msm_geni_serial_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to register uart_port: %d\n", ret);
 
 	if (!dev_port->is_console) {
-		msm_geni_se_clks_on_off(dev_port, true);
-		msm_geni_check_stop_engine(uport);
-		msm_geni_se_clks_on_off(dev_port, false);
+		if (!msm_geni_se_clks_on_off(dev_port, true)) {
+			msm_geni_check_stop_engine(uport);
+			msm_geni_se_clks_on_off(dev_port, false);
+		} else {
+			UART_LOG_DBG(dev_port->ipc_log_misc, &pdev->dev,
+				"%s: clks_on failed, skipping stop engine check\n", __func__);
+		}
 
 		if (dev_port->pm_auto_suspend_disable) {
 			pm_runtime_set_active(&pdev->dev);
@@ -6754,6 +6800,7 @@ static int msm_geni_serial_runtime_suspend(struct device *dev)
 		msm_geni_update_uart_error_code(port, UART_ERROR_SE_RESOURCES_OFF_FAIL);
 		goto exit_runtime_suspend;
 	}
+	atomic_set(&port->is_clock_off, 1);
 
 	/*
 	 * If shutdown is not in progress, check if port
@@ -6821,10 +6868,12 @@ static int msm_geni_serial_runtime_resume(struct device *dev)
 	if (ret) {
 		dev_err(dev, "%s: Error ret %d\n", __func__, ret);
 		msm_geni_update_uart_error_code(port, UART_ERROR_SE_RESOURCES_ON_FAIL);
+		atomic_set(&port->is_clock_off, 1);
 		__pm_relax(port->geni_wake);
 		goto exit_runtime_resume;
 	}
 	msm_geni_enable_disable_se_clk(&port->uport, true);
+	atomic_set(&port->is_clock_off, 0);
 
 	/* Don't start the RX sequencer during shutdown */
 	if (port->port_state == UART_PORT_OPEN)

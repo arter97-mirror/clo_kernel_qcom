@@ -1542,6 +1542,7 @@ static int clk_smd_rpm_pm_notifier(struct notifier_block *nb,
 		if (pm_suspend_via_firmware())
 			return clk_smd_rpm_enable_scaling();
 #endif
+		break;
 	case PM_POST_HIBERNATION:
 		return clk_smd_rpm_enable_scaling();
 	}

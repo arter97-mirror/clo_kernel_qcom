@@ -1974,6 +1974,17 @@ static int ufs_qcom_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op,
 		ufs_qcom_genpd_setup(hba, true, true);
 	}
 
+	/*
+	 * Apply shared ICE workaround: arm the vdd_hba power-collapse flag so
+	 * it is handled on hibern8 exit. Only for hw v5.0/v5.1 with genpd, when
+	 * the link is in hibern8 and a non-static allocation algorithm is used.
+	 */
+	if (ufs_qcom_is_link_hibern8(hba) &&
+	    host->chosen_algo != STATIC_ALLOC_ALG1 &&
+	    host->hw_ver.major == 5 && host->hw_ver.minor <= 1 &&
+	    ufs_qcom_is_genpd_supported(hba))
+		host->vdd_hba_pc = true;
+
 	if (!err && ufs_qcom_is_link_off(hba) && host->device_reset)
 		ufs_qcom_device_reset_ctrl(hba, true);
 

@@ -206,11 +206,12 @@ int smmuv2_post_boot_init(void)
 			continue;
 		}
 
+		struct irq_data *irq_data = irq_get_irq_data(virq);
+
 		pr_info("Registered CB fault IRQ handler for SMMU at 0x%llx: cb_irq=%d, virt_irq=%d, CB=%d, hwirq=%d\n",
 			smmu->base_pa, cb_irq, virq,
 			smmu->host_s2_cb_idx,
-			irq_get_irq_data(virq) ?
-			(int)irq_get_irq_data(virq)->hwirq : -1);
+			irq_data ? (int)irq_data->hwirq : -1);
 
 	}
 

@@ -24,6 +24,8 @@ COPY_FILES = [
     "drivers/gpio/gpio-pca953x.c",
     "drivers/gpio/gpio-virtio.c",
     "drivers/gpu/drm/bridge/aux-bridge.c",
+    "drivers/i2c/i2c-mux.c",
+    "drivers/i2c/muxes/i2c-mux-gpio.c",
     "drivers/i2c/busses/i2c-qcom-geni.c",
     "drivers/i2c/busses/i2c-virtio.c",
     "drivers/spi/spi-geni-qcom.c",

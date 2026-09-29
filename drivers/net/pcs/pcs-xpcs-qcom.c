@@ -639,6 +639,8 @@ static int qcom_xpcs_enable(struct phylink_pcs *pcs)
 
 	if (qxpcs->pcs_fusa_intr > 0)
 		ret = qcom_xpcs_fusa_intr_enable(qxpcs);
+	else
+		qcom_xpcs_write(qxpcs, DW_VR_XS_PCS_SFTY_DISABLE, 0x1);
 
 	return ret;
 }

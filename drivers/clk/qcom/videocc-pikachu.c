@@ -86,11 +86,11 @@ static struct clk_alpha_pll video_cc_pll0 = {
 	},
 };
 
-/* 480.0 MHz Configuration */
+/* 280.0 MHz Configuration */
 static struct alpha_pll_config video_cc_pll1_config = {
-	.l = 0x19,
+	.l = 0xe,
 	.cal_l = 0x48,
-	.alpha = 0x0,
+	.alpha = 0x9555,
 	.config_ctl_val = 0x25c400e7,
 	.config_ctl_hi_val = 0x0a8062e0,
 	.config_ctl_hi1_val = 0xf51dea20,
@@ -226,11 +226,12 @@ static struct clk_rcg2 video_cc_ahb_clk_src = {
 		.vdd_class = &vdd_mm,
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 19200000},
+			[VDD_LOWER_D1_1] = 19200000},
 	},
 };
 
 static const struct freq_tbl ftbl_video_cc_mvs0_clk_src[] = {
+	F(140000000, P_VIDEO_CC_PLL1_OUT_MAIN, 2, 0, 0),
 	F(240000000, P_VIDEO_CC_PLL1_OUT_MAIN, 2, 0, 0),
 	F(338000000, P_VIDEO_CC_PLL1_OUT_MAIN, 2, 0, 0),
 	F(420000000, P_VIDEO_CC_PLL1_OUT_MAIN, 2, 0, 0),
@@ -260,6 +261,7 @@ static struct clk_rcg2 video_cc_mvs0_clk_src = {
 		.num_vdd_classes = ARRAY_SIZE(video_cc_pikachu_regulators),
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
+			[VDD_LOWER_D1_1] = 140000000,
 			[VDD_LOWER_D1] = 240000000,
 			[VDD_LOWER] = 338000000,
 			[VDD_LOW] = 420000000,
@@ -299,7 +301,7 @@ static struct clk_rcg2 video_cc_mvs0b_clk_src = {
 		.num_vdd_classes = ARRAY_SIZE(video_cc_pikachu_regulators),
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 240000000,
+			[VDD_LOWER_D1_1] = 240000000,
 			[VDD_LOWER] = 338000000,
 			[VDD_LOW] = 420000000,
 			[VDD_LOW_L1] = 444000000,
@@ -339,7 +341,7 @@ static struct clk_rcg2 video_cc_mvs0c_clk_src = {
 		.num_vdd_classes = ARRAY_SIZE(video_cc_pikachu_regulators),
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 360000000,
+			[VDD_LOWER_D1_1] = 360000000,
 			[VDD_LOWER] = 507000000,
 			[VDD_LOW] = 630000000,
 			[VDD_LOW_L1] = 666000000,
@@ -366,7 +368,7 @@ static struct clk_rcg2 video_cc_xo_clk_src = {
 		.vdd_class = &vdd_mm,
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 19200000},
+			[VDD_LOWER_D1_1] = 19200000},
 	},
 };
 

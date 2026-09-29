@@ -2021,3 +2021,21 @@ def register_modules(registry):
             "drivers/usb/gadget/function/usb_f_qdss",
         ],
     )
+
+    registry.register(
+        name = "drivers/soc/qcom/pdr_monitor",
+        out = "pdr_monitor.ko",
+        config = "CONFIG_QCOM_PDR_MONITOR",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/pdr_monitor.c",
+        ],
+        hdrs = [
+            "include/linux/soc/qcom/pdr.h",
+        ],
+        deps = [
+            # do not sort
+            "drivers/soc/qcom/pdr_interface",
+            "drivers/soc/qcom/smem",
+        ],
+    )
