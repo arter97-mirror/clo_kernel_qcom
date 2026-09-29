@@ -97,6 +97,8 @@ obj-$(CONFIG_MSM_POWER_STATE) += power_state.o
 
 obj-$(CONFIG_QCOM_POWER_MODE) += power_mode.o
 
+obj-$(CONFIG_QCOM_PDR_MONITOR) += pdr_monitor.o
+
 obj-$(CONFIG_QCOM_PD_MAPPER) += qcom_pd_mapper.o
 
 obj-$(CONFIG_QCOM_PDR_MSG) += qcom_pdr_msg.o
