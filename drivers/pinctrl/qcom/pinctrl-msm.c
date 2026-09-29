@@ -1860,17 +1860,21 @@ static int pinctrl_hibernation_notifier(struct notifier_block *nb,
 	struct msm_pinctrl *pctrl = msm_pinctrl_data;
 
 	/*
-	 * Save/restore GPIO registers for any suspend-to-RAM style
-	 * transition, not just true hibernation. pm_suspend_target_state
-	 * cannot be used here to narrow this down to PM_SUSPEND_MEM: it is
-	 * only assigned in suspend_devices_and_enter(), which runs after
-	 * this PM_SUSPEND_PREPARE/PM_POST_SUSPEND notifier chain has
-	 * already been dispatched from suspend_prepare(), so it would
+	 * pm_suspend_target_state cannot be used here to narrow this down
+	 * to PM_SUSPEND_MEM: it is only assigned in
+	 * suspend_devices_and_enter(), which runs after this notifier chain
+	 * has already been dispatched from suspend_prepare(), so it would
 	 * always read a stale value here.
+	 *
+	 * Arming for PM_SUSPEND_PREPARE fires for every suspend type
+	 * including LPM, causing a NULL-deref on chip->valid_mask. Only
+	 * arm for hibernation and image restore; deep sleep is gated in
+	 * the syscore callback where pm_suspend_target_state is valid.
+	 * PM_POST_RESTORE clears the flag after image restore overwrites it.
 	 */
-	if (event == PM_HIBERNATION_PREPARE || event == PM_SUSPEND_PREPARE)
+	if (event == PM_HIBERNATION_PREPARE || event == PM_RESTORE_PREPARE)
 		pctrl->hibernation = true;
-	else if (event == PM_POST_HIBERNATION || event == PM_POST_SUSPEND)
+	else if (event == PM_POST_HIBERNATION || event == PM_POST_RESTORE)
 		pctrl->hibernation = false;
 	return NOTIFY_OK;
 }
@@ -1921,7 +1925,7 @@ static int msm_pinctrl_hibernation_suspend(void)
 
 	/* All normal gpios will have common registers, first save them */
 	for (i = 0; i < soc->ngpios; i++) {
-		if (!test_bit(i, chip->valid_mask))
+		if (!gpiochip_line_is_valid(chip, i))
 			continue;
 
 		pgroup = &soc->groups[i];
@@ -1938,10 +1942,12 @@ static int msm_pinctrl_hibernation_suspend(void)
 				msm_readl_intr_status(pctrl, pgroup);
 	}
 
+	/* Non-GPIO groups: special function pins (SDC, UFS, etc.) at indices
+	 * soc->ngpios to soc->ngroups-1. These are beyond the GPIO chip's
+	 * domain (i >= chip->ngpio) and not tracked by the valid_mask bitmap.
+	 * Always save unconditionally.
+	 */
 	for ( ; i < soc->ngroups; i++) {
-		if (!test_bit(i, chip->valid_mask))
-			continue;
-
 		pgroup = &soc->groups[i];
 		if (pgroup->ctl_reg)
 			pctrl->gpio_regs[i].ctl_reg =
@@ -1980,7 +1986,7 @@ static void msm_pinctrl_hibernation_resume(void)
 
     /* Restore normal gpios */
 	for (i = 0; i < soc->ngpios; i++) {
-		if (!test_bit(i, chip->valid_mask))
+		if (!gpiochip_line_is_valid(chip, i))
 			continue;
 
 		pgroup = &soc->groups[i];
@@ -1994,10 +2000,12 @@ static void msm_pinctrl_hibernation_resume(void)
 					pctrl, pgroup);
 	}
 
+	/* Non-GPIO groups: special function pins (SDC, UFS, etc.) at indices
+	 * soc->ngpios to soc->ngroups-1. These are beyond the GPIO chip's
+	 * domain (i >= chip->ngpio) and not tracked by the valid_mask bitmap.
+	 * Always restore unconditionally.
+	 */
 	for ( ; i < soc->ngroups; i++) {
-		if (!test_bit(i, chip->valid_mask))
-			continue;
-
 		pgroup = &soc->groups[i];
 		if (pgroup->ctl_reg)
 			msm_writel_ctl(pctrl->gpio_regs[i].ctl_reg,
