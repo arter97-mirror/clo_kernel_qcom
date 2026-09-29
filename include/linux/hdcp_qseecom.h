@@ -68,6 +68,7 @@ static inline const char *hdcp2_app_cmd_str(enum hdcp2_app_cmd cmd)
 
 #if IS_ENABLED(CONFIG_HDCP_QSEECOM)
 void *hdcp1_init(void);
+void *hdcp1_init_multi_dp(uint32_t device_type);
 void hdcp1_deinit(void *data);
 bool hdcp1_feature_supported(void *data);
 int hdcp1_start(void *data, u32 *aksv_msb, u32 *aksv_lsb);
@@ -95,7 +96,15 @@ int hdcp2_force_encryption(void *ctx, uint32_t enable);
  */
 int32_t hdcp_ops_event_notify(uint32_t event_cmd_id);
 #else
+
+/* stubbed routines */
+
 static inline void *hdcp1_init(void)
+{
+	return NULL;
+}
+
+static inline void *hdcp1_init_multi_dp(uint32_t device_type)
 {
 	return NULL;
 }
