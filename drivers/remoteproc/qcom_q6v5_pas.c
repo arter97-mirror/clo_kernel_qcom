@@ -1528,6 +1528,22 @@ static int adsp_attach(struct rproc *rproc)
 		}
 		adsp->q6v5.running = true;
 
+		/*
+		 * Balance the disable_irq() from qcom_q6v5_init(). The handover IRQ
+		 * was never enabled in this path (adsp_start/qcom_q6v5_prepare was
+		 * not called for early_boot). Without this, the depth counter stays
+		 * at 1 after the first SSR: adsp_stop's disable_irq brings it to 2,
+		 * and recovery's qcom_q6v5_prepare enable_irq only reaches 1 — the
+		 * IRQ never fires, leaving the ICC proxy vote stuck at UINT_MAX.
+		 *
+		 * Mark handover_issued=true since proxy resources (ICC/regulators)
+		 * were never acquired via this attach path; adsp_stop must not call
+		 * qcom_pas_handover to release them.
+		 */
+
+		adsp->q6v5.handover_issued = true;
+		enable_irq(adsp->q6v5.handover_irq);
+
 		if (!adsp->firmware) {
 			ret = request_firmware(&adsp->firmware, rproc->firmware, adsp->dev);
 			if (ret) {
