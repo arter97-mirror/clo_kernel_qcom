@@ -3820,6 +3820,7 @@ static const struct adsp_data diwali_mpss_resource = {
 	.dma_phys_below_32b = true,
 	.decrypt_shutdown = true,
 	.both_dumps = true,
+};
 static const struct adsp_data diwali_wpss_resource = {
 	.crash_reason_smem = 626,
 	.firmware_name = "wpss.mdt",
