@@ -151,6 +151,12 @@ static int subsys_resume(struct subsystem_data *ss_data, struct rproc *rproc, u3
 		ret = rproc_boot(rproc);
 		ss_data->ignore_ssr = false;
 		break;
+	case SUBSYS_DEEPSLEEP_ABORT:
+	case SUBSYS_HIBERNATE_ABORT:
+		ss_data->ignore_ssr = true;
+		ret = rproc_boot(rproc);
+		ss_data->ignore_ssr = false;
+		break;
 	default:
 		pr_err("Invalid %s resume state\n", ss_data->name);
 		ret = -1;
@@ -296,6 +302,18 @@ static long ps_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case POWER_STATE_EXIT_HIBERNATE_STATE:
 		pr_debug("Exit Hibernate\n");
 		ret = subsystem_resume(drv, SUBSYS_HIBERNATE);
+		break;
+
+	case DEEPSLEEP_ABORT:
+	case POWER_STATE_DEEPSLEEP_ABORT:
+		pr_debug("Deepsleep abort\n");
+		ret = subsystem_resume(drv, SUBSYS_DEEPSLEEP_ABORT);
+		break;
+
+	case HIBERNATE_ABORT:
+	case POWER_STATE_HIBERNATE_ABORT:
+		pr_debug("Hibernation abort\n");
+		ret = subsystem_resume(drv, SUBSYS_HIBERNATE_ABORT);
 		break;
 
 	case MODEM_SUSPEND:
