@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/completion.h>
@@ -641,6 +641,11 @@ static void start_usb_peripheral_work(struct work_struct *w)
 	start_usb_peripheral(pd);
 	typec_set_data_role(pd->typec_port, TYPEC_DEVICE);
 	typec_set_pwr_role(pd->typec_port, TYPEC_SINK);
+	if (pd->typec_mode < QTI_POWER_SUPPLY_TYPEC_SOURCE_DEFAULT) {
+		usbpd_dbg(&pd->dev, "typec_mode %d invalid at periph start, bailing\n",
+				pd->typec_mode);
+		return;
+	}
 	typec_set_pwr_opmode(pd->typec_port,
 			pd->typec_mode - QTI_POWER_SUPPLY_TYPEC_SOURCE_DEFAULT);
 	if (!pd->partner) {
@@ -2649,8 +2654,14 @@ static void enter_state_snk_startup(struct usbpd *pd)
 
 	typec_set_pwr_role(pd->typec_port, TYPEC_SINK);
 	if (!pd->partner) {
-		typec_set_pwr_opmode(pd->typec_port,
-			pd->typec_mode - QTI_POWER_SUPPLY_TYPEC_SOURCE_DEFAULT);
+		if (pd->typec_mode < QTI_POWER_SUPPLY_TYPEC_SOURCE_DEFAULT) {
+			usbpd_dbg(&pd->dev,
+				"typec_mode %d invalid at SNK_Startup, skip opmode set\n",
+				pd->typec_mode);
+		} else {
+			typec_set_pwr_opmode(pd->typec_port,
+				pd->typec_mode - QTI_POWER_SUPPLY_TYPEC_SOURCE_DEFAULT);
+		}
 		memset(&pd->partner_identity, 0, sizeof(pd->partner_identity));
 		pd->partner_desc.usb_pd = false;
 		pd->partner_desc.accessory = TYPEC_ACCESSORY_NONE;
@@ -3544,6 +3555,7 @@ static void handle_disconnect(struct usbpd *pd)
 	pd_reset_protocol(pd);
 
 	kobject_uevent(&pd->dev.kobj, KOBJ_CHANGE);
+	cancel_work_sync(&pd->start_periph_work);
 	typec_unregister_partner(pd->partner);
 	pd->partner = NULL;
 

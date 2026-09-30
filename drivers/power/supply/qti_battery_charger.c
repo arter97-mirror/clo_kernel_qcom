@@ -299,6 +299,12 @@ struct battery_chg_dev {
 	bool				usb_active[NUM_USB_PORTS];
 	/* To track the driver initialization status */
 	bool				initialized;
+	/*
+	 * Set after battery_chg_init_psy() completes and all PSY
+	 * state is visible. Guards battery_chg_update_usb_type_work
+	 * against accessing partially-initialized PSY structures.
+	 */
+	bool				psy_initialized;
 	bool				notify_en;
 	bool				error_prop;
 	bool				micro_usb;
@@ -869,8 +875,17 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 	struct battery_chg_dev *bcdev = container_of(work,
 					struct battery_chg_dev, usb_type_work);
 	struct power_supply_desc *desc;
-	struct psy_state *pst;
+	struct psy_state *pst = NULL;
 	int rc, i;
+
+	/*
+	 * Bail out if PSY initialization has not completed yet.
+	 * An early PMIC GLINK notification can schedule this work
+	 * before battery_chg_init_psy() finishes; the probe path
+	 * will re-schedule once psy_initialized is set.
+	 */
+	if (!smp_load_acquire(&bcdev->psy_initialized))
+		return;
 
 	for (i = 0; i < NUM_USB_PORTS; i++) {
 		if (!bcdev->usb_active[i])
@@ -936,7 +951,7 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 		}
 	}
 
-	if (bcdev->micro_usb)
+	if (bcdev->micro_usb && pst)
 		battery_chg_update_uusb_type(bcdev, pst->prop[USB_ADAP_TYPE]);
 }
 
@@ -1025,7 +1040,13 @@ static void handle_notification(struct battery_chg_dev *bcdev, void *data,
 	case BC_USB_STATUS_GET(USB_1_PORT_ID):
 		bcdev->usb_active[USB_1_PORT_ID] = true;
 		pst = &bcdev->psy_list[PSY_TYPE_USB];
-		schedule_work(&bcdev->usb_type_work);
+		/*
+		 * Ensure PSY initialization writes are visible before
+		 * accessing PSY data from this work item.
+		 */
+		if (smp_load_acquire(&bcdev->psy_initialized) &&
+		    pst && pst->psy)
+			schedule_work(&bcdev->usb_type_work);
 		break;
 	case BC_USB_STATUS_GET(USB_2_PORT_ID):
 		if (bcdev->num_usb_ports < 2) {
@@ -1035,7 +1056,13 @@ static void handle_notification(struct battery_chg_dev *bcdev, void *data,
 		}
 		bcdev->usb_active[USB_2_PORT_ID] = true;
 		pst = &bcdev->psy_list[PSY_TYPE_USB_2];
-		schedule_work(&bcdev->usb_type_work);
+		/*
+		 * Ensure PSY initialization writes are visible before accessing
+		 * PSY data from this notification path.
+		 */
+		if (smp_load_acquire(&bcdev->psy_initialized) &&
+		    pst && pst->psy)
+			schedule_work(&bcdev->usb_type_work);
 		break;
 	case BC_WLS_STATUS_GET:
 		pst = &bcdev->psy_list[PSY_TYPE_WLS];
@@ -2891,6 +2918,13 @@ static int battery_chg_probe(struct platform_device *pdev)
 		}
 	}
 
+	/*
+	 * All PSY structures and dependent state are now fully
+	 * initialized. Publish completion with a store-release so
+	 * battery_chg_update_usb_type_work() can safely proceed
+	 * after observing this flag via smp_load_acquire().
+	 */
+	smp_store_release(&bcdev->psy_initialized, true);
 	schedule_work(&bcdev->usb_type_work);
 
 	rc = get_charge_control_en(bcdev);
@@ -2916,6 +2950,11 @@ error:
 	atomic_set(&bcdev->state, PMIC_GLINK_STATE_DOWN);
 	bcdev->initialized = false;
 	up_write(&bcdev->state_sem);
+	/*
+	 * Publish that PSY initialization is incomplete before leaving the
+	 * probe error path. Early notifications must not access PSY data.
+	 */
+	smp_store_release(&bcdev->psy_initialized, false);
 
 	pmic_glink_unregister_client(bcdev->client);
 	cancel_work_sync(&bcdev->usb_type_work);
@@ -2939,6 +2978,11 @@ static int battery_chg_remove(struct platform_device *pdev)
 	atomic_set(&bcdev->state, PMIC_GLINK_STATE_DOWN);
 	bcdev->initialized = false;
 	up_write(&bcdev->state_sem);
+	/*
+	 * Publish completed PSY initialization before notification handlers
+	 * access PSY data.
+	 */
+	smp_store_release(&bcdev->psy_initialized, false);
 
 	if (bcdev->notifier_cookie)
 		panel_event_notifier_unregister(bcdev->notifier_cookie);

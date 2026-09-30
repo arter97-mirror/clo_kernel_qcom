@@ -26,6 +26,7 @@ struct cci_util_dev {
 	struct platform_device *ppdev;
 	struct dpin_cci_util_sensor_client client;
 	bool configured;
+	bool power_on;
 	int cci_dev_index;
 	int cci_master_id;
 	int slave_addr;
@@ -275,6 +276,11 @@ static int cci_ensure_configured(struct cci_util_dev *dev)
 	if (dev->configured)
 		return 0;
 
+	if (!dev->power_on) {
+		pr_warn_ratelimited("[%s] LT7911 is powered off, skipping CCI configure\n", __func__);
+		return -ENODEV;
+	}
+
 	rc = cci_configure(dev);
 	if (rc < 0)
 		return rc;
@@ -301,6 +307,11 @@ void cci_util_lt7911_enable_i2c(struct cci_util_handle *handle)
 
 	mutex_lock(&g_cci_util_lock);
 	dev = handle->dev;
+
+	if (!dev->power_on) {
+		mutex_unlock(&g_cci_util_lock);
+		return;
+	}
 
 	rc = cci_ensure_configured(dev);
 	if (rc < 0) {
@@ -409,10 +420,47 @@ void cci_util_lt7911_release_cci(struct cci_util_handle *handle)
 	if (dev && dev->configured) {
 		cci_util_release(dev);
 		dev->configured = false;
+		dev->power_on = false;
 	}
 	mutex_unlock(&g_cci_util_lock);
 }
 EXPORT_SYMBOL_GPL(cci_util_lt7911_release_cci);
+
+/**
+ * cci_util_lt7911_set_power_state - update the cached power state of LT7911.
+ * @handle:   opaque device handle obtained from cci_util_lt7911_get_device()
+ * @power_on: true if chip is powered on, false if powered off
+ */
+void cci_util_lt7911_set_power_state(struct cci_util_handle *handle, bool power_on)
+{
+	if (!handle || !handle->dev)
+		return;
+
+	mutex_lock(&g_cci_util_lock);
+	handle->dev->power_on = power_on;
+	mutex_unlock(&g_cci_util_lock);
+}
+EXPORT_SYMBOL_GPL(cci_util_lt7911_set_power_state);
+
+/**
+ * cci_util_lt7911_is_power_on - check whether LT7911 is currently powered on.
+ * @handle: opaque device handle obtained from cci_util_lt7911_get_device()
+ *
+ * Return: true if powered on, false otherwise.
+ */
+bool cci_util_lt7911_is_power_on(struct cci_util_handle *handle)
+{
+	bool power_on = false;
+
+	if (!handle || !handle->dev)
+		return false;
+
+	mutex_lock(&g_cci_util_lock);
+	power_on = handle->dev->power_on;
+	mutex_unlock(&g_cci_util_lock);
+	return power_on;
+}
+EXPORT_SYMBOL_GPL(cci_util_lt7911_is_power_on);
 
 /**
  * dpin_cci_util_read_seq - sequential byte read of @num_bytes registers
@@ -671,6 +719,11 @@ int cci_util_lt7911_get_information(struct cci_util_handle *handle,
 
 	mutex_lock(&g_cci_util_lock);
 	dev = handle->dev;
+
+	if (!dev->power_on) {
+		mutex_unlock(&g_cci_util_lock);
+		return -ENODEV;
+	}
 
 	rc = cci_ensure_configured(dev);
 	if (rc < 0) {

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _CORESIGHT_BYTE_CNTR_H
@@ -20,6 +20,7 @@ struct byte_cntr {
 	uint32_t		block_size;
 	int			byte_cntr_irq;
 	atomic_t		irq_cnt;
+	atomic_t		usb_recalibrating;
 	atomic_t	usb_free_buf;
 	wait_queue_head_t	wq;
 	wait_queue_head_t	usb_wait_wq;
