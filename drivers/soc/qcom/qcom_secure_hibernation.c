@@ -612,8 +612,11 @@ void deinit_aes_encrypt(void)
 	}
 
 	memset(key, 0, AES256_KEY_SIZE);
-	memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
-	kfree(params);
+	if (params) {
+		memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
+		kfree(params);
+		params = NULL;
+	}
 }
 
 static void cleanup_cmp_blk_array(void)
@@ -688,12 +691,15 @@ static int hibernate_pm_notifier(struct notifier_block *nb,
 
 err_authslot:
 	free_pages((unsigned long)temp_out_buf, 1);
+	temp_out_buf = NULL;
 err_setkey:
 	memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
 	memset(key, 0, AES256_KEY_SIZE);
 	crypto_free_aead(tfm);
+	tfm = NULL;
 err_aead:
 	kfree(params);
+	params = NULL;
 	return NOTIFY_BAD;
 }
 
@@ -727,7 +733,9 @@ err_auth:
 	memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
 	memset(key, 0, AES256_KEY_SIZE);
 	crypto_free_aead(tfm);
+	tfm = NULL;
 	kfree(params);
+	params = NULL;
 }
 
 /*
