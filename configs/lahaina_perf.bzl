@@ -351,7 +351,6 @@ lahaina_perf_config = {
     "CONFIG_SM_GPUCC_8350": "m",
     "CONFIG_SM_VIDEOCC_8350": "m",
     "CONFIG_SND_USB_AUDIO_QMI": "m",
-    "CONFIG_SOFTLOCKUP_DETECTOR": "n",
     "CONFIG_SPI_MSM_GENI": "m",
     "CONFIG_SPI_SPIDEV": "m",
     "CONFIG_SPMI": "y",
