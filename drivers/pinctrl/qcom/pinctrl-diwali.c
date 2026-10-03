@@ -26,6 +26,7 @@ static const struct msm_pinctrl_soc_data diwali_pinctrl = {
  */
 	.wakeirq_map = diwali_pdc_map,
 	.nwakeirq_map = ARRAY_SIZE(diwali_pdc_map),
+	.egpio_func = 11,
 };
 
 static const struct msm_pinctrl_soc_data diwali_vm_pinctrl = {

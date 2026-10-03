@@ -221,6 +221,27 @@ static void qusb_phy_update_tcsr_level_shifter(struct qusb_phy *qphy,
 	}
 }
 
+/* helper function for EUD register safe read */
+static u32 qusb_phy_read_eud_reg(struct qusb_phy *qphy)
+{
+	u32 val = 0;
+	int ret;
+	if (!qphy->eud_enable_reg)
+		return 0;
+
+	ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+	if (ret) {
+		dev_err(qphy->phy.dev,
+			"failed to enable cfg_ahb_clk: %d\n", ret);
+		return 0;
+	}
+
+	val = readl_relaxed(qphy->eud_enable_reg);
+
+	clk_disable_unprepare(qphy->cfg_ahb_clk);
+	return val;
+}
+
 static void qusb_phy_enable_clocks(struct qusb_phy *qphy, bool on)
 {
 	dev_dbg(qphy->phy.dev, "%s(): on:%d\n", __func__, on);
@@ -497,7 +518,7 @@ static int qusb_phy_init(struct usb_phy *phy)
 	}
 
 	qusb_phy_enable_clocks(qphy, true);
-	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
+	if (qusb_phy_read_eud_reg(qphy)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
 		return 0;
 	}
@@ -655,7 +676,7 @@ static void qusb_phy_shutdown(struct usb_phy *phy)
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
 
 	qusb_phy_enable_clocks(qphy, true);
-	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
+	if (qusb_phy_read_eud_reg(qphy)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
 		return;
 	}
@@ -757,8 +778,7 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 			writel_relaxed(0x00,
 				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
 
-			if (!qphy->eud_enable_reg ||
-					!readl_relaxed(qphy->eud_enable_reg)) {
+			if (!qusb_phy_read_eud_reg(qphy)) {
 				if (!(qphy->phy.flags & PHY_HOST_MODE)) {
 					/* Disable PHY */
 					writel_relaxed(POWER_DOWN |
@@ -917,7 +937,7 @@ static int qusb_phy_dpdm_regulator_enable(struct regulator_dev *rdev)
 
 	/* Turn on the clocks to avoid unclocked access while reading EUD_EN reg*/
 	qusb_phy_enable_clocks(qphy, true);
-	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
+	if (qusb_phy_read_eud_reg(qphy)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
 		/*
 		 * Dont turn off the clocks since EUD is enabled, and return -EPERM

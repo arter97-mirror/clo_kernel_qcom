@@ -235,6 +235,29 @@ static void msm_hsphy_modeled_d0_to_d1(struct msm_hsphy *hsphy)
 	pm_runtime_put_sync(hsphy->pd_devs[0]);
 }
 
+/* helper function for EUD register safe read */
+static u32 msm_hsphy_read_eud_reg(struct msm_hsphy *phy)
+{
+	u32 val = 0;
+	int ret;
+
+	if (!phy->eud_enable_reg)
+		return 0;
+
+	ret = clk_prepare_enable(phy->cfg_ahb_clk);
+	if (ret) {
+		dev_err(phy->phy.dev,
+			"failed to enable cfg_ahb_clk: %d\n", ret);
+		return 0;
+	}
+
+	val = readl_relaxed(phy->eud_enable_reg);
+
+	clk_disable_unprepare(phy->cfg_ahb_clk);
+
+	return val;
+}
+
 static void msm_hsphy_enable_clocks(struct msm_hsphy *phy, bool on)
 {
 	if (phy->fw_managed_pwr)
@@ -591,7 +614,7 @@ static int msm_hsphy_init(struct usb_phy *uphy)
 
 	dev_dbg(uphy->dev, "%s phy_flags:0x%x\n", __func__, phy->phy.flags);
 	if (phy->eud_enable_reg) {
-		eud_csr_reg = readl_relaxed(phy->eud_enable_reg);
+		eud_csr_reg = msm_hsphy_read_eud_reg(phy);
 		if (eud_csr_reg & EUD_EN2) {
 			dev_dbg(phy->phy.dev, "csr:0x%x eud is enabled\n",
 							eud_csr_reg);
@@ -753,7 +776,7 @@ static int msm_hsphy_set_suspend(struct usb_phy *uphy, int suspend)
 		return 0;
 	}
 
-	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg))
+	if (msm_hsphy_read_eud_reg(phy))
 		eud_active = true;
 
 suspend:
@@ -903,7 +926,7 @@ static int msm_hsphy_dpdm_regulator_enable(struct regulator_dev *rdev)
 	dev_dbg(phy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, phy->dpdm_enable);
 
-	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg)) {
+	if (msm_hsphy_read_eud_reg(phy)) {
 		dev_err(phy->phy.dev, "eud is enabled\n");
 		return 0;
 	}

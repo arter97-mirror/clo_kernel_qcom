@@ -1317,13 +1317,14 @@ config SM_GCC_FILLMORE
 	depends on ARM64 || COMPILE_TEST
 	select QCOM_GDSC
 	help
-	  Support for the global clock controller on Fillmore devices.
+	  Support for the global clock controller on Qualcomm Technologies, Inc.
+	  Fillmore devices.
 	  Say Y if you want to use peripheral devices such as UART,
 	  SPI, I2C, USB, SD/UFS, PCIe etc.
 
 config SM_CAMCC_DIWALI
 	tristate "DIWALI Camera Clock Controller"
-	select SM_GCC_DIWALI
+	select SM_GCC_FILLMORE
 	help
 	  Support for the camera clock controller on Qualcomm Technologies, Inc.
 	  DIWALI devices.
@@ -1332,7 +1333,7 @@ config SM_CAMCC_DIWALI
 
 config SM_GPUCC_DIWALI
 	tristate "DIWALI Graphics Clock Controller"
-	select SM_GCC_DIWALI
+	select SM_GCC_FILLMORE
 	help
 	  Support for the graphics clock controller on Qualcomm Technologies, Inc.
 	  DIWALI devices.
@@ -1341,7 +1342,7 @@ config SM_GPUCC_DIWALI
 
 config SM_VIDEOCC_DIWALI
 	tristate "DIWALI Video Clock Controller"
-	select SM_GCC_DIWALI
+	select SM_GCC_FILLMORE
 	help
 	  Support for the video clock controller on Qualcomm Technologies, Inc.
 	  DIWALI devices.
@@ -1350,7 +1351,7 @@ config SM_VIDEOCC_DIWALI
 
 config SM_DISPCC_DIWALI
 	tristate "DIWALI Display Clock Controller"
-	select SM_GCC_DIWALI
+	select SM_GCC_FILLMORE
 	help
 	  Support for the display clock controller on Qualcomm Technologies, Inc
 	  DIWALI devices.
@@ -1359,7 +1360,7 @@ config SM_DISPCC_DIWALI
 
 config SM_DEBUGCC_DIWALI
 	tristate "DIWALI Debug Clock Controller"
-	depends on SM_GCC_DIWALI
+	depends on SM_GCC_FILLMORE
 	help
 	  Support for the debug clock controller on Qualcomm Technologies, Inc.
 	  DIWALI devices.

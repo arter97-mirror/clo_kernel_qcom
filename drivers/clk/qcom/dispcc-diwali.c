@@ -1997,4 +1997,4 @@ static void __exit disp_cc_diwali_exit(void)
 module_exit(disp_cc_diwali_exit);
 
 MODULE_DESCRIPTION("QTI DISP_CC DIWALI Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

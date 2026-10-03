@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/clk.h>
@@ -2780,4 +2780,4 @@ static void __exit cam_cc_diwali_exit(void)
 module_exit(cam_cc_diwali_exit);
 
 MODULE_DESCRIPTION("QTI CAM_CC DIWALI Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

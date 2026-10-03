@@ -31,16 +31,6 @@ def register_modules(registry):
     )
 
     registry.register(
-        name = "drivers/soc/qcom/qcom_rimps",
-        out = "qcom_rimps.ko",
-        config = "CONFIG_QCOM_RIMPS",
-        srcs = [
-            # do not sort
-            "drivers/soc/qcom/qcom_rimps.c",
-        ],
-    )
-
-    registry.register(
         name = "drivers/soc/qcom/cx-ipeak",
         out = "cx-ipeak.ko",
         config = "CONFIG_QCOM_CX_IPEAK",

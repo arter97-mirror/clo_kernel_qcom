@@ -66,3 +66,5 @@ qnoc-seraph-objs += seraph.o
 obj-$(CONFIG_INTERCONNECT_QCOM_PIKACHU) += qnoc-pikachu.o
 qnoc-pikachu-objs += pikachu.o
 
+obj-$(CONFIG_INTERCONNECT_QCOM_DIWALI) += qnoc-diwali.o
+qnoc-diwali-objs := diwali.o

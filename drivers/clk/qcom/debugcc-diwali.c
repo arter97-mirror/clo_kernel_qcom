@@ -1710,9 +1710,9 @@ static int clk_debug_diwali_probe(struct platform_device *pdev)
 	for (i = 0; i < ARRAY_SIZE(debugcc_diwali_hws); i++) {
 		clk = devm_clk_register(&pdev->dev, debugcc_diwali_hws[i]);
 		if (IS_ERR(clk)) {
-			dev_err(&pdev->dev, "Unable to register %s, err:(%d)\n",
+			dev_err(&pdev->dev, "Unable to register %s, err:(%ld)\n",
 				clk_hw_get_name(debugcc_diwali_hws[i]),
-				(int)PTR_ERR(clk));
+				PTR_ERR(clk));
 			return PTR_ERR(clk);
 		}
 	}
@@ -1753,4 +1753,4 @@ static int __init clk_debug_diwali_init(void)
 fs_initcall(clk_debug_diwali_init);
 
 MODULE_DESCRIPTION("QTI DEBUG CC DIWALI Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

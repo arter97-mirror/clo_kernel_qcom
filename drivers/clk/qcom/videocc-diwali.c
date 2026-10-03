@@ -586,4 +586,4 @@ static void __exit video_cc_diwali_exit(void)
 module_exit(video_cc_diwali_exit);
 
 MODULE_DESCRIPTION("QTI VIDEO_CC DIWALI Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

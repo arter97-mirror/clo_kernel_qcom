@@ -2320,4 +2320,4 @@ static int __init qnoc_driver_init(void)
 core_initcall(qnoc_driver_init);
 
 MODULE_DESCRIPTION("Diwali NoC driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -715,4 +715,4 @@ static void __exit gpu_cc_diwali_exit(void)
 module_exit(gpu_cc_diwali_exit);
 
 MODULE_DESCRIPTION("QTI GPU_CC DIWALI Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
