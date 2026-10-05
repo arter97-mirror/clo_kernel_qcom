@@ -760,6 +760,10 @@ static arm_lpae_iopte arm_lpae_prot_to_pte(struct arm_lpae_io_pgtable *data,
 			pte |= (ARM_LPAE_MAIR_ATTR_IDX_ICACHE_OCACHE_NRA
 				<< ARM_LPAE_PTE_ATTRINDX_SHIFT);
 		else if ((prot & IOMMU_CACHE) &&
+			 (data->iop.cfg.quirks & IO_PGTABLE_QUIRK_QCOM_USE_LLC_NWA))
+			pte |= (ARM_LPAE_MAIR_ATTR_IDX_ICACHE_OCACHE_NWA
+				<< ARM_LPAE_PTE_ATTRINDX_SHIFT);
+		else if ((prot & IOMMU_CACHE) &&
 			 (data->iop.cfg.quirks & IO_PGTABLE_QUIRK_QCOM_USE_LLC_NRA))
 			pte |= (ARM_LPAE_MAIR_ATTR_IDX_ICACHE_OCACHE_NRA
 				<< ARM_LPAE_PTE_ATTRINDX_SHIFT);
