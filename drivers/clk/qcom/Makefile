@@ -145,6 +145,8 @@ obj-$(CONFIG_SM_GCC_CANOE) += gcc-canoe.o
 
 obj-$(CONFIG_SM_GCC_CHORA) += gcc-chora.o
 
+obj-$(CONFIG_SM_GCC_FILLMORE) += gcc-fillmore.o
+
 obj-$(CONFIG_SM_GCC_KHAJE) += gcc-khaje.o
 
 obj-$(CONFIG_SM_GCC_MALABAR) += gcc-malabar.o
