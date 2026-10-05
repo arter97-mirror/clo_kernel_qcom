@@ -24,6 +24,7 @@ qcom_cpu_vendor_hooks.ko
 icc-bcm-voter.ko
 icc-debug.ko
 icc-rpmh.ko
+crm-v2.ko
 qnoc-qos.ko
 qnoc-glymur.ko
 debug-regulator.ko
