@@ -456,6 +456,8 @@ struct stmmac_priv {
 	u32 tx_ch_bw[MTL_MAX_TX_QUEUES];
 	u8 tx_queue_pcp_map[MTL_MAX_TX_QUEUES];
 
+	bool best_effort_cbs_active;
+
 	__ETHTOOL_DECLARE_LINK_MODE_MASK(adv_old);
 
 #if IS_ENABLED(CONFIG_ETHQOS_QCOM_VER4)
