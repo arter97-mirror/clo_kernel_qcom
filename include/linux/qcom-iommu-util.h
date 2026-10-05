@@ -34,18 +34,20 @@
 /* Non secure unprivileged Data read operation */
 #define QCOM_IOMMU_ATOS_TRANS_DEFAULT	(0U)
 
-#ifndef IOMMU_SYS_CACHE
+/*
+ * Qualcomm-specific IOMMU protection bits for outer (LLC/system) cache
+ * control. These extend the upstream prot flags above IOMMU_PRIV.
+ */
+#define IOMMU_SYS_CACHE		(1 << 6) /* Enable outer (LLC) cache */
+#define IOMMU_SYS_CACHE_NRA	(1 << 8) /* Outer cache: No-Read-Allocate */
+/*
+ * Keep the existing fallback for the not-yet-supported flag. SYS_CACHE flags
+ * will be removed when the flag is moved to its intended header.
+ */
+
 /* Attributes are not supported, so render them ineffective. */
-#define IOMMU_SYS_CACHE		(0)
-#define IOMMU_SYS_CACHE_NWA	(0)
-#define IOMMU_SYS_CACHE_NRA	(0)
-#else
 #ifndef IOMMU_SYS_CACHE_NWA
 #define IOMMU_SYS_CACHE_NWA	(0)
-#endif
-#ifndef IOMMU_SYS_CACHE_NRA
-#define IOMMU_SYS_CACHE_NRA	(0)
-#endif
 #endif
 
 /* vendor iommu fault flags */
