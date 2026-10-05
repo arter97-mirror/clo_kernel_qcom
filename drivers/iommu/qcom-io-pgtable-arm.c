@@ -1178,7 +1178,7 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 				break;
 
 			if (pte & ARM_LPAE_PTE_CONT)
-				arm_lpae_cont_unmap(data, iova, lvl, ptep, num_entries);
+				arm_lpae_cont_unmap(data, iova, lvl, ptep, num_entries - i);
 
 			__arm_lpae_set_pte(ptep, 0, 1, &iop->cfg);
 
