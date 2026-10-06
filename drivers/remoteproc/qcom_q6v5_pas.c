@@ -1154,7 +1154,7 @@ int rproc_set_state(struct rproc *rproc, bool state)
 	}
 
 	adsp = (struct qcom_adsp *)rproc->priv;
-	if (!adsp->q6v5.running) {
+	if (!atomic_read(&adsp->q6v5.running)) {
 		dev_err(adsp->dev, "rproc is not running\n");
 		return -EINVAL;
 	} else if (!adsp->q6v5.handover_issued) {
@@ -1526,7 +1526,7 @@ static int adsp_attach(struct rproc *rproc)
 			rproc->state = RPROC_CRASHED;
 			panic("Panicking, timed out on ping/pong for %s\n", rproc->name);
 		}
-		adsp->q6v5.running = true;
+		atomic_set(&adsp->q6v5.running, 1);
 
 		/*
 		 * Balance the disable_irq() from qcom_q6v5_init(). The handover IRQ
