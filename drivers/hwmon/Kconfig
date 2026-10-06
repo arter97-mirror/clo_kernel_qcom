@@ -30,4 +30,19 @@ config SENSORS_QTI_BTL
 	  To compile this driver as module, choose M here: the module will
 	  be called qti_btl.
 
+config QTI_BATT_TELEMETRY
+	tristate "Qualcomm Technologies, Inc. Battery Telemetry Driver"
+	depends on QTI_PMIC_GLINK
+	help
+	  Enable this driver to support battery voltage and current
+	  telemetry data transport from remote sub-system to APPS via
+	  pmic_glink GLink channel on Qualcomm Technologies, Inc. platforms.
+
+	  The driver exposes a sysfs interface allowing userspace to
+	  start/stop sampling and read raw binary telemetry sample
+	  data in a single read call.
+
+	  Say Y or M if you are building for a Qualcomm Technologies, Inc.
+	  platform that supports battery telemetry via remote subsystem.
+
 endif # HWMON
