@@ -306,25 +306,6 @@ void unix_destroy_fpl(struct scm_fp_list *fpl)
 	unix_free_vertices(fpl);
 }
 
-static bool gc_in_progress;
-static seqcount_t unix_peek_seq = SEQCNT_ZERO(unix_peek_seq);
-
-void unix_peek_fpl(struct scm_fp_list *fpl)
-{
-	static DEFINE_SPINLOCK(unix_peek_lock);
-
-	if (!fpl || !fpl->count_unix)
-		return;
-
-	if (!READ_ONCE(gc_in_progress))
-		return;
-
-	/* Invalidate the final refcnt check in unix_vertex_dead(). */
-	spin_lock(&unix_peek_lock);
-	raw_write_seqcount_barrier(&unix_peek_seq);
-	spin_unlock(&unix_peek_lock);
-}
-
 static bool unix_vertex_dead(struct unix_vertex *vertex)
 {
 	struct unix_edge *edge;
@@ -356,36 +337,6 @@ static bool unix_vertex_dead(struct unix_vertex *vertex)
 		return false;
 
 	return true;
-}
-
-static LIST_HEAD(unix_visited_vertices);
-static unsigned long unix_vertex_grouped_index = UNIX_VERTEX_INDEX_MARK2;
-
-static bool unix_scc_dead(struct list_head *scc, bool fast)
-{
-	struct unix_vertex *vertex;
-	bool scc_dead = true;
-	unsigned int seq;
-
-	seq = read_seqcount_begin(&unix_peek_seq);
-
-	list_for_each_entry_reverse(vertex, scc, scc_entry) {
-		/* Don't restart DFS from this vertex. */
-		list_move_tail(&vertex->entry, &unix_visited_vertices);
-
-		/* Mark vertex as off-stack for __unix_walk_scc(). */
-		if (!fast)
-			vertex->index = unix_vertex_grouped_index;
-
-		if (scc_dead)
-			scc_dead = unix_vertex_dead(vertex);
-	}
-
-	/* If MSG_PEEK intervened, defer this SCC to the next round. */
-	if (read_seqcount_retry(&unix_peek_seq, seq))
-		return false;
-
-	return scc_dead;
 }
 
 static void unix_collect_skb(struct list_head *scc, struct sk_buff_head *hitlist)
@@ -440,6 +391,9 @@ static bool unix_scc_cyclic(struct list_head *scc)
 
 	return false;
 }
+
+static LIST_HEAD(unix_visited_vertices);
+static unsigned long unix_vertex_grouped_index = UNIX_VERTEX_INDEX_MARK2;
 
 static void __unix_walk_scc(struct unix_vertex *vertex, unsigned long *last_index,
 			    struct sk_buff_head *hitlist)
@@ -506,7 +460,9 @@ prev_vertex:
 	}
 
 	if (vertex->index == vertex->scc_index) {
+		struct unix_vertex *v;
 		struct list_head scc;
+		bool scc_dead = true;
 
 		/* SCC finalised.
 		 *
@@ -515,7 +471,18 @@ prev_vertex:
 		 */
 		__list_cut_position(&scc, &vertex_stack, &vertex->scc_entry);
 
-		if (unix_scc_dead(&scc, false)) {
+		list_for_each_entry_reverse(v, &scc, scc_entry) {
+			/* Don't restart DFS from this vertex in unix_walk_scc(). */
+			list_move_tail(&v->entry, &unix_visited_vertices);
+
+			/* Mark vertex as off-stack. */
+			v->index = unix_vertex_grouped_index;
+
+			if (scc_dead)
+				scc_dead = unix_vertex_dead(v);
+		}
+
+		if (scc_dead) {
 			unix_collect_skb(&scc, hitlist);
 		} else {
 			if (unix_vertex_max_scc_index < vertex->scc_index)
@@ -563,11 +530,19 @@ static void unix_walk_scc_fast(struct sk_buff_head *hitlist)
 	while (!list_empty(&unix_unvisited_vertices)) {
 		struct unix_vertex *vertex;
 		struct list_head scc;
+		bool scc_dead = true;
 
 		vertex = list_first_entry(&unix_unvisited_vertices, typeof(*vertex), entry);
 		list_add(&scc, &vertex->scc_entry);
 
-		if (unix_scc_dead(&scc, true))
+		list_for_each_entry_reverse(vertex, &scc, scc_entry) {
+			list_move_tail(&vertex->entry, &unix_visited_vertices);
+
+			if (scc_dead)
+				scc_dead = unix_vertex_dead(vertex);
+		}
+
+		if (scc_dead)
 			unix_collect_skb(&scc, hitlist);
 		else if (!unix_graph_maybe_cyclic)
 			unix_graph_maybe_cyclic = unix_scc_cyclic(&scc);
@@ -577,6 +552,8 @@ static void unix_walk_scc_fast(struct sk_buff_head *hitlist)
 
 	list_replace_init(&unix_visited_vertices, &unix_unvisited_vertices);
 }
+
+static bool gc_in_progress;
 
 static void __unix_gc(struct work_struct *work)
 {

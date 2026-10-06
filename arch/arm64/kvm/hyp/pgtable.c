@@ -491,7 +491,7 @@ static int hyp_unmap_walker(const struct kvm_pgtable_visit_ctx *ctx,
 		*unmapped += granule;
 	}
 
-	__tlbi_sync_s1ish_hyp();
+	dsb(ish);
 	isb();
 	mm_ops->put_page(ctx->ptep);
 
