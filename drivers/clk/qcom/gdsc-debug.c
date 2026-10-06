@@ -7,6 +7,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/workqueue.h>
 
 #include "gdsc.h"
 #include "gdsc-debug.h"
@@ -255,11 +256,18 @@ void gdsc_genpd_debug_unregister(struct gdsc *sc)
 EXPORT_SYMBOL_GPL(gdsc_genpd_debug_unregister);
 
 /*
- * The debugfs GenPD directories will be created lazily by genpd_debug_init during
- * a late_initcall. Ensure that the GDSC debugfs entries are created only after
- * genpd_debug_init has initialized the debugfs entries from the GenPD framework.
+ * gdsc_genpd_debug_init()'s late_initcall_sync can execute before
+ * the pm_genpd debugfs directory is created by genpd_debug_init()'s
+ * late_initcall, resulting in a race where the debugfs lookup is
+ * performed before the directory exists and consequently fails.
+ * Use a scheduled delayed work to retry the lookup, rescheduling itself
+ * with another 1 second delay if the directory still isn't there
+ * rather than giving up.
  */
-static int __init gdsc_genpd_debug_init(void)
+static void gdsc_debug_init_work_function(struct work_struct *work);
+static DECLARE_DELAYED_WORK(gdsc_debug_init_work, gdsc_debug_init_work_function);
+
+static void gdsc_debug_lookup_and_populate(void)
 {
 	struct gdsc_debug *gdsc_debug;
 
@@ -269,13 +277,24 @@ static int __init gdsc_genpd_debug_init(void)
 	if (!genpd_rootdir) {
 		pr_err("Unable to find pm_genpd debugfs directory\n");
 		mutex_unlock(&gdsc_genpd_debug_lock);
-		return 0;
+		schedule_delayed_work(&gdsc_debug_init_work, msecs_to_jiffies(1000));
+		return;
 	}
 
 	list_for_each_entry(gdsc_debug, &gdsc_genpd_debug_list, list)
 		gdsc_genpd_debug_create_one(gdsc_debug, genpd_rootdir);
 
 	mutex_unlock(&gdsc_genpd_debug_lock);
+}
+
+static void gdsc_debug_init_work_function(struct work_struct *work)
+{
+	gdsc_debug_lookup_and_populate();
+}
+
+static int __init gdsc_genpd_debug_init(void)
+{
+	gdsc_debug_lookup_and_populate();
 
 	return 0;
 }
