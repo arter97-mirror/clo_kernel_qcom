@@ -1,7 +1,6 @@
 seraph_consolidate_config = {
     # keep sorted
     "CONFIG_ATOMIC64_SELFTEST": "m",
-    "CONFIG_BATTERY_MAX1720X": "m",
     "CONFIG_CMA_DEBUGFS": "y",
     "CONFIG_CORESIGHT_SOURCE_ETM4X": "m",
     "CONFIG_CPU_IDLE_SIMPLE_GOV_QCOM_LPM": "m",
