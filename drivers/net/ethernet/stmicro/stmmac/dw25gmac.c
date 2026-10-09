@@ -26,8 +26,8 @@ static int dw25gmac_dma_ops_wait(void __iomem *ioaddr)
 {
 	u32 value;
 
-	if (readl_poll_timeout(ioaddr + XXVGMAC_DMA_CH_IND_CONTROL, value,
-			       !(value & XGMAC_OB), 10, 200))
+	if (readl_poll_timeout_atomic(ioaddr + XXVGMAC_DMA_CH_IND_CONTROL, value,
+				      !(value & XGMAC_OB), 10, 200))
 		return -EBUSY;
 
 	return 0;
