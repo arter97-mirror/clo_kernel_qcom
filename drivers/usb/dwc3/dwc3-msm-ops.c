@@ -386,6 +386,18 @@ static void vbus_draw_work_handler(struct work_struct *work)
 		return;
 	}
 
+	ret = power_supply_get_property(usb_psy, POWER_SUPPLY_PROP_ONLINE, &val);
+	if (ret) {
+		pr_debug("failed to get power supply online property, ret=%d\n", ret);
+		power_supply_put(usb_psy);
+		return;
+	}
+
+	if ((!val.intval) || (!mA)) {
+		pr_debug("usb psy not online, skip setting current limit\n");
+		power_supply_put(usb_psy);
+		return;
+	}
 	pr_info("Avail curr from USB = %u\n", mA);
 	val.intval = 1000 * mA;
 	ret = power_supply_set_property(usb_psy, POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT, &val);
