@@ -120,6 +120,7 @@ gh_rm_drv.ko
 gh_ctrl.ko
 gh_rm_heap_manager.ko
 gunyah_loader.ko
+qrtr-gunyah.ko
 gh_panic_notifier.ko
 dmesg_dumper.ko
 mdt_loader.ko

@@ -2050,3 +2050,13 @@ def register_modules(registry):
             "drivers/soc/qcom/smem",
         ],
     )
+
+    registry.register(
+        name = "drivers/soc/qcom/wear_config",
+        out = "wear_config.ko",
+        config = "CONFIG_QCOM_WEAR_CONFIG",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/wear_config.c",
+        ],
+    )

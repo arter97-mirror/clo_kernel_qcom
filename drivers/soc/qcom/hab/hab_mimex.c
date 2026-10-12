@@ -159,6 +159,13 @@ struct export_desc_super *habmem_add_export(
 	spin_unlock_bh(&vchan->pchan->expid_lock);
 	idr_preload_end();
 
+	if (exp->export_id < 0) {
+		pr_err("idr_alloc_cyclic failed, ret %d, vchan %x\n",
+			exp->export_id, vchan->id);
+		vfree(exp_super);
+		return NULL;
+	}
+
 	exp->readonly = flags;
 	exp->vcid_local = vchan->id;
 	exp->vcid_remote = vchan->otherend_id;
