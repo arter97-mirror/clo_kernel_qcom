@@ -226,24 +226,15 @@ void cfg80211_stop_p2p_device(struct cfg80211_registered_device *rdev,
 {
 	lockdep_assert_held(&rdev->wiphy.mtx);
 
-	pr_err("cfg80211: stop_p2p_device: wdev id=%u is_running=%d\n",
-		 wdev->identifier, wdev->is_running);
-
 	if (WARN_ON(wdev->iftype != NL80211_IFTYPE_P2P_DEVICE))
 		return;
 
-	if (!wdev->is_running) {
-		pr_err("cfg80211: stop_p2p_device wdev id=%u: not running, skip\n",
-			 wdev->identifier);
+	if (!wdev_running(wdev))
 		return;
-	}
 
 	rdev_stop_p2p_device(rdev, wdev);
 	wdev->is_running = false;
 
-	pr_err("cfg80211: stop_p2p_device '%s': opencount %d -> %d\n",
-		 wdev->netdev ? wdev->netdev->name : "(p2p-dev)",
-		 rdev->opencount, rdev->opencount - 1);
 	rdev->opencount--;
 
 	if (rdev->scan_req && rdev->scan_req->wdev == wdev) {
@@ -260,24 +251,15 @@ void cfg80211_stop_nan(struct cfg80211_registered_device *rdev,
 {
 	lockdep_assert_held(&rdev->wiphy.mtx);
 
-	pr_err("cfg80211: stop_nan: wdev id=%u is_running=%d\n",
-		 wdev->identifier, wdev->is_running);
-
 	if (WARN_ON(wdev->iftype != NL80211_IFTYPE_NAN))
 		return;
 
-	if (!wdev->is_running) {
-		pr_err("cfg80211: stop_nan wdev id=%u: not running, skip\n",
-			 wdev->identifier);
+	if (!wdev_running(wdev))
 		return;
-	}
 
 	rdev_stop_nan(rdev, wdev);
 	wdev->is_running = false;
 
-	pr_err("cfg80211: stop_nan '%s': opencount %d -> %d\n",
-		 wdev->netdev ? wdev->netdev->name : "(nan-dev)",
-		 rdev->opencount, rdev->opencount - 1);
 	rdev->opencount--;
 }
 
@@ -295,6 +277,7 @@ void cfg80211_shutdown_all_interfaces(struct wiphy *wiphy)
 		}
 
 		/* otherwise, check iftype */
+
 		wiphy_lock(wiphy);
 
 		switch (wdev->iftype) {
@@ -1095,9 +1078,6 @@ void wiphy_unregister(struct wiphy *wiphy)
 {
 	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
 
-	pr_err("cfg80211: wiphy_unregister '%s': start, opencount=%d\n",
-		 wiphy_name(wiphy), rdev->opencount);
-
 	wait_event(rdev->dev_wait, ({
 		int __count;
 		wiphy_lock(&rdev->wiphy);
@@ -1105,14 +1085,10 @@ void wiphy_unregister(struct wiphy *wiphy)
 		wiphy_unlock(&rdev->wiphy);
 		__count == 0; }));
 
-	pr_err("cfg80211: wiphy_unregister '%s': opencount=0, proceeding\n",
-		 wiphy_name(wiphy));
-
 	if (rdev->wiphy.rfkill)
 		rfkill_unregister(rdev->wiphy.rfkill);
 
 	rtnl_lock();
-
 	wiphy_lock(&rdev->wiphy);
 	nl80211_notify_wiphy(rdev, NL80211_CMD_DEL_WIPHY);
 	rdev->wiphy.registered = false;
@@ -1143,7 +1119,6 @@ void wiphy_unregister(struct wiphy *wiphy)
 
 	/* surely nothing is reachable now, clean up work */
 	cfg80211_process_wiphy_works(rdev, NULL);
-
 	wiphy_unlock(&rdev->wiphy);
 	rtnl_unlock();
 
@@ -1164,7 +1139,6 @@ void wiphy_unregister(struct wiphy *wiphy)
 
 	cfg80211_rdev_free_wowlan(rdev);
 	cfg80211_rdev_free_coalesce(rdev);
-	pr_err("cfg80211: wiphy_unregister '%s': done\n", wiphy_name(wiphy));
 }
 EXPORT_SYMBOL(wiphy_unregister);
 
@@ -1526,8 +1500,6 @@ static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 		}
 		break;
 	case NETDEV_UNREGISTER:
-		pr_err("cfg80211: NETDEV_UNREGISTER '%s' iftype=%d\n",
-			 dev->name, wdev->iftype);
 		/*
 		 * It is possible to get NETDEV_UNREGISTER multiple times,
 		 * so check wdev->registered.
@@ -1539,8 +1511,6 @@ static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 		}
 		break;
 	case NETDEV_GOING_DOWN:
-		pr_err("cfg80211: NETDEV_GOING_DOWN '%s' iftype=%d opencount=%d\n",
-			 dev->name, wdev->iftype, rdev->opencount);
 		wiphy_lock(&rdev->wiphy);
 		cfg80211_leave(rdev, wdev);
 		cfg80211_remove_links(wdev);
@@ -1549,8 +1519,6 @@ static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 		cancel_work_sync(&wdev->disconnect_wk);
 		break;
 	case NETDEV_DOWN:
-		pr_err("cfg80211: NETDEV_DOWN '%s': opencount %d -> %d\n",
-			 dev->name, rdev->opencount, rdev->opencount - 1);
 		wiphy_lock(&rdev->wiphy);
 		cfg80211_update_iface_num(rdev, wdev->iftype, -1);
 		if (rdev->scan_req && rdev->scan_req->wdev == wdev) {
@@ -1572,8 +1540,6 @@ static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 		wake_up(&rdev->dev_wait);
 		break;
 	case NETDEV_UP:
-		pr_err("cfg80211: NETDEV_UP '%s' iftype=%d: opencount %d -> %d\n",
-			 dev->name, wdev->iftype, rdev->opencount, rdev->opencount + 1);
 		wiphy_lock(&rdev->wiphy);
 		cfg80211_update_iface_num(rdev, wdev->iftype, 1);
 		wdev_lock(wdev);
