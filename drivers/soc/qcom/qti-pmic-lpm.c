@@ -17,7 +17,7 @@
 #include <linux/of.h>
 #include <linux/firmware/qcom/qcom_scm.h>
 
-#define QTI_PMIC_LPM_DEV_NAME	"qti,pmic-lpm"
+#define QTI_PMIC_LPM_DEV_NAME	"qcom,pmic-lpm"
 
 #define SDAM_PBS_ARG_REG	0x42
 

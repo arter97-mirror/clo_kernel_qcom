@@ -454,7 +454,7 @@ static int qcom_xpcs_config(struct phylink_pcs *pcs, unsigned int mode, phy_inte
 static int qcom_xpcs_get_link_status(struct dw_xpcs_qcom *qxpcs,
 				     struct phylink_link_state *state)
 {
-	unsigned int retries = 32;
+	unsigned int retries = 8;
 	unsigned int count = 0;
 	int ret = -EFAULT;
 
@@ -639,6 +639,8 @@ static int qcom_xpcs_enable(struct phylink_pcs *pcs)
 
 	if (qxpcs->pcs_fusa_intr > 0)
 		ret = qcom_xpcs_fusa_intr_enable(qxpcs);
+	else
+		qcom_xpcs_write(qxpcs, DW_VR_XS_PCS_SFTY_DISABLE, 0x1);
 
 	return ret;
 }

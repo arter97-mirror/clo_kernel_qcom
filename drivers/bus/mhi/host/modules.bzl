@@ -46,3 +46,16 @@ def register_modules(registry):
             "kernel/trace/qcom_ipc_logging",
         ],
     )
+    registry.register(
+        name = "drivers/bus/mhi/host/mhi_pci_generic",
+        out = "mhi_pci_generic.ko",
+        config = "CONFIG_MHI_BUS_PCI_GENERIC",
+        srcs = [
+            # do not sort
+            "drivers/bus/mhi/host/pci_generic.c",
+        ],
+        deps = [
+            # do not sort
+            "drivers/bus/mhi/host/mhi",
+        ],
+    )

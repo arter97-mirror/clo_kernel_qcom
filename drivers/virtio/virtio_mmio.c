@@ -586,6 +586,15 @@ static bool vm_get_shm_region(struct virtio_device *vdev,
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
 	u64 len, addr;
 
+	/*
+	 * Some transports expose SHM as unsupported by pre-filling the length
+	 * registers with -1, but fault on writes to the selector register.
+	 */
+	len = (u64) readl(vm_dev->base + VIRTIO_MMIO_SHM_LEN_LOW);
+	len |= (u64) readl(vm_dev->base + VIRTIO_MMIO_SHM_LEN_HIGH) << 32;
+	if (len == ~(u64)0)
+		return false;
+
 	/* Select the region we're interested in */
 	writel(id, vm_dev->base + VIRTIO_MMIO_SHM_SEL);
 

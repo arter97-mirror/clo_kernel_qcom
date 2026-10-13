@@ -300,6 +300,7 @@ hamoa_perf_config = {
     "CONFIG_USB_DWC3_MSM": "m",
     "CONFIG_USB_F_FS_IPC_LOGGING": "n",
     "CONFIG_USB_F_QDSS": "m",
+    "CONFIG_USB_MSM_EOM": "m",
     "CONFIG_VIRT_WIFI": "n",
     "CONFIG_VT6655": "n",
     "CONFIG_VT6656": "n",

@@ -42,13 +42,26 @@ static LIST_HEAD(cpu_pm_list);
 static enum cpuhp_state hp_online;
 static DEFINE_SPINLOCK(delay_lock);
 
-int tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
+static int tmc_wait_status(struct tmc_drvdata *drvdata, u32 offset, int pos, int val)
 {
+	int ret;
+	u32 count = drvdata->status_wait_time;
 	struct coresight_device *csdev = drvdata->csdev;
 	struct csdev_access *csa = &csdev->access;
 
+	do {
+		ret = coresight_timeout(csa, offset, pos, val);
+	} while (ret && count-- > 0);
+
+	return ret;
+}
+
+int tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
+{
+	struct coresight_device *csdev = drvdata->csdev;
+
 	/* Ensure formatter, unformatter and hardware fifo are empty */
-	if (coresight_timeout(csa, TMC_STS, TMC_STS_TMCREADY_BIT, 1)) {
+	if (tmc_wait_status(drvdata, TMC_STS, TMC_STS_TMCREADY_BIT, 1)) {
 		dev_err(&csdev->dev,
 			"timeout while waiting for TMC to be Ready\n");
 		return -EBUSY;
@@ -59,7 +72,6 @@ int tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
 void tmc_flush_and_stop(struct tmc_drvdata *drvdata)
 {
 	struct coresight_device *csdev = drvdata->csdev;
-	struct csdev_access *csa = &csdev->access;
 	u32 ffcr;
 
 	ffcr = readl_relaxed(drvdata->base + TMC_FFCR);
@@ -68,7 +80,7 @@ void tmc_flush_and_stop(struct tmc_drvdata *drvdata)
 	ffcr |= BIT(TMC_FFCR_FLUSHMAN_BIT);
 	writel_relaxed(ffcr, drvdata->base + TMC_FFCR);
 	/* Ensure flush completes */
-	if (coresight_timeout(csa, TMC_FFCR, TMC_FFCR_FLUSHMAN_BIT, 0)) {
+	if (tmc_wait_status(drvdata, TMC_FFCR, TMC_FFCR_FLUSHMAN_BIT, 0)) {
 		dev_err(&csdev->dev,
 		"timeout while waiting for completion of Manual Flush\n");
 	}
@@ -535,11 +547,37 @@ static ssize_t stop_on_flush_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(stop_on_flush);
 
+static ssize_t status_wait_time_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	u32 val = drvdata->status_wait_time;
+
+	return sysfs_emit(buf, "%u\n", val);
+}
+
+static ssize_t status_wait_time_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t size)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	u32 val;
+
+	if (kstrtouint(buf, 0, &val))
+		return -EINVAL;
+
+	drvdata->status_wait_time = val;
+
+	return size;
+}
+static DEVICE_ATTR_RW(status_wait_time);
+
 static struct attribute *coresight_tmc_attrs[] = {
 	&dev_attr_trigger_cntr.attr,
 	&dev_attr_buffer_size.attr,
 	&dev_attr_block_size.attr,
 	&dev_attr_stop_on_flush.attr,
+	&dev_attr_status_wait_time.attr,
 	NULL,
 };
 

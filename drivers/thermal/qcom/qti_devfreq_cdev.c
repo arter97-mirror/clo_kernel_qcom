@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
 
@@ -100,10 +100,14 @@ static int devfreq_cdev_probe(struct platform_device *pdev)
 	devfreq_cdev->gpu_np = of_parse_phandle(pdev->dev.of_node,
 				"qcom,devfreq", 0);
 
+	if (!devfreq_cdev->gpu_np)
+		return PTR_ERR(devfreq_cdev->gpu_np);
+
 	gpu_pdev = of_find_device_by_node(devfreq_cdev->gpu_np);
 	if (!gpu_pdev) {
 		dev_dbg(devfreq_cdev->dev, "Cannot find device node %s\n",
 			devfreq_cdev->gpu_np->name);
+		of_node_put(devfreq_cdev->gpu_np);
 		return -ENODEV;
 	}
 
@@ -119,11 +123,20 @@ static int devfreq_cdev_probe(struct platform_device *pdev)
 	}
 	if (link->status == DL_STATE_DORMANT) {
 		dev_dbg(devfreq_cdev->dev, "kgsl not probed yet:%d\n", ret);
+		device_link_del(link);
 		return -EPROBE_DEFER;
 	}
 
+	device_link_del(link);
+
 	devfreq_cdev->gpu_dev = &gpu_pdev->dev;
 	freq_ct = dev_pm_opp_get_opp_count(devfreq_cdev->gpu_dev);
+
+	if (freq_ct <= 0) {
+		dev_err(devfreq_cdev->dev, "kgsl freq table count is %d\n", freq_ct);
+		return -EINVAL;
+	}
+
 	freq_table = devm_kcalloc(devfreq_cdev->dev, freq_ct,
 					sizeof(*freq_table), GFP_KERNEL);
 	if (!freq_table)

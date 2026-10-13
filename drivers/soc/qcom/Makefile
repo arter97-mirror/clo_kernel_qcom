@@ -241,3 +241,5 @@ obj-$(CONFIG_MSM_BAM_DMUX) += bam_dmux.o
 
 obj-$(CONFIG_QCOM_POWER_MODE) += power_mode.o
 
+obj-$(CONFIG_QCOM_WEAR_CONFIG) += wear_config.o
+

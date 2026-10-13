@@ -351,10 +351,25 @@ void walt_config(void)
 		soc_feat_set(SOC_ENABLE_SW_CYCLE_COUNTER_BIT);
 	} else if (!strcmp(name, "MAHUA")) {
 		/*
+		 * Glymur (MAHUA) SoC: 3-cluster Oryon topology (cluster0: cpu0-5,
+		 * cluster1: cpu6-11, cluster2: cpu12-17). Enable Trailblazer,
+		 * SW cycle counter, sync freq cap, and RT spread features.
+		 */
+		trailblazer_boost_thresh_ipc = 225;
+		trailblazer_floor_freq[0] = 2500000;
+		trailblazer_floor_freq[1] = 2500000;
+		trailblazer_floor_freq[2] = 3860000;
+		sysctl_walt_features |= WALT_FEAT_TRAILBLAZER_BIT;
+		sysctl_walt_features |= WALT_FEAT_SYNC_FREQ_CAP_BIT;
+
+		/*
 		 * By default this SOC flag will be disabled.
 		 * Enable explicitly for platforms that support SW cycle counter.
 		 */
 		soc_feat_set(SOC_ENABLE_SW_CYCLE_COUNTER_BIT);
+
+		soc_feat_set(SOC_ENABLE_BOOST_TO_NEXT_CLUSTER_BIT);
+		soc_feat_set(SOC_ENABLE_SILVER_RT_SPREAD_BIT);
 	} else if (!strcmp(name, "SERAPH") || !strcmp(name, "PIKACHU")) {
 		soc_feat_unset(SOC_ENABLE_CONSERVATIVE_BOOST_TOPAPP_BIT);
 		soc_feat_unset(SOC_ENABLE_CONSERVATIVE_BOOST_FG_BIT);

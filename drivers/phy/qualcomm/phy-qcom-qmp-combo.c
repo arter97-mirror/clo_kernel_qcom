@@ -23,6 +23,8 @@
 #include <linux/usb/dwc3-msm.h>
 #include <linux/usb/typec.h>
 #include <linux/usb/typec_mux.h>
+#include <linux/phy_core.h>
+#include <linux/eom_ioctl.h>
 
 #include <drm/bridge/aux-bridge.h>
 
@@ -2047,6 +2049,9 @@ struct qmp_combo {
 
 	struct typec_switch_dev *sw;
 	enum typec_orientation orientation;
+#if IS_ENABLED(CONFIG_USB_MSM_EOM)
+	struct eom_phy_device eom_phy;
+#endif
 };
 
 static void qmp_v3_dp_aux_init(struct qmp_combo *qmp);
@@ -4343,6 +4348,61 @@ static struct phy *qmp_combo_phy_xlate(struct device *dev, const struct of_phand
 	return ERR_PTR(-EINVAL);
 }
 
+#if IS_ENABLED(CONFIG_USB_MSM_EOM)
+static int qmp_combo_eom_phy_read(void *priv, u32 offset, u32 *value)
+{
+	struct eom_phy_device *eom_phy = (struct eom_phy_device *)priv;
+	struct qmp_combo *qmp = container_of(eom_phy, struct qmp_combo, eom_phy);
+
+	*value = readl_relaxed(qmp->com + offset);
+	return 0;
+}
+
+static int qmp_combo_eom_phy_write(void *priv, u32 offset, u32 value)
+{
+	struct eom_phy_device *eom_phy = (struct eom_phy_device *)priv;
+	struct qmp_combo *qmp = container_of(eom_phy, struct qmp_combo, eom_phy);
+
+	writel_relaxed(value, qmp->com + offset);
+	return 0;
+}
+
+static struct eom_phy_ops qmp_combo_eom_ops = {
+	.phy_read  = qmp_combo_eom_phy_read,
+	.phy_write = qmp_combo_eom_phy_write,
+};
+
+static void qmp_combo_register_eom_phy(struct qmp_combo *qmp)
+{
+	struct eom_phy_device *eom_phy = &qmp->eom_phy;
+	int ret = 0;
+
+	if (!qmp->rx) {
+		dev_err(qmp->dev, "EOM reg phy base error\n");
+		return;
+	}
+
+	eom_phy->index = 0;
+	eom_phy->lanes = 2;
+
+	ret = register_phy_device(&qmp_combo_eom_ops, eom_phy,
+				  eom_phy->index, 0, 0, TYPE_USB,
+				  eom_phy->lanes);
+	if (ret)
+		dev_err(qmp->dev, "EOM PHY registration failed\n");
+
+	dev_dbg(qmp->dev, "EOM PHY registered\n");
+}
+
+static void qmp_combo_unregister_eom_phy(struct qmp_combo *qmp)
+{
+	unregister_phy_device(&qmp_combo_eom_ops, qmp->eom_phy.index, TYPE_USB);
+}
+#else
+static inline void qmp_combo_register_eom_phy(struct qmp_combo *qmp) { }
+static inline void qmp_combo_unregister_eom_phy(struct qmp_combo *qmp) { }
+#endif /* CONFIG_USB_MSM_EOM */
+
 static int qmp_combo_probe(struct platform_device *pdev)
 {
 	struct qmp_combo *qmp;
@@ -4434,6 +4494,7 @@ static int qmp_combo_probe(struct platform_device *pdev)
 	phy_set_drvdata(qmp->dp_phy, qmp);
 
 	dev_set_drvdata(dev, qmp);
+	qmp_combo_register_eom_phy(qmp);
 
 	if (usb_np == dev->of_node)
 		phy_provider = devm_of_phy_provider_register(dev, qmp_combo_phy_xlate);
@@ -4518,8 +4579,16 @@ static const struct of_device_id qmp_combo_of_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, qmp_combo_of_match_table);
 
+static void qmp_combo_remove(struct platform_device *pdev)
+{
+	struct qmp_combo *qmp = platform_get_drvdata(pdev);
+
+	qmp_combo_unregister_eom_phy(qmp);
+}
+
 static struct platform_driver qmp_combo_driver = {
 	.probe		= qmp_combo_probe,
+	.remove		= qmp_combo_remove,
 	.driver = {
 		.name	= "qcom-qmp-combo-phy",
 		.pm	= &qmp_combo_pm_ops,
