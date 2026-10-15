@@ -1934,12 +1934,17 @@ static struct phylink_pcs *ethqos_select_xpcs(struct stmmac_priv *priv,
 static int ethqos_xpcs_init(struct stmmac_priv *priv)
 {
 	struct device_node *xpcs_node;
+	int ret = 0;
 
 	xpcs_node = of_parse_phandle(priv->device->of_node, "qcom-xpcs-handle", 0);
 
 	priv->hw->phylink_pcs = qcom_xpcs_create(xpcs_node, priv->plat->phy_interface);
-	if (IS_ERR_OR_NULL(priv->hw->phylink_pcs))
-		return -ENODEV;
+	if (IS_ERR_OR_NULL(priv->hw->phylink_pcs)) {
+		ret = IS_ERR(priv->hw->phylink_pcs) ?
+			  PTR_ERR(priv->hw->phylink_pcs) : -ENODEV;
+		priv->hw->phylink_pcs = NULL;
+		return ret;
+	}
 
 	return 0;
 }
