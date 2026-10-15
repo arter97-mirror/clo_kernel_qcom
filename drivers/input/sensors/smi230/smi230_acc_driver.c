@@ -264,6 +264,8 @@ static ssize_t smi230_acc_store_acc_pwr_cfg(struct device *dev,
 		 */
 		if (err == 0 && IS_ENABLED(CONFIG_SMI230_ACC_FIFO_WM))
 			err = smi230_acc_fifo_reset(p_smi230_dev);
+
+		client_data->timestamp_old = ktime_get_boottime_ns();
 #ifdef CONFIG_SMI230_DATA_SYNC
 		/* Re-arm the data-sync engine after re-activation. The power
 		 * mode change above puts the accelerometer back into normal
