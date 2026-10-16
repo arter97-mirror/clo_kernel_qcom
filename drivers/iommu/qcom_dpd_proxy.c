@@ -356,12 +356,6 @@ static int dpd_args_validate(struct dpd_mem_ops_args *args, struct sg_table *sgt
 		return -EINVAL;
 	}
 
-	if (is_protected_kvm_enabled() && sgt->orig_nents > KVM_FFA_MAX_NR_CONSTITUENTS) {
-		dpd_args_show(args, false, "%d nents greater than KVM_FFA_MAX_NR_CONSTITUENTS\n",
-			sgt->orig_nents);
-		return -EINVAL;
-	}
-
 	/* CPZ usecases */
 	for (i = 0; i < dpd_args_len(args); i++) {
 		vmperm = dpd_args_vmperm(args, i);

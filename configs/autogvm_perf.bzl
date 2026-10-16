@@ -39,6 +39,8 @@ autogvm_perf_config = {
     "CONFIG_I2C_MSM_GENI": "m",
     "CONFIG_I2C_QCOM_GENI_MSM": "m",
     "CONFIG_I2C_VIRTIO": "m",
+    "CONFIG_IIO_KFIFO_BUF": "m",
+    "CONFIG_IIO_SCMI": "m",
     "CONFIG_INTERCONNECT_CLK": "m",
     "CONFIG_IOMMU_IO_PGTABLE_FAST": "y",
     "CONFIG_IPC_LOGGING": "m",
