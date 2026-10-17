@@ -150,6 +150,7 @@ static int shared_hyp_unmapping(int index)
                 { .vmid = QCOM_SCM_VMID_HLOS,
                   .perm = PERM_READ | PERM_WRITE | PERM_EXEC }
 	};
+	dev_err(memsh_drv->dev, "msm_memshare: %s: for client-id: %d\n", __func__, memblock[index].client_id);
 	source = &memblock[index].hyp_map_info;
 	for (j = 0; j < source->num_vmids; j++)
 		source_vmids |= BIT(source->vmids[j]);
@@ -158,6 +159,7 @@ static int shared_hyp_unmapping(int index)
 		memblock[index].size, &source_vmids, dest_vmids, 1);
 	if (!ret)
 		memblock[index].hyp_mapping = 0;
+	dev_err(memsh_drv->dev, "msm_memshare: %s: for client-id: %d, ret :%d\n", __func__, memblock[index].client_id, ret);
 	return ret;
 }
 
@@ -248,7 +250,7 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 
 	case QCOM_SSR_AFTER_POWERUP:
 		trace_rproc_qcom_event("modem", "QCOM_SSR_AFTER_POWERUP", "modem_notifier-enter");
-		dev_info(memsh_drv->dev, "memshare: QCOM_SSR_AFTER_POWERUP: Modem has booted up\n");
+		dev_info(memsh_drv->dev, "memshare: QCOM_SSR_AFTER_POWERUP: \n");
 		for (i = 0; i < MAX_CLIENTS; i++) {
 			client_node = memsh_child[i];
 			size = memblock[i].size;
@@ -268,7 +270,9 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 				memblock[i].allotted) {
 
 				if (memblock[i].hyp_mapping) {
+					dev_err(memsh_drv->dev, "msm_memshare: %s: invoke shared_hyp_unmapping for client-id: %d\n", __func__, memblock[i].client_id);
 					ret = shared_hyp_unmapping(i);
+					dev_err(memsh_drv->dev, "msm_memshare: %s: shared_hyp_unmapping for client-id: %d, ret: %d\n", __func__, memblock[i].client_id, ret);
 					if (ret) {
 						dev_err(memsh_drv->dev, "msm_memshare: %s: Failed qcom_scm_assign_mem "
 							"for client-id: %d, ret: %d\n", __func__, memblock[i].client_id, ret);
@@ -412,7 +416,6 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 			resp = 1;
 		}
 		if (!resp) {
-			memblock[index].free_memory += 1;
 			memblock[index].allotted = 1;
 			memblock[index].size = alloc_req->num_bytes;
 			memblock[index].peripheral = alloc_req->proc_id;
