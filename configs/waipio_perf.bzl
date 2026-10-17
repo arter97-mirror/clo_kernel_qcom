@@ -371,6 +371,7 @@ waipio_perf_config = {
     "CONFIG_SM_CAMCC_8450": "m",
     "CONFIG_SM_CAMCC_DIWALI": "m",
     "CONFIG_SM_DEBUGCC_8450": "m",
+    "CONFIG_SM_DEBUGCC_DIWALI": "m",
     "CONFIG_SM_DISPCC_8450": "m",
     "CONFIG_SM_DISPCC_DIWALI": "m",
     "CONFIG_SM_GCC_8450": "m",
