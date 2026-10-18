@@ -34,6 +34,7 @@ struct qcom_q6v5 {
 
 	struct icc_path *path;
 	struct icc_path *crypto_path;
+	struct icc_path *cnoc_path;
 
 	unsigned int stop_bit;
 	unsigned int ping_bit;

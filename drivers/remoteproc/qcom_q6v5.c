@@ -129,8 +129,16 @@ int qcom_q6v5_prepare(struct qcom_q6v5 *q6v5)
 		return ret;
 	}
 
+	ret = icc_set_bw(q6v5->cnoc_path, UINT_MAX, UINT_MAX);
+	if (ret < 0) {
+		dev_err(q6v5->dev, "failed to set cnoc bandwidth request\n");
+		icc_set_bw(q6v5->path, 0, 0);
+		return ret;
+	}
+
 	ret = q6v5_load_state_toggle(q6v5, true);
 	if (ret) {
+		icc_set_bw(q6v5->cnoc_path, 0, 0);
 		icc_set_bw(q6v5->path, 0, 0);
 		return ret;
 	}
@@ -158,8 +166,9 @@ int qcom_q6v5_unprepare(struct qcom_q6v5 *q6v5)
 	disable_irq(q6v5->handover_irq);
 	q6v5_load_state_toggle(q6v5, false);
 
-	/* Disable interconnect vote, in case handover never happened */
+	/* Disable interconnect votes, in case handover never happened */
 	icc_set_bw(q6v5->path, 0, 0);
+	icc_set_bw(q6v5->cnoc_path, 0, 0);
 
 	return !q6v5->handover_issued;
 }
@@ -551,6 +560,7 @@ static irqreturn_t q6v5_handover_interrupt(int irq, void *data)
 		complete(&q6v5->subsys_booted);
 
 	icc_set_bw(q6v5->path, 0, 0);
+	icc_set_bw(q6v5->cnoc_path, 0, 0);
 
 	q6v5->handover_issued = true;
 
@@ -840,6 +850,15 @@ int qcom_q6v5_init(struct qcom_q6v5 *q6v5, struct platform_device *pdev,
 				     "failed to acquire crypto_ddr interconnect path\n");
 		}
 		q6v5->crypto_path = NULL;
+	}
+
+	q6v5->cnoc_path = devm_of_icc_get(&pdev->dev, "rproc_cnoc");
+	if (IS_ERR(q6v5->cnoc_path)) {
+		if (PTR_ERR(q6v5->cnoc_path) != -ENODATA) {
+			return dev_err_probe(&pdev->dev, PTR_ERR(q6v5->cnoc_path),
+				     "failed to acquire rproc_cnoc interconnect path\n");
+		}
+		q6v5->cnoc_path = NULL;
 	}
 
 	INIT_WORK(&q6v5->crash_handler, qcom_q6v5_crash_handler_work);
