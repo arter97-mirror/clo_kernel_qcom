@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <trace/hooks/cpufreq.h>
@@ -32,7 +33,12 @@ static u64 walt_compute_cpu_cycles(struct walt_cpu_cycle *wcc, u64 wc)
 	 *
 	 */
 	read_lock_irqsave(&wcc->lock, flags);
-	delta = wc - wcc->last_time_ns;
+	/*
+	 * wc is sampled by the caller before taking the lock, a cpufreq
+	 * transition on another cpu may have advanced last_time_ns past it.
+	 * Do not let delta underflow.
+	 */
+	delta = wc > wcc->last_time_ns ? wc - wcc->last_time_ns : 0;
 	ret = wcc->cycles + ((delta * wcc->mult_fact) >> 20);
 	read_unlock_irqrestore(&wcc->lock, flags);
 
