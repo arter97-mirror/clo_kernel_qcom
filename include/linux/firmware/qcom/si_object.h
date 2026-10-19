@@ -91,6 +91,7 @@ struct si_object_invoke_ctx {
 #define OIC_FLAG_BUSY		1	/* Context is busy. */
 #define OIC_FLAG_NOTIFY		2	/* Context needs to notify the current object. */
 #define OIC_FLAG_QTEE		4	/* Context has objects shared with QTEE. */
+#define OIC_FLAG_USERSPACE	8	/* Invocation is from userspace (process_invoke_req). */
 	unsigned int flags;
 
 	/* Current object invoked in this callback context. */
@@ -175,6 +176,8 @@ struct si_object {
 		unsigned long object_ptr;
 		unsigned long long object_cookie;
 	} info;
+
+	bool kernel_client;
 
 	struct si_object_operations *ops;
 

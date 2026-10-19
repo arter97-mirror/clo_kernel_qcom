@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Description: CoreSight TMC USB driver
  */
@@ -24,6 +24,69 @@
 
 #define TMC_AXICTL_VALUE	(0xf02)
 #define TMC_FFCR_VALUE		(0x133)
+
+/*
+ * Period (in jiffies) at which usb_read_work_fn re-derives the number of
+ * pending USB_BLK_SIZE blocks from the RWP write pointer and recalibrates
+ * irq_cnt. The byte-cntr interrupt is edge-triggered and can be coalesced
+ * under high trace bandwidth, so irq_cnt may under-count the data actually
+ * written by the ETR. Periodically comparing the RWP offset against the
+ * current read offset lets us recover the true pending count without
+ * relying solely on the (possibly coalesced) interrupt count.
+ */
+#define USB_IRQ_CALIB_PERIOD	(HZ * 2)
+
+/**
+ * usb_recalibrate_irq_cnt - recompute pending block count from RWP and
+ * bump irq_cnt if it has under-counted due to IRQ coalescing.
+ * @drvdata: byte counter context.
+ *
+ * Reads the current RWP offset and computes how many USB_BLK_SIZE blocks
+ * are pending between the current read offset and the write pointer. If
+ * that number is larger than the current irq_cnt, irq_cnt is raised to
+ * match so the reader will drain all of the data that has actually been
+ * written.
+ */
+static void usb_recalibrate_irq_cnt(struct byte_cntr *drvdata)
+{
+	struct tmc_drvdata *tmcdrvdata = drvdata->tmcdrvdata;
+	struct etr_buf *etr_buf = tmcdrvdata->sysfs_buf;
+	long w_offset;
+	size_t pending;
+	int pending_blocks;
+
+	/*
+	 * Block etr_handler() from incrementing irq_cnt while we recompute
+	 * it from the RWP write pointer. Otherwise a byte-cntr IRQ
+	 * arriving in the middle of this recalibration would be counted both
+	 * here (through the RWP offset) and by etr_handler(), double-counting
+	 * the same block. The flag is cleared once recalibration is done so
+	 * etr_handler() resumes incrementing irq_cnt normally.
+	 */
+	atomic_set(&drvdata->usb_recalibrating, 1);
+
+	w_offset = tmc_get_rwp_offset(tmcdrvdata);
+	if (w_offset < 0) {
+		dev_err_ratelimited(&tmcdrvdata->csdev->dev,
+			"%s: RWP offset is invalid\n", __func__);
+		atomic_set(&drvdata->usb_recalibrating, 0);
+		return;
+	}
+
+	pending = ((w_offset < drvdata->offset) ? etr_buf->size : 0) +
+			w_offset - drvdata->offset;
+
+	pending_blocks = pending / USB_BLK_SIZE;
+
+	if (pending_blocks > atomic_read(&drvdata->irq_cnt)) {
+		dev_dbg(&tmcdrvdata->csdev->dev,
+			"recalibrate irq_cnt: %d -> %d (pending %zu bytes)\n",
+			atomic_read(&drvdata->irq_cnt), pending_blocks, pending);
+		atomic_set(&drvdata->irq_cnt, pending_blocks);
+	}
+
+	atomic_set(&drvdata->usb_recalibrating, 0);
+}
 
 static int usb_bypass_start(struct byte_cntr *byte_cntr_data)
 {
@@ -223,6 +286,7 @@ static void usb_read_work_fn(struct work_struct *work)
 	long actual;
 	ssize_t actual_total = 0;
 	char *buf;
+	unsigned long next_calib = jiffies + USB_IRQ_CALIB_PERIOD;
 	struct byte_cntr *drvdata =
 		container_of(work, struct byte_cntr, read_work);
 	struct tmc_drvdata *tmcdrvdata = drvdata->tmcdrvdata;
@@ -230,6 +294,19 @@ static void usb_read_work_fn(struct work_struct *work)
 
 	while (tmcdrvdata->mode == CS_MODE_SYSFS
 		&& tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_USB) {
+		/*
+		 * Every USB_IRQ_CALIB_PERIOD recompute the number of
+		 * pending blocks from the RWP write pointer and recalibrate
+		 * irq_cnt. This recovers any blocks missing to edge-triggered
+		 * byte-cntr IRQ coalescing under high trace bandwidth, so the
+		 * reader keeps draining all data actually written even if the
+		 * interrupt count under-counted.
+		 */
+		if (time_after_eq(jiffies, next_calib)) {
+			usb_recalibrate_irq_cnt(drvdata);
+			next_calib = jiffies + USB_IRQ_CALIB_PERIOD;
+		}
+
 		if (!atomic_read(&drvdata->irq_cnt)) {
 			ret =  wait_event_interruptible_timeout(
 				drvdata->usb_wait_wq,

@@ -263,6 +263,8 @@ int      cci_util_lt7911_reg_read_seq(struct cci_util_handle *handle,
 void     cci_util_lt7911_enable_i2c(struct cci_util_handle *handle);
 void     cci_util_lt7911_disable_i2c(struct cci_util_handle *handle);
 void     cci_util_lt7911_release_cci(struct cci_util_handle *handle);
+void     cci_util_lt7911_set_power_state(struct cci_util_handle *handle, bool power_on);
+bool     cci_util_lt7911_is_power_on(struct cci_util_handle *handle);
 int      cci_util_lt7911_get_information(struct cci_util_handle *handle,
 					 int *irq, int *width, int *height,
 					 int *fps, int *format, int *afreq, int *ach);

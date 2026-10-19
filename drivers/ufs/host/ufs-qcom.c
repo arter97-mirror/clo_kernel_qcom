@@ -1555,39 +1555,75 @@ static void ufs_qcom_populate_available_cpus(struct ufs_hba *hba)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
 	int cid_cpu[MAX_NUM_CLUSTERS] = {-1, -1, -1, -1};
+	struct cpu_freq_info *cpu_freq_info;
 	int cid = -1;
 	int prev_cid = -1;
 	int cpu = 0;
+	int i;
 	/*
 	 * Due to Logical contiguous CPU numbering, one to one mapping
 	 * between physical and logical cpu is no more applicable.
 	 * Hence we are not passing cpu mask from the device tree.
 	 * Hence populate the cpu mask dynamically as below.
 	 */
+
+	host->num_cpus = 0;
+
 	for_each_cpu(cpu, cpu_possible_mask) {
 		cid = topology_cluster_id(cpu);
 		if (cid != prev_cid) {
 			cid_cpu[cid] = cpu;
 			prev_cid = cid;
+			host->num_cpus++;
 		}
 	}
+
+	/*
+	 * Populate the per-cluster CPU masks. The blocks run in ascending
+	 * cluster order, so the last existing cluster (cid_cpu != -1) updates
+	 * max_cluster_mask last, leaving it holding the highest valid cluster.
+	 * CLUSTER_0 is always the lowest cluster, so it holds min_cluster_mask.
+	 * e.g. if only 3 clusters are present (C0, C1, C2) and C3 does not
+	 * exist, max_cluster_mask holds C2 and min_cluster_mask holds C0.
+	 */
+	cpumask_clear(&host->max_cluster_mask);
+	cpumask_clear(&host->min_cluster_mask);
 
 	if (cid_cpu[CLUSTER_0] != -1) {
 		host->cluster_mask[CLUSTER_0].bits[0] =
 			topology_cluster_cpumask(cid_cpu[CLUSTER_0])->bits[0];
+		host->max_cluster_mask.bits[0] =
+			host->cluster_mask[CLUSTER_0].bits[0];
+		host->min_cluster_mask.bits[0] =
+			host->cluster_mask[CLUSTER_0].bits[0];
 	}
 	if (cid_cpu[CLUSTER_1] != -1) {
 		host->cluster_mask[CLUSTER_1].bits[0] =
 			topology_cluster_cpumask(cid_cpu[CLUSTER_1])->bits[0];
+		host->max_cluster_mask.bits[0] =
+			host->cluster_mask[CLUSTER_1].bits[0];
 	}
 	if (cid_cpu[CLUSTER_2] != -1) {
 		host->cluster_mask[CLUSTER_2].bits[0] =
 			topology_cluster_cpumask(cid_cpu[CLUSTER_2])->bits[0];
+		host->max_cluster_mask.bits[0] =
+			host->cluster_mask[CLUSTER_2].bits[0];
 	}
 
 	if (cid_cpu[CLUSTER_3] != -1) {
 		host->cluster_mask[CLUSTER_3].bits[0] =
 			topology_cluster_cpumask(cid_cpu[CLUSTER_3])->bits[0];
+		host->max_cluster_mask.bits[0] =
+			host->cluster_mask[CLUSTER_3].bits[0];
+	}
+
+	/* Allocate and Populate cpu_info */
+	cpu_freq_info = kzalloc(sizeof(struct cpu_freq_info) * host->num_cpus, GFP_KERNEL);
+	if (cpu_freq_info) {
+		for (i = 0; i < host->num_cpus; i++)
+			cpu_freq_info[i].cpu = cid_cpu[i];
+
+		host->cpu_info = cpu_freq_info;
 	}
 }
 
@@ -3222,17 +3258,23 @@ static void ufs_qcom_parse_irq_affinity(struct ufs_hba *hba)
 	if (np) {
 		of_property_read_u32(np, "qcom,prime-mask", &mask);
 		host->perf_mask.bits[0] = mask;
-		if (!cpumask_subset(&host->perf_mask, cpu_possible_mask)) {
-			dev_err(dev, "Invalid group prime mask\n");
-			host->perf_mask.bits[0] = UFS_QCOM_IRQ_PRIME_MASK;
-		}
+
+		/*
+		 * The DT mask is a static per-SKU entry and may reference CPUs
+		 * that do not exist on this SoC. cpumask_subset() cannot detect
+		 * this: it only compares bits [0, nr_cpu_ids), so any bit set at
+		 * or above nr_cpu_ids is silently dropped and an out-of-range
+		 * mask looks like a valid subset. Use a direct AND against
+		 * cpu_possible_mask so out-of-range bits are actually caught.
+		 */
+		if (host->perf_mask.bits[0] & ~cpumask_bits(cpu_possible_mask)[0])
+			host->perf_mask.bits[0] = host->max_cluster_mask.bits[0];
+
 		mask = 0;
 		of_property_read_u32(np, "qcom,silver-mask", &mask);
 		host->def_mask.bits[0] = mask;
-		if (!cpumask_subset(&host->def_mask, cpu_possible_mask)) {
-			dev_err(dev, "Invalid group silver mask\n");
-			host->def_mask.bits[0] = UFS_QCOM_IRQ_SLVR_MASK;
-		}
+		if (host->def_mask.bits[0] & ~cpumask_bits(cpu_possible_mask)[0])
+			host->def_mask.bits[0] = host->min_cluster_mask.bits[0];
 	}
 	/* If device includes perf mask, enable dynamic irq affinity feature */
 	if (host->perf_mask.bits[0])
@@ -5674,6 +5716,41 @@ static ssize_t ufs_pm_mode_store(struct device *dev,
 
 static DEVICE_ATTR_RW(ufs_pm_mode);
 
+static ssize_t irq_affinity_masks_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
+
+	return scnprintf(buf, PAGE_SIZE,
+			 "perf_mask=0x%lx def_mask=0x%lx\n",
+			 host->perf_mask.bits[0],
+			 host->def_mask.bits[0]);
+}
+
+static ssize_t irq_affinity_masks_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
+	unsigned long perf_mask;
+	unsigned long def_mask;
+
+	if (sscanf(buf, "%lx %lx",
+		&perf_mask, &def_mask) != 2)
+		return -EINVAL;
+
+	host->perf_mask.bits[0] = perf_mask;
+	host->def_mask.bits[0] = def_mask;
+
+	host->irq_affinity_support = true;
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(irq_affinity_masks);
+
 static struct attribute *ufs_qcom_sysfs_attrs[] = {
 	&dev_attr_err_state.attr,
 	&dev_attr_power_mode.attr,
@@ -5686,6 +5763,7 @@ static struct attribute *ufs_qcom_sysfs_attrs[] = {
 	&dev_attr_ber_th_exceeded.attr,
 	&dev_attr_irq_affinity_support.attr,
 	&dev_attr_ufs_pm_mode.attr,
+	&dev_attr_irq_affinity_masks.attr,
 	NULL
 };
 

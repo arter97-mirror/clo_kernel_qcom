@@ -15,6 +15,7 @@ obj-$(CONFIG_MSM_POWER_STATE) += power_state.o
 obj-$(CONFIG_QCOM_OCMEM)	+= ocmem.o
 obj-$(CONFIG_QCOM_PCIE_PDC)	+= pcie-pdc.o
 obj-$(CONFIG_QCOM_PDR_HELPERS)	+= pdr_interface.o
+obj-$(CONFIG_QCOM_PDR_MONITOR)	+= pdr_monitor.o
 obj-$(CONFIG_QCOM_QMI_HELPERS)	+= qmi_helpers.o
 qmi_helpers-y	+= qmi_encdec.o qmi_interface.o
 obj-$(CONFIG_MEM_SHARE_QMI_SERVICE)	+= memshare/
