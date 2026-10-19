@@ -25,6 +25,7 @@ static const struct msm_pinctrl_soc_data waipio_pinctrl = {
 	.nwakeirq_map = ARRAY_SIZE(waipio_pdc_map),
 	.qup_regs = waipio_qup_regs,
 	.nqup_regs = ARRAY_SIZE(waipio_qup_regs),
+	.egpio_func = 11,
 };
 
 static const struct msm_pinctrl_soc_data waipio_vm_pinctrl = {
