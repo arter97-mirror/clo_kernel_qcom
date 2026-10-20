@@ -49,6 +49,7 @@ obj-y += perf/
 obj-y += phy/
 obj-y += phy/qualcomm/
 obj-y += pinctrl/qcom/
+obj-y += platform/arm64/
 obj-y += power/
 obj-y += powercap/qcom/
 obj-y += ptp/
@@ -70,4 +71,3 @@ obj-y += usb/
 obj-y += video/
 obj-y += virt/
 obj-y += virtio/
-

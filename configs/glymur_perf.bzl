@@ -45,6 +45,7 @@ glymur_perf_config = {
     "CONFIG_DRM_DISPLAY_DP_HELPER": "y",
     "CONFIG_DRM_DISPLAY_HELPER": "m",
     "CONFIG_DRM_MSM_HELPER": "m",
+    "CONFIG_EC_QCOM_GLYMUR": "m",
     "CONFIG_GIC_INTERRUPT_ROUTING": "m",
     "CONFIG_HOTPLUG_CPU": "y",
     "CONFIG_HWSPINLOCK_QCOM": "m",
