@@ -1459,4 +1459,15 @@ config QCOM_WEAR_CONFIG
 	  Platform parameters are exposed as class attributes that
 	  can be queried and updated at runtime.
 
+config DEEPSLEEP
+	bool "Enable client notifications for Deepsleep feature"
+	depends on SUSPEND
+	help
+	  Enable this config on targets that support Deepsleep. Device drivers
+	  register for common PM framework suspend notifications and use this
+	  config to distinguish Deepsleep from S2Idle within the shared
+	  callback, so they only register for notifications on targets where
+	  Deepsleep is supported.
+
+	  If not sure, say N.
 endmenu

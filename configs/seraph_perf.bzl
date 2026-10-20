@@ -36,6 +36,7 @@ seraph_perf_config = {
     "CONFIG_CORESIGHT_TPDM": "m",
     "CONFIG_CORESIGHT_UETM": "n",
     "CONFIG_CPU_IDLE_GOV_QCOM_LPM": "m",
+    "CONFIG_DEEPSLEEP": "y",
     "CONFIG_EDAC_KRYO_ARM64": "m",
     "CONFIG_EDAC_KRYO_ARM64_PANIC_ON_UE": "y",
     "CONFIG_EDAC_QCOM": "m",
