@@ -1501,6 +1501,27 @@ int sps_bam_pipe_transfer_one(struct sps_bam *dev,
 			BAM_ID(dev), pipe_index,
 			(void *)(long)addr, size, flags);
 
+	/* Guard against a pipe that was freed (NULL) or never assigned */
+	if (!BAM_PIPE_IS_ASSIGNED(pipe)) {
+		SPS_ERR(dev,
+			"sps:Transfer on unassigned/freed pipe: BAM %pa pipe %d\n",
+			BAM_ID(dev), pipe_index);
+		return SPS_ERROR;
+	}
+
+	/*
+	 * Guard against a pipe whose descriptor FIFO state was torn down
+	 * (e.g. by a concurrent failed sps_connect()/pipe_clear()) while
+	 * this transfer was in flight.
+	 */
+	if ((!pipe->sys.no_queue && pipe->sys.desc_cache == NULL) ||
+		pipe->sys.desc_buf == NULL) {
+		SPS_ERR(dev,
+			"sps:Pipe descriptor state not valid for transfer: BAM %pa pipe %d\n",
+			BAM_ID(dev), pipe_index);
+		return SPS_ERROR;
+	}
+
 	/* Is this a BAM-to-BAM or satellite connection? */
 	if ((pipe->state & (BAM_STATE_BAM2BAM | BAM_STATE_REMOTE))) {
 		SPS_ERR(dev, "sps:Transfer on BAM-to-BAM: BAM %pa pipe %d\n",
