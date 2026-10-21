@@ -206,7 +206,6 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 			   int orientation)
 {
 	bool enable_dwc3_dp;
-	bool dwc3_dp_changed = false;
 	int ret = 0, dwc3_ret = 0;
 	u8 mode_reg = 0;
 
@@ -220,14 +219,6 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 
 	mutex_lock(&data->lock);
 	enable_dwc3_dp = mode == USBMUX_MODE_DP4_LANE;
-	if (enable_dwc3_dp && !data->dwc3_dp_mode) {
-		dwc3_ret = usbmux_set_dwc3_dp_mode(data, true);
-		if (dwc3_ret) {
-			ret = dwc3_ret;
-			goto unlock;
-		}
-		dwc3_dp_changed = true;
-	}
 
 	/*
 	 * Update orientation under data->lock so it is always consistent
@@ -268,8 +259,6 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 			       PS8822_P0_MODE_CTRL, mode_reg);
 	if (ret) {
 		dev_err(data->dev, "Failed to set mode: %d\n", ret);
-		if (dwc3_dp_changed)
-			usbmux_set_dwc3_dp_mode(data, false);
 		goto unlock;
 	}
 
@@ -279,7 +268,9 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 	data->current_mode = mode;
 	dev_dbg(data->dev, "Mode changed to: %s (reg=0x%02x)\n", mode_names[mode], mode_reg);
 
-	if (!enable_dwc3_dp)
+	if (enable_dwc3_dp && !data->dwc3_dp_mode)
+		dwc3_ret = usbmux_set_dwc3_dp_mode(data, true);
+	else if (!enable_dwc3_dp)
 		dwc3_ret = usbmux_set_dwc3_dp_mode(data, false);
 	if (!ret)
 		ret = dwc3_ret;
