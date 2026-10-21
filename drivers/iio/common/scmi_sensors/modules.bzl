@@ -9,6 +9,6 @@ def register_modules(registry):
         ],
         deps = [
             # do not sort
-            "drivers/iio/buffer",
+            "drivers/iio/buffer/kfifo_buf",
         ],
     )
