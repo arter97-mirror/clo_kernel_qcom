@@ -2648,6 +2648,16 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 						gi2c->ipcl);
 			gi2c->err = -ETIMEDOUT;
 
+			if (i < (num - 1)) {
+				ret = geni_i2c_stop_on_bus(gi2c);
+				if (ret) {
+					I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
+						"%s: stop_on_bus failed after timeout:%d\n",
+						__func__, ret);
+					goto geni_i2c_err_prep_sg;
+				}
+			}
+
 			/* WAR: Set flag to mark cancel pending if IOS stuck */
 			geni_ios = geni_read_reg(gi2c->base, SE_GENI_IOS);
 			if ((geni_ios & 0x3) != 0x3) { //SCL:b'1, SDA:b'0
