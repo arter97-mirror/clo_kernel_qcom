@@ -6966,6 +6966,7 @@ rust/helpers/net/genetlink.c
 rust/helpers/page.c
 rust/helpers/pid_namespace.c
 rust/helpers/poll.c
+rust/helpers/ratelimit.c
 rust/helpers/rbtree.c
 rust/helpers/refcount.c
 rust/helpers/security.c
@@ -7022,6 +7023,7 @@ rust/kernel/page_size_compat.rs
 rust/kernel/pid_namespace.rs
 rust/kernel/prelude.rs
 rust/kernel/print.rs
+rust/kernel/ratelimit.rs
 rust/kernel/rbtree.rs
 rust/kernel/security.rs
 rust/kernel/seq_file.rs
@@ -7037,6 +7039,7 @@ rust/kernel/sync/lock.rs
 rust/kernel/sync/lock/global.rs
 rust/kernel/sync/lock/mutex.rs
 rust/kernel/sync/lock/spinlock.rs
+rust/kernel/sync/lockdep.rs
 rust/kernel/sync/locked_by.rs
 rust/kernel/sync/poll.rs
 rust/kernel/sync/set_once.rs
