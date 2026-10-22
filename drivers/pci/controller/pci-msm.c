@@ -36,6 +36,7 @@
 #include <linux/pm_domain.h>
 #include <linux/pm_qos.h>
 #include <linux/pm_runtime.h>
+#include <linux/pm_wakeirq.h>
 #include <linux/pm_wakeup.h>
 #include <linux/remoteproc/qcom_rproc.h>
 #include <linux/reset.h>
@@ -1114,6 +1115,29 @@ static const char * const msm_pcie_cesta_states[] = {
 	[MAX_MAP_IDX] = "Invalid state",
 };
 
+/**
+ * msm_pci_power_name - Get human-readable name for PCI power state
+ * @state: PCI power state enum value
+ * Return: String representation of the power state
+ */
+static inline const char *msm_pci_power_name(pci_power_t state)
+{
+	switch (state) {
+	case PCI_D0:
+		return "D0";
+	case PCI_D1:
+		return "D1";
+	case PCI_D2:
+		return "D2";
+	case PCI_D3hot:
+		return "D3hot";
+	case PCI_D3cold:
+		return "D3cold";
+	default:
+		return "invalid";
+	}
+}
+
 /* i2c control interface for a i2c client device */
 struct pcie_i2c_ctrl {
 	struct i2c_client *client;
@@ -1284,6 +1308,7 @@ struct msm_pcie_dev_t {
 	uint32_t phy_ver;
 	bool driver_probed;
 	bool enumerated;
+	bool deenum_in_progress;
 	struct work_struct handle_wake_work;
 	struct work_struct handle_sbr_work;
 	struct work_struct disable_resource;
@@ -1380,6 +1405,9 @@ struct msm_pcie_dev_t {
 	u32 *save_sid_config;
 	u32 num_pd_names;
 	struct irq_domain *msm_msi_domain;
+	/* Runtime PM support fields */
+	bool rtpm_enabled;
+	bool d3_hot;
 };
 
 struct msm_root_dev_t {
@@ -1529,6 +1557,8 @@ static int msm_pcie_config_tc_bdf_sid_map(struct msm_pcie_dev_t *dev);
 static int msm_pcie_save_sid_config(struct msm_pcie_dev_t *dev);
 static int msm_pcie_restore_sid_config(struct msm_pcie_dev_t *dev);
 static void msm_pcie_lock_init(struct msm_pcie_dev_t *pcie_dev);
+static int msm_pcie_pm_resume(struct pci_dev *dev, void *user, void *data, u32 options);
+static int msm_pcie_pm_suspend(struct pci_dev *dev, void *user, void *data, u32 options);
 
 static int ntn3_i2c_reg_read(struct pcie_i2c_ctrl *i2c_ctrl, u32 reg,
 				    int *val, const char *reg_name)
@@ -6743,6 +6773,31 @@ static void msm_pcie_configure_axi_halt(struct msm_pcie_dev_t *dev)
 		BDF_HALT_EN, (dev->bdf_change_halt_en ? 1 : 0));
 }
 
+/**
+ * msm_pci_dev_set_current_state - Set current state of a PCI device
+ * @dev: Device to handle
+ * @data: pointer to state to be set
+ */
+static int msm_pci_dev_set_current_state(struct pci_dev *dev, void *data)
+{
+	pci_power_t state = *(pci_power_t *)data;
+
+	dev->current_state = state;
+
+	return 0;
+}
+
+/**
+ * msm_pci_bus_set_current_state - Walk given bus and set current state of devices
+ * @bus: Top bus of the subtree to walk.
+ * @state: state to be set
+ */
+static void msm_pci_bus_set_current_state(struct pci_bus *bus, pci_power_t state)
+{
+	if (bus)
+		pci_walk_bus(bus, msm_pci_dev_set_current_state, &state);
+}
+
 static int msm_pcie_enable_link(struct msm_pcie_dev_t *dev)
 {
 	int ret = 0;
@@ -7492,6 +7547,7 @@ int msm_pcie_enumerate(u32 rc_idx)
 	const struct pci_ecam_ops *ecam_ops = &msm_pcie_ops;
 	struct resource_entry *bus;
 	LIST_HEAD(res);
+	bool rtpm_resumed = false;
 
 	if (!dev) {
 		PCIE_DBG(dev,
@@ -7518,6 +7574,26 @@ int msm_pcie_enumerate(u32 rc_idx)
 		PCIE_ERR(dev, "PCIe: RC%d: has already been enumerated.\n",
 			dev->rc_idx);
 		goto out;
+	}
+
+	if (dev->rtpm_enabled) {
+		mutex_unlock(&dev->enumerate_lock);
+		ret = pm_runtime_resume_and_get(&dev->pdev->dev);
+		mutex_lock(&dev->enumerate_lock);
+		if (ret < 0) {
+			PCIE_ERR(dev, "PCIe: RC%d: Failed to resume device for enumerate: %d\n",
+				 dev->rc_idx, ret);
+			goto out;
+		}
+
+		if (dev->enumerated) {
+			PCIE_DBG(dev, "PCIe: RC%d: enumerated concurrently, aborting\n",
+				 dev->rc_idx);
+			pm_runtime_put(&dev->pdev->dev);
+			goto out;
+		}
+
+		rtpm_resumed = true;
 	}
 
 	ret = msm_pcie_enable(dev);
@@ -7628,11 +7704,33 @@ int msm_pcie_enumerate(u32 rc_idx)
 	pci_save_state(pcidev);
 	dev->default_state = pci_store_saved_state(pcidev);
 
-	if (dev->boot_option & MSM_PCIE_NO_PROBE_ENUMERATION) {
+	/*
+	 * After successful enumeration, if runtime PM is enabled, put the
+	 * device to allow it to be runtime suspended when endpoints are idle.
+	 * Otherwise, follow the existing probe enumeration logic.
+	 */
+	if (dev->rtpm_enabled && dev->pdev) {
+		int put_ret;
+
+		/*
+		 * This put balances the resume_and_get taken at the top of this
+		 * function (rtpm_resumed). Use a separate local so a real failure
+		 * is logged without disturbing ret: ret must stay 0 on this success
+		 * path so the out: label does not issue a second, unbalancing put.
+		 */
+		put_ret = pm_runtime_put(&dev->pdev->dev);
+		if (put_ret < 0 && put_ret != -EBUSY)
+			PCIE_ERR(dev, "PCIe: RC%d: pm_runtime_put failed: %d\n",
+				 dev->rc_idx, put_ret);
+		rtpm_resumed = false;
+	} else if (dev->boot_option & MSM_PCIE_NO_PROBE_ENUMERATION) {
 		dev_pm_syscore_device(&pcidev->dev, true);
 		dev_pm_syscore_device(&dev->pdev->dev, true);
 	}
 out:
+	if (ret && rtpm_resumed)
+		pm_runtime_put(&dev->pdev->dev);
+
 	mutex_unlock(&dev->enumerate_lock);
 
 	if (ret)
@@ -7647,6 +7745,10 @@ out_msi_cleanup:
 	}
 
 	pci_dev_put(pcidev);
+
+	if (rtpm_resumed)
+		pm_runtime_put(&dev->pdev->dev);
+
 	mutex_unlock(&dev->enumerate_lock);
 
 	return ret;
@@ -7657,16 +7759,20 @@ int msm_pcie_deenumerate(u32 rc_idx)
 {
 	struct msm_pcie_dev_t *dev = msm_pcie_dev[rc_idx];
 	struct pci_host_bridge *bridge = dev->bridge;
+	int ret;
 
 	mutex_lock(&dev->enumerate_lock);
 
 	PCIE_DBG(dev, "RC%d: Entry\n", dev->rc_idx);
 
-	if (!dev->enumerated) {
-		PCIE_DBG(dev, "RC%d:device is not enumerated\n", dev->rc_idx);
+	if (!dev->enumerated || dev->deenum_in_progress) {
+		PCIE_DBG(dev, "RC%d: not enumerated or deenumerate already in progress\n",
+			 dev->rc_idx);
 		mutex_unlock(&dev->enumerate_lock);
 		return 0;
 	}
+
+	dev->deenum_in_progress = true;
 
 	if (dev->config_recovery) {
 		PCIE_DBG(dev, "RC%d: cancel link_recover_wq\n", dev->rc_idx);
@@ -7683,8 +7789,70 @@ int msm_pcie_deenumerate(u32 rc_idx)
 		dev->msm_msi_domain = NULL;
 	}
 
+	/*
+	 * Keep the RC platform device resumed for the duration of the teardown
+	 * so runtime PM cannot suspend/resume it while pci_remove_root_bus() is
+	 * tearing down and freeing dev->dev. Resume here, after cfg_access has
+	 * been set false above: msm_pcie_runtime_resume() re-enables cfg_access,
+	 * so pci_stop_root_bus()/pci_remove_root_bus() run with config access
+	 * live and the link up, letting the endpoint driver's remove complete
+	 * instead of faulting on an inaccessible device. enumerate_lock is
+	 * dropped across the call because msm_pcie_runtime_resume() takes
+	 * recovery_lock internally, and holding both here would invert the
+	 * driver's recovery_lock-before-enumerate_lock convention.
+	 */
+	if (dev->rtpm_enabled) {
+		mutex_unlock(&dev->enumerate_lock);
+		ret = pm_runtime_resume_and_get(&dev->pdev->dev);
+		mutex_lock(&dev->enumerate_lock);
+		if (ret < 0) {
+			PCIE_ERR(dev, "PCIe: RC%d: failed to resume for deenumerate: %d\n",
+				 dev->rc_idx, ret);
+			dev->deenum_in_progress = false;
+			mutex_unlock(&dev->enumerate_lock);
+			return ret;
+		}
+	}
+
 	pci_stop_root_bus(bridge->bus);
 	pci_remove_root_bus(bridge->bus);
+
+	/*
+	 * dev->dev caches the Root Port's struct pci_dev obtained during
+	 * enumeration via pci_get_domain_bus_and_slot(). pci_remove_root_bus()
+	 * tears down the hierarchy and frees that pci_dev, so clear the cached
+	 * pointer to avoid any subsequent use of a stale/freed root-port device.
+	 */
+	dev->dev = NULL;
+
+	/*
+	 * The host bridge device is allocated once at probe and reused across
+	 * every de-enumerate/enumerate cycle. pci_host_probe() enables runtime
+	 * PM on it via devm_pm_runtime_enable(). On teardown, device_del()
+	 * disables runtime PM twice: once in device_pm_remove()->
+	 * pm_runtime_remove() and again when the devres action fires in
+	 * devres_release_all(), against only the single enable. That leaves
+	 * power.disable_depth elevated, so the devm_pm_runtime_enable() on the
+	 * next enumerate no longer reaches depth 0 and runtime PM stays
+	 * disabled for the bridge. Re-balance here to the post-init state
+	 * (disable_depth == 1) so re-enumeration enables runtime PM cleanly.
+	 */
+	pm_runtime_enable(&bridge->dev);
+
+	/*
+	 * saved_state/default_state hold pci_store_saved_state() copies tied to
+	 * the root-port pci_dev that pci_remove_root_bus() just freed. Drop them
+	 * here so a later deenumerate-then-remove (with no re-enumerate) does not
+	 * call pci_load_and_free_saved_state() with dev->dev == NULL — that helper
+	 * dereferences the pci_dev (dev->state_saved = false) before it checks the
+	 * state pointer, so a stale non-NULL state would NULL-deref. Re-enumerate
+	 * repopulates default_state, so freeing here also avoids leaking the old
+	 * copy across cycles.
+	 */
+	kfree(dev->saved_state);
+	dev->saved_state = NULL;
+	kfree(dev->default_state);
+	dev->default_state = NULL;
 
 	/* Mask all the interrupts */
 	msm_pcie_write_reg(dev->parf, PCIE20_PARF_INT_ALL_MASK, 0);
@@ -7692,6 +7860,11 @@ int msm_pcie_deenumerate(u32 rc_idx)
 	msm_pcie_disable(dev);
 
 	dev->enumerated = false;
+
+	if (dev->rtpm_enabled)
+		pm_runtime_put(&dev->pdev->dev);
+
+	dev->deenum_in_progress = false;
 
 	mutex_unlock(&dev->enumerate_lock);
 	pci_ecam_free(bridge->sysdata);
@@ -8651,6 +8824,74 @@ done:
 	return ret;
 }
 
+/**
+ * msm_pcie_irq_init_rtpm_wake - Configure the WAKE_N line as a dedicated
+ * wakeup interrupt for Runtime PM.
+ * @dev: PCIe device context
+ * @pdev: Device to configure the wake IRQ for
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+static int msm_pcie_irq_init_rtpm_wake(struct msm_pcie_dev_t *dev, struct device *pdev)
+{
+	int rc;
+
+	/*
+	 * As per PCIe spec, #WAKE is active-low signal.
+	 * Configure the interrupt to trigger on a low level.
+	 */
+	rc = irq_set_irq_type(dev->wake_n, IRQF_TRIGGER_LOW);
+	if (rc) {
+		PCIE_ERR(dev, "PCIe: RC%d: Failed to set wake IRQ trigger type: %d\n",
+			 dev->rc_idx, rc);
+		return rc;
+	}
+
+	/*
+	 * Mark the device as wakeup-capable so the PM core will
+	 * create a wakeup source for it. dev_pm_set_dedicated_wake_irq()
+	 * below only attaches the wake IRQ to that wakeup source
+	 * without this call the attach is a silent no-op and the
+	 * wake IRQ is never enabled across suspend.
+	 *
+	 * This also registers the RC as a system wakeup source (visible
+	 * under /sys/power/wakeup_sources and counted in suspend
+	 * statistics), since the same wake IRQ is used for both runtime
+	 * and system suspend. This is intentional: any platform opting into
+	 * qcom,rtpm-enabled also gets system-wakeup capability on this RC.
+	 */
+	rc = device_init_wakeup(pdev, true);
+	if (rc) {
+		PCIE_ERR(dev, "PCIe: RC%d: Failed to mark device wakeup capable: %d\n",
+			 dev->rc_idx, rc);
+		return rc;
+	}
+
+	/*
+	 * Register #WAKE as a dedicated wakeup interrupt.
+	 *
+	 * dev_pm_set_dedicated_wake_irq() only registers the IRQ with the PM
+	 * framework. The IRQ is kept disabled by default and is automatically
+	 * enabled by the PM core when the device enters runtime suspend or
+	 * system suspend, provided the device is marked wakeup-capable.
+	 *
+	 * This allows the driver to set up the wake IRQ once during probe,
+	 * while the framework handles enabling/disabling it at the appropriate
+	 * suspend/resume transitions.
+	 */
+	rc = dev_pm_set_dedicated_wake_irq(pdev, dev->wake_n);
+	if (rc) {
+		PCIE_ERR(dev, "PCIe: RC%d: Failed to configure wake as wake IRQ: %d\n",
+			 dev->rc_idx, rc);
+		device_init_wakeup(pdev, false);
+		return rc;
+	}
+
+	INIT_WORK(&dev->handle_sbr_work, handle_sbr_func);
+
+	return 0;
+}
+
 static int32_t msm_pcie_irq_init(struct msm_pcie_dev_t *dev)
 {
 	int rc;
@@ -8685,6 +8926,9 @@ static int32_t msm_pcie_irq_init(struct msm_pcie_dev_t *dev)
 
 	/* register handler for PCIE_WAKE_N interrupt line */
 	if (dev->wake_n) {
+		if (dev->rtpm_enabled)
+			return msm_pcie_irq_init_rtpm_wake(dev, pdev);
+
 		rc = devm_request_irq(pdev,
 				dev->wake_n, handle_wake_irq,
 				IRQF_TRIGGER_FALLING, "msm_pcie_wake", dev);
@@ -8716,8 +8960,15 @@ static void msm_pcie_irq_deinit(struct msm_pcie_dev_t *dev)
 
 	wakeup_source_unregister(dev->ws);
 
-	if (dev->wake_n)
-		disable_irq(dev->wake_n);
+	if (dev->wake_n) {
+		if (dev->rtpm_enabled) {
+			dev_pm_clear_wake_irq(&dev->pdev->dev);
+			device_init_wakeup(&dev->pdev->dev, false);
+		} else {
+			disable_irq_wake(dev->wake_n);
+			disable_irq(dev->wake_n);
+		}
+	}
 }
 
 static bool msm_pcie_check_l0s_support(struct pci_dev *pdev,
@@ -9674,6 +9925,10 @@ static void msm_pcie_read_dt(struct msm_pcie_dev_t *pcie_dev, int rc_idx,
 		PCIE_DBG(pcie_dev, "PCIe: RC%d: tc2bdf_tc_count: %d\n",
 			       pcie_dev->rc_idx, pcie_dev->tc2bdf_tc_count);
 
+	pcie_dev->rtpm_enabled = of_property_read_bool(of_node, "qcom,rtpm-enabled");
+	PCIE_DBG(pcie_dev, "PCIe: RC%d: Runtime PM is %s\n",
+			 pcie_dev->rc_idx, pcie_dev->rtpm_enabled ? "enabled" : "disabled");
+
 }
 
 static int msm_pcie_cesta_init(struct msm_pcie_dev_t *pcie_dev,
@@ -10025,6 +10280,83 @@ static int pcie_i2c_ctrl_probe(struct i2c_client *client)
 	return 0;
 }
 
+static int __maybe_unused msm_pcie_runtime_suspend(struct device *dev)
+{
+	struct msm_pcie_dev_t *pcie_dev = (struct msm_pcie_dev_t *)dev_get_drvdata(dev);
+	struct pci_dev *pdev;
+	int ret = 0;
+
+	if (!pcie_dev)
+		return 0;
+
+	PCIE_DBG(pcie_dev, "PCIe: RC%d: Runtime suspend\n", pcie_dev->rc_idx);
+
+	pdev = pcie_dev->dev;
+
+	if (pdev && pcie_dev->enumerated && pcie_dev->power_on &&
+		pcie_dev->link_status == MSM_PCIE_LINK_ENABLED &&
+		pci_is_root_bus(pdev->bus)) {
+
+		mutex_lock(&pcie_dev->recovery_lock);
+		ret = msm_pcie_pm_suspend(pdev, NULL, NULL, 0);
+		if (ret && ret != -EBUSY)
+			PCIE_ERR(pcie_dev, "PCIe: RC%d failed to Runtime suspend:%d.\n",
+				 pcie_dev->rc_idx, ret);
+
+		mutex_unlock(&pcie_dev->recovery_lock);
+	} else {
+		PCIE_DBG(pcie_dev, "PCIe: RC%d: Runtime suspend skipped\n", pcie_dev->rc_idx);
+	}
+
+	return ret;
+}
+
+static int __maybe_unused msm_pcie_runtime_resume(struct device *dev)
+{
+	struct msm_pcie_dev_t *pcie_dev = (struct msm_pcie_dev_t *)dev_get_drvdata(dev);
+	struct pci_dev *pdev;
+	int ret = 0;
+
+	if (!pcie_dev)
+		return 0;
+
+	PCIE_DBG(pcie_dev, "PCIe: RC%d: Runtime resume\n", pcie_dev->rc_idx);
+
+	pdev = pcie_dev->dev;
+
+	if (pdev && pcie_dev->enumerated && !pcie_dev->power_on &&
+		pcie_dev->link_status == MSM_PCIE_LINK_DISABLED &&
+		!pcie_dev->user_suspend && pci_is_root_bus(pdev->bus)) {
+
+		mutex_lock(&pcie_dev->recovery_lock);
+		ret = msm_pcie_pm_resume(pdev, NULL, NULL, 0);
+		if (ret)
+			PCIE_ERR(pcie_dev, "PCIe: RC%d failed to Runtime resume:%d.\n",
+				 pcie_dev->rc_idx, ret);
+		mutex_unlock(&pcie_dev->recovery_lock);
+	} else {
+		PCIE_DBG(pcie_dev, "PCIe: RC%d: Runtime resume skipped\n", pcie_dev->rc_idx);
+	}
+
+	return ret;
+}
+
+/**
+ * msm_pcie_teardown_rtpm - Disable Runtime PM
+ * @pcie_dev: PCIe device context
+ * @pdev: Platform device Runtime PM was enabled on
+ *
+ * Shared by msm_pcie_probe()'s teardown_rtpm error path and msm_pcie_remove(),
+ * so both keep the same teardown order.
+ */
+static void msm_pcie_teardown_rtpm(struct msm_pcie_dev_t *pcie_dev, struct platform_device *pdev)
+{
+	if (!pcie_dev->rtpm_enabled)
+		return;
+
+	pm_runtime_disable(&pdev->dev);
+}
+
 static int msm_pcie_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -10133,6 +10465,10 @@ static int msm_pcie_probe(struct platform_device *pdev)
 	if (ret)
 		goto decrease_rc_num;
 
+	/* If runtime PM is enabled, activate runtime PM early here. */
+	if (pcie_dev->rtpm_enabled)
+		pm_runtime_enable(&pdev->dev);
+
 	if (pcie_dev->rumi)
 		pcie_dev->rumi_init = msm_pcie_rumi_init;
 
@@ -10141,7 +10477,7 @@ static int msm_pcie_probe(struct platform_device *pdev)
 
 		ret = msm_pcie_cesta_init(pcie_dev, of_node);
 		if (ret)
-			goto decrease_rc_num;
+			goto teardown_rtpm;
 	}
 
 	/* SW DRV case */
@@ -10160,7 +10496,7 @@ static int msm_pcie_probe(struct platform_device *pdev)
 	ret = msm_pcie_irq_init(pcie_dev);
 	if (ret) {
 		msm_pcie_release_resources(pcie_dev);
-		goto decrease_rc_num;
+		goto teardown_rtpm;
 	}
 
 	if (pcie_dev->is_bifurcation_capable) {
@@ -10205,6 +10541,9 @@ static int msm_pcie_probe(struct platform_device *pdev)
 
 	mutex_unlock(&pcie_drv.drv_lock);
 	return 0;
+
+teardown_rtpm:
+	msm_pcie_teardown_rtpm(pcie_dev, pdev);
 
 decrease_rc_num:
 	pcie_drv.rc_num--;
@@ -10261,6 +10600,9 @@ static void msm_pcie_remove(struct platform_device *pdev)
 		dev_info(&pdev->dev, "PCIe: RC%d: being removed\n", rc_idx);
 	}
 
+	/* Disable Runtime PM gracefully. */
+	msm_pcie_teardown_rtpm(msm_pcie_dev[rc_idx], pdev);
+
 	if (msm_pcie_dev[rc_idx]->saved_state)
 		pci_load_and_free_saved_state(msm_pcie_dev[rc_idx]->dev,
 				      &msm_pcie_dev[rc_idx]->saved_state);
@@ -10287,10 +10629,7 @@ static void msm_pcie_remove(struct platform_device *pdev)
 	}
 
 	msm_pcie_irq_deinit(msm_pcie_dev[rc_idx]);
-	msm_pcie_vreg_deinit(msm_pcie_dev[rc_idx]);
-	msm_pcie_clk_deinit(msm_pcie_dev[rc_idx]);
-	msm_pcie_gdsc_deinit(msm_pcie_dev[rc_idx]);
-	msm_pcie_gpio_deinit(msm_pcie_dev[rc_idx]);
+	msm_pcie_disable(msm_pcie_dev[rc_idx]);
 	msm_pcie_release_resources(msm_pcie_dev[rc_idx]);
 
 	msm_pcie_gdsc_genpd_detach(msm_pcie_dev[rc_idx]);
@@ -10809,7 +11148,32 @@ static int msm_pci_probe(struct pci_dev *pci_dev,
 		return ret;
 	}
 
+	/*
+	 * PCI core initializes PM functions of given PCI device and pm_runtime_forbid() it.
+	 * Allow Runtime PM for root port and keep the port resumed 100ms to make sure things like
+	 * config space accesses from userspace (lspci) will not cause the port to repeatedly
+	 * suspend and resume.
+	 */
+	if (pcie_dev->rtpm_enabled) {
+		pm_runtime_no_callbacks(&pci_dev->dev);
+		pm_runtime_set_autosuspend_delay(&pci_dev->dev, 100);
+		pm_runtime_use_autosuspend(&pci_dev->dev);
+		pm_runtime_mark_last_busy(&pci_dev->dev);
+		pm_runtime_put_autosuspend(&pci_dev->dev);
+		pm_runtime_allow(&pci_dev->dev);
+	}
+
 	return 0;
+}
+
+static void msm_pci_remove(struct pci_dev *pci_dev)
+{
+	struct msm_pcie_dev_t *pcie_dev = msm_pcie_bus_priv_data(pci_dev->bus);
+
+	if (pcie_dev && pcie_dev->rtpm_enabled) {
+		pm_runtime_forbid(&pci_dev->dev);
+		pm_runtime_get_noresume(&pci_dev->dev);
+	}
 }
 
 static struct pci_device_id msm_pci_device_id[] = {
@@ -10821,6 +11185,7 @@ static struct pci_driver msm_pci_driver = {
 	.name = "pci-msm-rc",
 	.id_table = msm_pci_device_id,
 	.probe = msm_pci_probe,
+	.remove = msm_pci_remove,
 };
 
 static const struct of_device_id msm_pcie_match[] = {
@@ -10831,9 +11196,13 @@ static const struct of_device_id msm_pcie_match[] = {
 static int msm_pcie_pm_suspend_noirq(struct device *dev);
 static int msm_pcie_pm_resume_noirq(struct device *dev);
 
-static DEFINE_NOIRQ_DEV_PM_OPS(qcom_pcie_pm_ops,
-			msm_pcie_pm_suspend_noirq,
-			msm_pcie_pm_resume_noirq);
+static const struct dev_pm_ops qcom_pcie_pm_ops = {
+	SET_RUNTIME_PM_OPS(msm_pcie_runtime_suspend,
+			msm_pcie_runtime_resume,
+			NULL)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(msm_pcie_pm_suspend_noirq,
+			msm_pcie_pm_resume_noirq)
+};
 
 static struct platform_driver msm_pcie_driver = {
 	.probe	= msm_pcie_probe,
@@ -10842,7 +11211,7 @@ static struct platform_driver msm_pcie_driver = {
 		.name		= "pci-msm",
 		.of_match_table	= msm_pcie_match,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
-		.pm		= pm_sleep_ptr(&qcom_pcie_pm_ops),
+		.pm		= pm_ptr(&qcom_pcie_pm_ops),
 	},
 };
 
@@ -11388,6 +11757,49 @@ static void __msm_pcie_l1ss_timeout_enable(struct msm_pcie_dev_t *pcie_dev)
 			   val);
 }
 
+/**
+ * msm_pcie_check_endpoint_d3_state - Check if endpoint is in D3hot state
+ * @pdev: PCI device to check
+ * @dev: PCIe device context
+ *
+ * This function checks if a PCI endpoint device is in D3hot state.
+ * It uses early return logic to efficiently determine if ALL endpoints
+ * are in D3hot state by setting the flag to false if any endpoint
+ * is not in D3hot.
+ *
+ * Return: 1 to stop walking (endpoint not in D3hot found), 0 to continue
+ */
+static int msm_pcie_check_endpoint_d3_state(struct pci_dev *pdev, void *dev)
+{
+	struct msm_pcie_dev_t *pcie_dev = (struct msm_pcie_dev_t *)dev;
+	int pos;
+
+	if (!pcie_dev || !pdev)
+		return 0;
+
+	pos = pdev->pm_cap;
+
+	if (!pos) {
+		PCIE_DBG(pcie_dev, "RC%d: no PM capability found for %s\n",
+			 pcie_dev->rc_idx, pci_name(pdev));
+		return 0;
+	}
+
+	if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ENDPOINT) {
+		if (pdev->current_state != PCI_D3hot) {
+			PCIE_INFO(pcie_dev, "RC%d: Device %s is not in D3hot (state: %s (%d))\n",
+				 pcie_dev->rc_idx, pci_name(pdev),
+				 msm_pci_power_name(pdev->current_state),
+				 pdev->current_state);
+			pcie_dev->d3_hot = false;
+			/* Stop walking - found endpoint not in D3hot */
+			return -EBUSY;
+		}
+	}
+
+	return 0;
+}
+
 /* Suspend the PCIe link */
 static int msm_pcie_pm_suspend(struct pci_dev *dev,
 			void *user, void *data, u32 options)
@@ -11399,6 +11811,24 @@ static int msm_pcie_pm_suspend(struct pci_dev *dev,
 	struct msm_pcie_dev_t *pcie_dev = msm_pcie_bus_priv_data(dev->bus);
 
 	PCIE_DBG(pcie_dev, "RC%d: entry\n", pcie_dev->rc_idx);
+
+	if (pcie_dev->rtpm_enabled) {
+		/* Reset flag and check endpoint */
+		pcie_dev->d3_hot = true;
+
+		/*
+		 * Walk the bus and check endpoint's power state. A non-zero
+		 * callback return only stops the walk early (endpoint not in
+		 * D3hot found) - it is not surfaced as an error here; the
+		 * actual result is read back via pcie_dev->d3_hot below.
+		 */
+		pci_walk_bus(dev->bus, msm_pcie_check_endpoint_d3_state, pcie_dev);
+		if (!pcie_dev->d3_hot) {
+			PCIE_DBG(pcie_dev, "RC%d: Not all endpoints in D3hot, skipping suspend\n",
+				 pcie_dev->rc_idx);
+			return -EBUSY;
+		}
+	}
 
 	spin_lock_irqsave(&pcie_dev->irq_lock, irqsave_flags);
 	pcie_dev->suspending = true;
@@ -11457,6 +11887,10 @@ static int msm_pcie_pm_suspend(struct pci_dev *dev,
 	pcie_dev->cfg_access = false;
 	spin_unlock_irqrestore(&pcie_dev->cfg_lock,
 				pcie_dev->irqsave_flags);
+
+	/* Set the device to D3cold state */
+	if (pcie_dev->rtpm_enabled)
+		msm_pci_bus_set_current_state(dev->bus, PCI_D3cold);
 
 	writel_relaxed(BIT(4), pcie_dev->elbi + PCIE20_ELBI_SYS_CTRL);
 	wmb(); /* ensure changes propagated to the hardware */
