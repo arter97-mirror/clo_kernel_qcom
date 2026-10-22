@@ -39,9 +39,10 @@ def define_qc_core_header_config(name):
         """,
     )
 
-def _gen_qc_core_build_config(name):
+def _gen_qc_core_build_config(name, vm_opts = None):
     """Generates a generic VM build config."""
-    vm_opts = vm_image_opts()
+    if vm_opts == None:
+        vm_opts = vm_image_opts()
     write_file(
         name = name,
         out = name + ".generated",
@@ -62,6 +63,7 @@ def _gen_qc_core_build_config(name):
             "BASE_DTB_OFFSET={}".format(vm_opts.base_dtb_offset),
             "RAMDISK_OFFSET={}".format(vm_opts.ramdisk_offset),
             "CMDLINE_CPIO_OFFSET={}".format(vm_opts.cmdline_cpio_offset),
+            "DUMMY_IMG_OFFSET={}".format(vm_opts.dummy_img_offset),
             "METADATA_OFFSET={}".format(vm_opts.metadata_offset),
             "METADATA_SIZE={}".format(vm_opts.metadata_size),
             "VM_SIZE_EXT4={}".format(vm_opts.vm_size_ext4),
@@ -70,8 +72,8 @@ def _gen_qc_core_build_config(name):
         ],
     )
 
-def define_qc_core_kernel(name, defconfig, defconfig_fragments = None):
-    _gen_qc_core_build_config("build.config.{}".format(name))
+def define_qc_core_kernel(name, defconfig, defconfig_fragments = None, vm_opts = None):
+    _gen_qc_core_build_config("build.config.{}".format(name), vm_opts = vm_opts)
     kernel_build_config(
         name = name + "_build_config",
         srcs = [
