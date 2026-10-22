@@ -1760,27 +1760,11 @@
 			#freq-domain-cells = <1>;
 		};
 
-		ethernet1: ethernet@23000000 {
-			compatible = "qcom,sa8255p-ethqos";
-			reg = <0x0 0x23000000 0x0 0x10000>,
-			      <0x0 0x23016000 0x0 0x100>;
-			reg-names = "stmmaceth", "rgmii";
-
-			interrupts = <GIC_SPI 929 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 781 IRQ_TYPE_LEVEL_HIGH>;
-			interrupt-names = "macirq", "sfty";
-
-			iommus = <&apps_smmu 0x140 0xf>;
-			dma-coherent;
-
-			snps,tso;
-			snps,pbl = <32>;
-			rx-fifo-depth = <16384>;
-			tx-fifo-depth = <16384>;
-
-			status = "disabled";
-		};
-
+		/*
+		 * Keep ethernet0/ethernet1 labels aligned with hardware
+		 * EMAC0/EMAC1 numbering as documented in the SoC reference manual.
+		 * This results in node order differing from ascending address order.
+		 */
 		ethernet0: ethernet@23040000 {
 			compatible = "qcom,sa8255p-ethqos";
 			reg = <0x0 0x23040000 0x0 0x10000>,
@@ -1792,6 +1776,27 @@
 			interrupt-names = "macirq", "sfty";
 
 			iommus = <&apps_smmu 0x120 0xf>;
+			dma-coherent;
+
+			snps,tso;
+			snps,pbl = <32>;
+			rx-fifo-depth = <16384>;
+			tx-fifo-depth = <16384>;
+
+			status = "disabled";
+		};
+
+		ethernet1: ethernet@23000000 {
+			compatible = "qcom,sa8255p-ethqos";
+			reg = <0x0 0x23000000 0x0 0x10000>,
+			      <0x0 0x23016000 0x0 0x100>;
+			reg-names = "stmmaceth", "rgmii";
+
+			interrupts = <GIC_SPI 929 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 781 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "macirq", "sfty";
+
+			iommus = <&apps_smmu 0x140 0xf>;
 			dma-coherent;
 
 			snps,tso;
