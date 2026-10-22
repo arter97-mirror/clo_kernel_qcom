@@ -2773,8 +2773,9 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
 				ufs_qcom_disable_lane_clks(host);
 			}
 
-			ufs_qcom_icc_set_bw(host, ufs_qcom_bw_table[MODE_MIN][0][0].mem_bw,
-				ufs_qcom_bw_table[MODE_MIN][0][0].cfg_bw);
+			if (!ufs_qcom_is_link_active(hba))
+				ufs_qcom_icc_set_bw(host, ufs_qcom_bw_table[MODE_MIN][0][0].mem_bw,
+						     ufs_qcom_bw_table[MODE_MIN][0][0].cfg_bw);
 
 			err = ufs_qcom_unvote_qos_all(hba);
 			cancel_dwork_unvote_cpufreq(hba);
