@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef WCD_USBSS_PRIV_H
 #define WCD_USBSS_PRIV_H
@@ -53,6 +53,7 @@ struct wcd_usbss_ctxt {
 	bool suspended;
 	bool defer_writes;
 	int req_state;
+	bool usb_sbu_compliance;
 };
 
 extern struct regmap *wcd_usbss_regmap_init(struct device *dev,
