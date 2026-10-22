@@ -23,6 +23,8 @@
 #include <linux/string.h>
 #include <linux/soc/qcom/spmi-pmic-arb.h>
 
+#define SPMI_MAX_MASTER_ID		0x03
+
 /* PMIC Arbiter configuration registers */
 #define PMIC_ARB_VERSION		0x0000
 #define PMIC_ARB_VERSION_V2_MIN		0x20010000
@@ -203,6 +205,7 @@ struct spmi_pmic_arb_bus {
  * @apid_map:		on v8, APID mapping table register base
  * @channel:		execution environment channel to use for accesses.
  * @ee:			the current Execution Environment
+ * @mid:		SPMI master ID
  * @ver_ops:		version dependent operations.
  * @max_periphs:	Number of elements in apid_data[]
  * @buses:		per arbiter buses instances
@@ -217,6 +220,7 @@ struct spmi_pmic_arb {
 	void __iomem		*apid_map;
 	u8			channel;
 	u8			ee;
+	u8			mid;
 	const struct pmic_arb_ver_ops *ver_ops;
 	int			max_periphs;
 	struct spmi_pmic_arb_bus *buses[PMIC_ARB_MAX_BUSES];
@@ -617,6 +621,7 @@ enum qpnpint_regs {
 	QPNPINT_REG_EN_SET		= 0x15,
 	QPNPINT_REG_EN_CLR		= 0x16,
 	QPNPINT_REG_LATCHED_STS		= 0x18,
+	QPNPINT_REG_MID_SEL		= 0x1A,
 };
 
 struct spmi_pmic_arb_qpnpint_type {
@@ -907,6 +912,13 @@ static int qpnpint_irq_domain_activate(struct irq_domain *domain,
 			bus->apid_data[apid].irq_ee);
 		return -ENODEV;
 	}
+
+	/*
+	 * Make sure the interrupt is assigned to this SOC by writing the
+	 * MID value to MID_SEL register.
+	 */
+	if (pmic_arb->mid <= SPMI_MAX_MASTER_ID)
+		qpnpint_spmi_write(d, QPNPINT_REG_MID_SEL, &pmic_arb->mid, 1);
 
 	buf = BIT(irq);
 	qpnpint_spmi_write(d, QPNPINT_REG_EN_CLR, &buf, 1);
@@ -2374,7 +2386,7 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	void __iomem *core;
-	u32 channel, ee, hw_ver;
+	u32 channel, ee, hw_ver, mid = 0;
 	int err;
 
 	pmic_arb = devm_kzalloc(dev, sizeof(*pmic_arb), GFP_KERNEL);
@@ -2441,6 +2453,20 @@ static int spmi_pmic_arb_probe(struct platform_device *pdev)
 	}
 
 	pmic_arb->ee = ee;
+
+	pmic_arb->mid = SPMI_MAX_MASTER_ID + 1;
+	/* Read SPMI master ID of this controller. Supported values: 0-3 */
+	err = of_property_read_u32(pdev->dev.of_node, "qcom,mid", &mid);
+	if (err && err != -EINVAL) {
+		dev_err(&pdev->dev, "error reading qcom,mid, ret=%d\n", err);
+		return err;
+	} else if (!err) {
+		if (mid > SPMI_MAX_MASTER_ID) {
+			dev_err(&pdev->dev, "invalid MID (%u) specified\n", mid);
+			return -EINVAL;
+		}
+		pmic_arb->mid = mid;
+	}
 
 	return spmi_pmic_arb_register_buses(pmic_arb, pdev);
 }
