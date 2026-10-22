@@ -79,6 +79,8 @@ shikra_auto_perf_config = {
     "CONFIG_MEM_PROT": "m",
     "CONFIG_MEM_SHARE_QMI_SERVICE": "m",
     "CONFIG_MFD_SPMI_PMIC": "m",
+    "CONFIG_MHI_BUS": "m",
+    "CONFIG_MHI_BUS_MISC": "y",
     "CONFIG_MINIDUMP_MAX_ENTRIES": "200",
     "CONFIG_MMC_CQHCI": "m",
     "CONFIG_MMC_CRYPTO_QTI": "m",
