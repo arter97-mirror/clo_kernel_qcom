@@ -1,3 +1,4 @@
+load("//build:msm_kernel_extensions.bzl", "define_android_desktop_build")
 load("//build/kernel/kleaf:kernel.bzl", "kernel_abi", "kernel_module_group")
 load(":configs/glymur_consolidate.bzl", "glymur_consolidate_config")
 load(":configs/glymur_perf.bzl", "glymur_perf_config")
@@ -95,9 +96,21 @@ def define_glymur():
         perf_build_img_opts = perf_build_img_opts,
         consolidate_kwargs = {
             "config_path": "configs/glymur_consolidate.bzl",
+            "desktop_build": define_android_desktop_build(
+                name = "glymur",
+                variant = "consolidate",
+                base_kernel = "//soc-repo:kernel_aarch64_consolidate",
+                dtbo_target_name = "glymur",
+            ),
         },
         perf_kwargs = {
             "config_path": "configs/glymur_perf.bzl",
+            "desktop_build": define_android_desktop_build(
+                name = "glymur",
+                variant = "perf",
+                base_kernel = "//common:kernel_aarch64",
+                dtbo_target_name = "glymur",
+            ),
         },
     )
 
