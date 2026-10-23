@@ -14,3 +14,4 @@ qcom_dma_heaps-$(CONFIG_QCOM_DMABUF_HEAPS_SYSTEM_MOVABLE) += qcom_system_movable
 
 obj-$(CONFIG_QCOM_DMABUF_HEAPS_DEFERRED_FREE) += deferred-free-helper.o
 
+obj-$(CONFIG_QCOM_NAMED_DMABUF) += named_dmabuf.o
