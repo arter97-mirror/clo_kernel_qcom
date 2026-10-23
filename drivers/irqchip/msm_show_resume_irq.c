@@ -146,10 +146,10 @@ static void msm_show_resume_irqs(void)
 static int gic_suspend_notifier(struct notifier_block *nb, unsigned long event, void *dummy)
 {
 	if ((event == PM_HIBERNATION_PREPARE) || ((event == PM_SUSPEND_PREPARE)
-			&& (pm_suspend_target_state == PM_SUSPEND_MEM)))
+			&& !pm_suspend_default_s2idle()))
 		atomic_set(&hib_active, 1);
 	else if ((event == PM_POST_HIBERNATION) || ((event == PM_POST_SUSPEND)
-			&& (pm_suspend_target_state == PM_SUSPEND_MEM)))
+			&& !pm_suspend_default_s2idle()))
 		atomic_set(&hib_active, 0);
 	return NOTIFY_OK;
 }
