@@ -21,4 +21,6 @@ source "$(KCONFIG_EXT_PREFIX)drivers/usb/repeater/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)drivers/usb/redriver/Kconfig"
 
+source "$(KCONFIG_EXT_PREFIX)drivers/usb/extcon/Kconfig"
+
 endif # USB_SUPPORT

@@ -86,6 +86,8 @@ source "$(KCONFIG_EXT_PREFIX)drivers/phy/qualcomm/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)drivers/pinctrl/qcom/Kconfig"
 
+source "$(KCONFIG_EXT_PREFIX)drivers/platform/arm64/Kconfig"
+
 source "$(KCONFIG_EXT_PREFIX)drivers/power/reset/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)drivers/power/supply/Kconfig"

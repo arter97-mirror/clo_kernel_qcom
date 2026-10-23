@@ -1096,6 +1096,20 @@ static struct llcc_slice_config yupik_data[] =  {
 	{LLCC_MODPE,    29, 64,  1, 1, 0x3F, 0x0, 0, 0, 0, 1, 0, 0},
 };
 
+static const struct llcc_slice_config diwali_data[] =  {
+	{LLCC_CPUSS,     1, 1536, 0, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 1, 0, 0 },
+	{LLCC_VIDSC0,    2,  128, 3, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_MDMHPGRW,  7,  512, 3, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_GPUHTW,   11,  256, 1, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_GPU,      12,  512, 1, 0, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 1, 0 },
+	{LLCC_MMUHWT,   13,  256, 3, 1, 0x0FFF, 0x0,   0, 0, 0, 0, 1, 0, 0 },
+	{LLCC_DISP,     16, 1536, 1, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_MDMPNG,   21, 1024, 0, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_MODPE,    29,   64, 3, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_WRCACHE,  31,  256, 1, 1, 0x0FFF, 0x0,   0, 0, 0, 0, 1, 0, 0 },
+	{LLCC_CPUMTE,   23,  256, 1, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 1, 0, 0 },
+};
+
 static struct llcc_slice_config lahaina_data[] =  {
 	{LLCC_CPUSS,    1, 3072, 1, 1, 0xFFF, 0x0, 0, 0, 0, 1, 1, 0},
 	{LLCC_VIDSC0,   2, 512, 3, 1, 0xFFF, 0x0, 0, 0, 0, 1, 0, 0},
@@ -1639,6 +1653,16 @@ static const struct qcom_llcc_config lahaina_cfg[] = {
 	},
 };
 
+static const struct qcom_llcc_config diwali_cfg[] = {
+	{
+		.sct_data        = diwali_data,
+		.size            = ARRAY_SIZE(diwali_data),
+		.need_llcc_cfg   = true,
+		.reg_offset      = llcc_v2_1_reg_offset,
+		.edac_reg_offset = &llcc_v2_1_edac_reg_offset,
+	},
+};
+
 static const struct qcom_llcc_config vienna_cfg[] = {
 	{
 		.sct_data       = vienna_data,
@@ -1796,6 +1820,11 @@ static const struct qcom_sct_config yupik_cfgs = {
 static const struct qcom_sct_config lahaina_cfgs = {
 	.llcc_config    = lahaina_cfg,
 	.num_config = ARRAY_SIZE(lahaina_cfg),
+};
+
+static const struct qcom_sct_config diwali_cfgs = {
+	.llcc_config = diwali_cfg,
+	.num_config  = ARRAY_SIZE(diwali_cfg),
 };
 
 static const struct qcom_sct_config vienna_cfgs = {
@@ -3293,6 +3322,7 @@ static const struct of_device_id qcom_llcc_of_match[] = {
 	{ .compatible = "qcom,waipio-llcc", .data = &waipio_cfgs },
 	{ .compatible = "qcom,yupik-llcc", .data = &yupik_cfgs},
 	{ .compatible = "qcom,lahaina-llcc", .data = &lahaina_cfgs},
+	{ .compatible = "qcom,diwali-llcc", .data = &diwali_cfgs },
 	{ .compatible = "qcom,vienna-llcc", .data = &vienna_cfgs },
 	{ .compatible = "qcom,alor-llcc", .data = &alor_cfgs },
 	{ .compatible = "qcom,shikra-llcc", .data = &shikra_cfgs },

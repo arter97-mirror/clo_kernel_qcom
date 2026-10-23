@@ -263,7 +263,6 @@ static int ps883x_enable_vregs(struct ps883x_retimer *retimer)
 	}
 
 	mdelay(10);
-
 	return 0;
 
 err_vddar_disable:
@@ -271,7 +270,7 @@ err_vddar_disable:
 err_vdd_disable:
 	regulator_disable(retimer->vdd_supply);
 err_vddio_disable:
-	regulator_disable(retimer->vddat_supply);
+	regulator_disable(retimer->vddio_supply);
 err_vdd33_cap_disable:
 	regulator_disable(retimer->vdd33_cap_supply);
 err_vdd33_disable:
@@ -285,18 +284,24 @@ static void ps883x_disable_vregs(struct ps883x_retimer *retimer)
 	regulator_disable(retimer->vddat_supply);
 	regulator_disable(retimer->vddar_supply);
 	regulator_disable(retimer->vdd_supply);
+	mdelay(3);
+
 	regulator_disable(retimer->vddio_supply);
+	mdelay(3);
+
 	regulator_disable(retimer->vdd33_cap_supply);
 	regulator_disable(retimer->vdd33_supply);
+	mdelay(3);
 }
 
 static void ps883x_power_down(struct ps883x_retimer *retimer, bool clk_enabled)
 {
-	gpiod_set_value(retimer->reset_gpio, 1);
 	if (clk_enabled)
 		clk_disable_unprepare(retimer->xo_clk);
 
+	mdelay(2);
 	ps883x_disable_vregs(retimer);
+	gpiod_set_value(retimer->reset_gpio, 1);
 }
 
 static void ps883x_reset(struct ps883x_retimer *retimer)
@@ -305,6 +310,7 @@ static void ps883x_reset(struct ps883x_retimer *retimer)
 		return;
 
 	ps883x_power_down(retimer, true);
+
 	retimer->in_reset = true;
 }
 
@@ -331,6 +337,9 @@ static int ps883x_reg_write(struct ps883x_retimer *retimer, int cfg0,
 		dev_err(dev, "failed to write conn_status_2: %d\n", ret);
 		return ret;
 	}
+
+	if (retimer->dp_4_lane)
+		mdelay(50);
 
 	return 0;
 }
@@ -1796,6 +1805,7 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 			case TYPEC_DP_STATE_C:
 				cfg1 |= CONN_STATUS_1_DP_PIN_ASSIGNMENT_C_D;
 				retimer->dp_4_lane = true;
+
 				break;
 			case TYPEC_DP_STATE_D:
 				cfg1 |= CONN_STATUS_1_DP_PIN_ASSIGNMENT_C_D;

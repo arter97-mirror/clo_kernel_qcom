@@ -1647,8 +1647,13 @@ static int mpam_msc_slc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, qcom_msc);
 	/* SCMI firmware query firmware version details */
-	if (slc_firmware_version_query(&pdev->dev, NULL, &firmware_ver))
-		firmware_ver = SLC_MPAM_VERSION_0;
+	ret = slc_firmware_version_query(&pdev->dev, NULL, &firmware_ver);
+	if (ret == -ETIMEDOUT || ret == -EBUSY)
+		return dev_err_probe(&pdev->dev, -EPROBE_DEFER,
+				     "firmware version query timed out (%d)\n", ret);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "firmware version query failed (%d)\n", ret);
 
 	/* Depending on firmware version SLC Monitor may memory program here */
 	val = mpam_slc_mpam_init_v0;

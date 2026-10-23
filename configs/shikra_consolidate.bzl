@@ -20,4 +20,6 @@ shikra_consolidate_config = {
     "CONFIG_SCHED_WALT_DEBUG": "m",
     "CONFIG_SDHCI_MSM_DBG": "y",
     "CONFIG_TORTURE_TEST": "m",
+    "CONFIG_USB_EHSET_TEST_FIXTURE": "m",
+    "CONFIG_USB_LINK_LAYER_TEST": "m",
 }

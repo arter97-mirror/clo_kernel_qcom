@@ -87,9 +87,14 @@ eom_driver.ko
 phy-qcom-qmp-combo.ko
 phy-nxp-ptn3222.ko
 phy-qcom-qmp-usb.ko
+phy-qcom-ufs.ko
+phy-qcom-ufs-qmp-v4-kalama.ko
+qcom_ice.ko
 dwc3-msm.ko
 dwc3-qcom-mp.ko
 videocc-x1p42100.ko
+ufs-qcom.ko
+ufshcd-crypto-qti.ko
 videocc-sm8550.ko
 camcc-x1e80100.ko
 debugcc-x1e80100.ko

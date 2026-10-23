@@ -359,6 +359,7 @@ arch/arm64/kvm/hyp/include/nvhe/early_alloc.h
 arch/arm64/kvm/hyp/include/nvhe/ffa.h
 arch/arm64/kvm/hyp/include/nvhe/gfp.h
 arch/arm64/kvm/hyp/include/nvhe/iommu.h
+arch/arm64/kvm/hyp/include/nvhe/its_emulate.h
 arch/arm64/kvm/hyp/include/nvhe/mem_protect.h
 arch/arm64/kvm/hyp/include/nvhe/memory.h
 arch/arm64/kvm/hyp/include/nvhe/mm.h
@@ -388,6 +389,7 @@ arch/arm64/kvm/hyp/nvhe/hyp.lds.S
 arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
 arch/arm64/kvm/hyp/nvhe/iommu/pviommu-host.c
 arch/arm64/kvm/hyp/nvhe/iommu/pviommu.c
+arch/arm64/kvm/hyp/nvhe/its_emulate.c
 arch/arm64/kvm/hyp/nvhe/list_debug.c
 arch/arm64/kvm/hyp/nvhe/mem_protect.c
 arch/arm64/kvm/hyp/nvhe/mm.c
@@ -672,6 +674,7 @@ drivers/amba/bus.c
 drivers/android/binder.c
 drivers/android/binder/allocation.rs
 drivers/android/binder/context.rs
+drivers/android/binder/debug.rs
 drivers/android/binder/deferred_close.rs
 drivers/android/binder/defs.rs
 drivers/android/binder/error.rs
@@ -948,6 +951,7 @@ drivers/dma-buf/dma-fence-unwrap.c
 drivers/dma-buf/dma-fence.c
 drivers/dma-buf/dma-heap.c
 drivers/dma-buf/dma-resv.c
+drivers/dma-buf/heaps/tegra-vpr-init.c
 drivers/dma-buf/sync_file.c
 drivers/dma-buf/udmabuf.c
 drivers/dma/dmaengine.c
@@ -1142,6 +1146,7 @@ drivers/gpu/drm/ttm/ttm_range_manager.c
 drivers/gpu/drm/ttm/ttm_resource.c
 drivers/gpu/drm/ttm/ttm_sys_manager.c
 drivers/gpu/drm/ttm/ttm_tt.c
+drivers/gpu/host1x/context_bus.c
 drivers/gpu/trace/trace_gpu_mem.c
 drivers/hid/hid-apple.c
 drivers/hid/hid-core.c
@@ -1619,6 +1624,7 @@ drivers/pci/controller/dwc/pcie-qcom-common.c
 drivers/pci/controller/dwc/pcie-qcom-common.h
 drivers/pci/controller/dwc/pcie-qcom.c
 drivers/pci/controller/pci-host-common.c
+drivers/pci/controller/pci-host-common.h
 drivers/pci/controller/pci-host-generic.c
 drivers/pci/devres.c
 drivers/pci/ecam.c
@@ -2141,7 +2147,6 @@ drivers/video/of_videomode.c
 drivers/video/videomode.c
 drivers/virt/coco/pkvm-guest/arm-pkvm-guest.c
 drivers/virt/coco/pkvm-guest/pkvm-device-power.c
-drivers/virt/coco/pkvm-guest/pkvm-guest.h
 drivers/virt/geniezone/gzvm_common.h
 drivers/virt/geniezone/gzvm_exception.c
 drivers/virt/geniezone/gzvm_ioeventfd.c
@@ -2893,6 +2898,7 @@ include/dt-bindings/clock/hi3670-clock.h
 include/dt-bindings/clock/hi6220-clock.h
 include/dt-bindings/clock/histb-clock.h
 include/dt-bindings/gpio/gpio.h
+include/dt-bindings/gpio/nvidia,tegra238-gpio.h
 include/dt-bindings/gpio/tegra186-gpio.h
 include/dt-bindings/gpio/tegra194-gpio.h
 include/dt-bindings/gpio/tegra234-gpio.h
@@ -3127,6 +3133,7 @@ include/linux/crc8.h
 include/linux/cred.h
 include/linux/crypto.h
 include/linux/ctype.h
+include/linux/damon.h
 include/linux/dax.h
 include/linux/dcache.h
 include/linux/dccp.h
@@ -4078,6 +4085,7 @@ include/linux/task_work.h
 include/linux/taskstats_kern.h
 include/linux/tcp.h
 include/linux/tegra-icc.h
+include/linux/tegra-vpr.h
 include/linux/termios_internal.h
 include/linux/textsearch.h
 include/linux/textsearch_fsm.h
@@ -4643,6 +4651,7 @@ include/trace/events/cma.h
 include/trace/events/compaction.h
 include/trace/events/cpuhp.h
 include/trace/events/csd.h
+include/trace/events/damon.h
 include/trace/events/devfreq.h
 include/trace/events/devlink.h
 include/trace/events/dma.h
@@ -4772,6 +4781,7 @@ include/trace/hooks/kasan.h
 include/trace/hooks/logbuf.h
 include/trace/hooks/madvise.h
 include/trace/hooks/mm.h
+include/trace/hooks/mmc.h
 include/trace/hooks/module.h
 include/trace/hooks/mpam.h
 include/trace/hooks/net.h
@@ -5809,6 +5819,7 @@ kernel/utsname.c
 kernel/utsname_sysctl.c
 kernel/vhost_task.c
 kernel/watchdog.c
+kernel/watchdog_buddy.c
 kernel/workqueue.c
 kernel/workqueue_internal.h
 lib/alloc_tag.c
@@ -6133,6 +6144,18 @@ mm/cma.h
 mm/cma_debug.c
 mm/cma_sysfs.c
 mm/compaction.c
+mm/damon/core.c
+mm/damon/ops-common.c
+mm/damon/ops-common.h
+mm/damon/paddr.c
+mm/damon/sysfs-common.c
+mm/damon/sysfs-common.h
+mm/damon/sysfs-schemes.c
+mm/damon/sysfs.c
+mm/damon/tests/core-kunit.h
+mm/damon/tests/sysfs-kunit.h
+mm/damon/tests/vaddr-kunit.h
+mm/damon/vaddr.c
 mm/debug.c
 mm/dmapool.c
 mm/early_ioremap.c
@@ -6976,6 +6999,7 @@ rust/kernel/fs.rs
 rust/kernel/fs/file.rs
 rust/kernel/generated_arch_static_branch_asm.rs.S
 rust/kernel/id_pool.rs
+rust/kernel/impl_flags.rs
 rust/kernel/init.rs
 rust/kernel/init/__internal.rs
 rust/kernel/init/macros.rs

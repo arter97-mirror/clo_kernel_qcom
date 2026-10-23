@@ -37,3 +37,18 @@ def register_modules(registry):
             "drivers/hwmon/hwmon",
         ],
     )
+
+    registry.register(
+        name = "drivers/hwmon/qti_batt_telemetry",
+        out = "qti_batt_telemetry.ko",
+        config = "CONFIG_QTI_BATT_TELEMETRY",
+        srcs = [
+            # do not sort
+            "drivers/hwmon/qti_batt_telemetry.c",
+        ],
+        deps = [
+            # do not sort
+            "drivers/soc/qcom/qti_pmic_glink",
+            "drivers/hwmon/hwmon",
+        ],
+    )

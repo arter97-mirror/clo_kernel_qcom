@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+
+menu "ktm5000 driver"
+
+config KTM5000B0T
+	tristate "DP2HDMI functionality"
+	help
+	  Say Y here to enable DP-to-HDMI functionality.With this option
+	  enabled, the platform is configured to support concurrent USB
+	  3.0 2-lane and DisplayPort 2-lane operation. Enable this option
+	  only on platforms that support this mode.
+endmenu

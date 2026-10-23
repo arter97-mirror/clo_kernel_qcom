@@ -1153,7 +1153,7 @@ int rproc_set_state(struct rproc *rproc, bool state)
 	}
 
 	adsp = (struct qcom_adsp *)rproc->priv;
-	if (!adsp->q6v5.running) {
+	if (!atomic_read(&adsp->q6v5.running)) {
 		dev_err(adsp->dev, "rproc is not running\n");
 		return -EINVAL;
 	} else if (!adsp->q6v5.handover_issued) {
@@ -1525,7 +1525,23 @@ static int adsp_attach(struct rproc *rproc)
 			rproc->state = RPROC_CRASHED;
 			panic("Panicking, timed out on ping/pong for %s\n", rproc->name);
 		}
-		adsp->q6v5.running = true;
+		atomic_set(&adsp->q6v5.running, 1);
+
+		/*
+		 * Balance the disable_irq() from qcom_q6v5_init(). The handover IRQ
+		 * was never enabled in this path (adsp_start/qcom_q6v5_prepare was
+		 * not called for early_boot). Without this, the depth counter stays
+		 * at 1 after the first SSR: adsp_stop's disable_irq brings it to 2,
+		 * and recovery's qcom_q6v5_prepare enable_irq only reaches 1 — the
+		 * IRQ never fires, leaving the ICC proxy vote stuck at UINT_MAX.
+		 *
+		 * Mark handover_issued=true since proxy resources (ICC/regulators)
+		 * were never acquired via this attach path; adsp_stop must not call
+		 * qcom_pas_handover to release them.
+		 */
+
+		adsp->q6v5.handover_issued = true;
+		enable_irq(adsp->q6v5.handover_irq);
 
 		if (!adsp->firmware) {
 			ret = request_firmware(&adsp->firmware, rproc->firmware, adsp->dev);
@@ -3779,6 +3795,60 @@ static const struct adsp_data waipio_slpi_resource = {
 	.ssctl_id = 0x16,
 };
 
+static const struct adsp_data diwali_wpss_resource = {
+	.crash_reason_smem = 626,
+	.firmware_name = "wpss.mdt",
+	.pas_id = 6,
+	.minidump_id = 4,
+	.load_state = "wpss",
+	.uses_elf64 = true,
+	.ssr_name = "wpss",
+	.sysmon_name = "wpss",
+	.ssctl_id = 0x19,
+};
+
+static const struct adsp_data diwali_adsp_resource = {
+	.crash_reason_smem = 423,
+	.firmware_name = "adsp.mdt",
+	.pas_id = 1,
+	.minidump_id = 5,
+	.load_state = "adsp",
+	.uses_elf64 = true,
+	.auto_boot = false,
+	.ssr_name = "lpass",
+	.sysmon_name = "adsp",
+	.ssctl_id = 0x14,
+};
+
+static const struct adsp_data diwali_cdsp_resource = {
+	.crash_reason_smem = 601,
+	.firmware_name = "cdsp.mdt",
+	.pas_id = 18,
+	.minidump_id = 7,
+	.load_state = "cdsp",
+	.uses_elf64 = true,
+	.auto_boot = true,
+	.ssr_name = "cdsp",
+	.sysmon_name = "cdsp",
+	.ssctl_id = 0x17,
+};
+
+static const struct adsp_data diwali_mpss_resource = {
+	.crash_reason_smem = 421,
+	.firmware_name = "modem.mdt",
+	.pas_id = 4,
+	.minidump_id = 3,
+	.load_state = "modem",
+	.uses_elf64 = true,
+	.auto_boot = false,
+	.ssr_name = "mpss",
+	.sysmon_name = "modem",
+	.ssctl_id = 0x12,
+	.dma_phys_below_32b = true,
+	.decrypt_shutdown = true,
+	.both_dumps = true,
+};
+
 static const struct of_device_id adsp_of_match[] = {
 	{ .compatible = "qcom,msm8226-adsp-pil", .data = &adsp_resource_init},
 	{ .compatible = "qcom,msm8953-adsp-pil", .data = &msm8996_adsp_resource},
@@ -3903,6 +3973,10 @@ static const struct of_device_id adsp_of_match[] = {
 	{ .compatible = "qcom,waipio-cdsp-pas", .data = &waipio_cdsp_resource},
 	{ .compatible = "qcom,waipio-slpi-pas", .data = &waipio_slpi_resource},
 	{ .compatible = "qcom,waipio-modem-pas", .data = &waipio_mpss_resource},
+	{ .compatible = "qcom,diwali-wpss-pas", .data = &diwali_wpss_resource},
+	{ .compatible = "qcom,diwali-adsp-pas", .data = &diwali_adsp_resource},
+	{ .compatible = "qcom,diwali-cdsp-pas", .data = &diwali_cdsp_resource},
+	{ .compatible = "qcom,diwali-modem-pas", .data = &diwali_mpss_resource},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, adsp_of_match);
