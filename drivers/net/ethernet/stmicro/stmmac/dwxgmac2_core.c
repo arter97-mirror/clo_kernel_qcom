@@ -1301,6 +1301,7 @@ static int dwxgmac2_flex_pps_config(struct stmmac_priv *priv, void __iomem *ioad
 	val &= ~XGMAC_PPSx_MASK(index);
 
 	if (!enable) {
+		val |= XGMAC_PPSENx(index);
 		val |= XGMAC_PPSCMDx(index, XGMAC_PPSCMD_STOP);
 		writel(val, ioaddr + XGMAC_PPS_CONTROL(dwxgmac_addrs));
 		return 0;
