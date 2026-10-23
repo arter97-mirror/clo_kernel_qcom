@@ -1160,6 +1160,7 @@ static void qcom_geni_serial_shutdown(struct uart_port *uport)
 
 	qcom_geni_serial_cancel_tx_cmd(uport);
 	uart_port_unlock_irq(uport);
+	pm_runtime_put_sync(uport->dev);
 }
 
 static void qcom_geni_serial_flush_buffer_fifo(struct uart_port *uport)
@@ -1222,19 +1223,18 @@ static int qcom_geni_serial_startup(struct uart_port *uport)
 	int ret;
 	struct qcom_geni_serial_port *port = to_dev_port(uport);
 
-	if (pm_runtime_status_suspended(uport->dev)) {
-		/* Set pm_state to OFF on failure */
-		if (uport->state)
-			uport->state->pm_state = UART_PM_STATE_OFF;
-
-		dev_err(uport->dev, "Device is suspended, please retry\n");
-		return -EAGAIN;
+	ret = pm_runtime_resume_and_get(uport->dev);
+	if (ret < 0) {
+		dev_err(uport->dev, "Failed to resume and get %d\n", ret);
+		return ret;
 	}
 
 	if (!port->setup) {
 		ret = qcom_geni_serial_port_setup(uport);
-		if (ret)
+		if (ret) {
+			pm_runtime_put_sync(uport->dev);
 			return ret;
+		}
 	}
 
 	qcom_geni_serial_start_rx(uport);
@@ -1825,30 +1825,6 @@ static int qcom_geni_gvm_panic_cb(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
-static void qcom_geni_serial_pm(struct uart_port *uport,
-		unsigned int new_state, unsigned int old_state)
-{
-	int ret;
-
-	/* If we've never been called, treat it as off */
-	if (old_state == UART_PM_STATE_UNDEFINED)
-		old_state = UART_PM_STATE_OFF;
-
-	if (new_state == UART_PM_STATE_ON && old_state == UART_PM_STATE_OFF) {
-		ret = pm_runtime_resume_and_get(uport->dev);
-		if (ret < 0) {
-			dev_err(uport->dev, "Failed to resume device in pm ops:%d\n", ret);
-			return;
-		}
-	} else if (new_state == UART_PM_STATE_OFF && old_state == UART_PM_STATE_ON) {
-		if (pm_runtime_status_suspended(uport->dev)) {
-			dev_err(uport->dev, "Device is already suspended\n");
-			return;
-		}
-		pm_runtime_put_sync(uport->dev);
-	}
-}
-
 static const struct uart_ops qcom_geni_console_pops = {
 	.tx_empty = qcom_geni_serial_tx_empty,
 	.stop_tx = qcom_geni_serial_stop_tx_fifo,
@@ -1869,7 +1845,6 @@ static const struct uart_ops qcom_geni_console_pops = {
 	.poll_put_char	= qcom_geni_serial_poll_put_char,
 	.poll_init = qcom_geni_serial_poll_init,
 #endif
-	.pm = qcom_geni_serial_pm,
 };
 
 static const struct uart_ops qcom_geni_uart_pops = {
@@ -1887,7 +1862,6 @@ static const struct uart_ops qcom_geni_uart_pops = {
 	.type = qcom_geni_serial_get_type,
 	.set_mctrl = qcom_geni_serial_set_mctrl,
 	.get_mctrl = qcom_geni_serial_get_mctrl,
-	.pm = qcom_geni_serial_pm,
 };
 
 static int qcom_geni_serial_probe(struct platform_device *pdev)
@@ -2004,7 +1978,14 @@ static int qcom_geni_serial_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(port->se.dev);
 
+	ret = pm_runtime_resume_and_get(uport->dev);
+	if (ret < 0) {
+		dev_err(uport->dev, "Failed to resume and get %d\n", ret);
+		goto error;
+	}
+
 	ret = uart_add_one_port(drv, uport);
+	pm_runtime_put(uport->dev);
 	if (ret)
 		goto error;
 
