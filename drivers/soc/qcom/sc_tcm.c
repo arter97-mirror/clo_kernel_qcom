@@ -58,6 +58,8 @@ static int sc_tcm_add_mem(struct sc_tcm_device *sc_tcm)
 	 * the kernel maintains the mapping internally.
 	 */
 	kvfree(pages);
+	flush_tlb_kernel_range((unsigned long)phys_to_virt(base),
+			       (unsigned long)phys_to_virt(base) + sc_tcm->size);
 
 	return 0;
 }
