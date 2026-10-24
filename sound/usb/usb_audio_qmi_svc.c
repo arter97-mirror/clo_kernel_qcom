@@ -87,6 +87,8 @@ struct intf_info {
 
 struct uaudio_dev {
 	struct usb_device *udev;
+	/* serializes uaudio_dev_cleanup() against concurrent callers */
+	struct mutex cleanup_lock;
 	/* audio control interface */
 	struct usb_host_interface *ctrl_intf;
 	unsigned int card_num;
@@ -899,7 +901,7 @@ static int initialize_uadev_if_in_use(int card_num,
 		return -ENOMEM;
 
 	mutex_lock(&chip->mutex);
-	uadev[card_num].udev = subs->dev;
+	uadev[card_num].udev = usb_get_dev(subs->dev);
 	mutex_unlock(&chip->mutex);
 	return 0;
 }
@@ -907,7 +909,6 @@ static int initialize_uadev_if_in_use(int card_num,
 static void uaudio_dev_intf_cleanup(struct usb_device *udev,
 	struct intf_info *info)
 {
-
 	if (!info) {
 		uaudio_err("info is NULL\n");
 		return;
@@ -927,8 +928,13 @@ static void uaudio_dev_intf_cleanup(struct usb_device *udev,
 		info->xfer_buf_size, info->xfer_buf_size);
 	info->xfer_buf_va = 0;
 
-	usb_free_coherent(udev, info->xfer_buf_size,
-		info->xfer_buf, info->xfer_buf_pa);
+	if (info->xfer_buf && udev && udev->bus)
+		usb_free_coherent(udev, info->xfer_buf_size,
+			info->xfer_buf, info->xfer_buf_pa);
+	else if (info->xfer_buf)
+		uaudio_err("udev/bus invalid, skip usb_free_coherent intf# %d\n",
+			info->intf_num);
+
 	info->xfer_buf_size = 0;
 	info->xfer_buf = NULL;
 	info->xfer_buf_pa = 0;
@@ -951,17 +957,23 @@ static void uaudio_event_ring_cleanup_free(struct uaudio_dev *dev)
 static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 {
 	int if_idx;
+	struct usb_device *udev;
+
+	mutex_lock(&dev->cleanup_lock);
 
 	if (!dev->udev) {
 		uaudio_dbg("USB audio device memory is already freed.\n");
+		mutex_unlock(&dev->cleanup_lock);
 		return;
 	}
+
+	udev = dev->udev;
 
 	/* free xfer buffer and unmap xfer ring and buf per interface */
 	for (if_idx = 0; if_idx < dev->num_intf; if_idx++) {
 		if (!dev->info[if_idx].in_use)
 			continue;
-		uaudio_dev_intf_cleanup(dev->udev, &dev->info[if_idx]);
+		uaudio_dev_intf_cleanup(udev, &dev->info[if_idx]);
 		uaudio_dbg("release resources: intf# %d card# %d\n",
 				dev->info[if_idx].intf_num, dev->card_num);
 	}
@@ -973,6 +985,9 @@ static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 	dev->info = NULL;
 	uaudio_event_ring_cleanup_free(dev);
 	dev->udev = NULL;
+	usb_put_dev(udev);
+
+	mutex_unlock(&dev->cleanup_lock);
 }
 
 
@@ -991,6 +1006,7 @@ static void uaudio_connect(struct snd_usb_audio *chip)
 	if (!sb)
 		return;
 
+	mutex_init(&uadev[chip->card->number].cleanup_lock);
 	uadev[chip->card->number].chip = chip;
 	uadev[chip->card->number].sb = sb;
 }
@@ -1360,7 +1376,10 @@ static int check_valid_request(struct qmi_uaudio_stream_req_msg_v01 *req_msg,
 
 	if (!subs) {
 		uaudio_err("invalid substream\n");
-		return -EFAULT;
+		/*
+		 * Device/substream may have gone away due to USB disconnect.
+		 */
+		return -ENODEV;
 	}
 
 	chip = uadev[pcm_card_num].chip;
@@ -1505,9 +1524,11 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
 	}
 
 response:
-	if (!req_msg->enable && ret != -EINVAL && ret != -ENODEV) {
+	if (!req_msg->enable && ret != -EINVAL && ret != -ENODEV && chip) {
 		mutex_lock(&chip->mutex);
-		if (info_idx >= 0) {
+		mutex_lock(&uadev[pcm_card_num].cleanup_lock);
+		if (info_idx >= 0 && uadev[pcm_card_num].info &&
+		    info_idx < uadev[pcm_card_num].num_intf) {
 			info = &uadev[pcm_card_num].info[info_idx];
 			uaudio_dev_intf_cleanup(
 					uadev[pcm_card_num].udev,
@@ -1517,6 +1538,7 @@ response:
 		}
 		if (atomic_dec_and_test(&uadev[pcm_card_num].in_use))
 			uaudio_dev_release(&uadev[pcm_card_num]);
+		mutex_unlock(&uadev[pcm_card_num].cleanup_lock);
 		mutex_unlock(&chip->mutex);
 	}
 
