@@ -1479,11 +1479,25 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
 				map_pcm_format(req_msg->audio_format),
 				req_msg->number_of_ch, req_msg->bit_rate,
 				datainterval);
-		if (!ret)
-			ret = prepare_qmi_response(subs, req_msg, &resp,
-					info_idx);
-		else
+		if (!ret) {
+			ret = snd_usb_lock_shutdown(chip);
+			if (!ret) {
+				if (atomic_read(&chip->shutdown) || !subs->data_endpoint ||
+						!subs->cur_audiofmt ||
+						subs->dev->state == USB_STATE_NOTATTACHED) {
+					uaudio_err("substream torn down before response, aborting\n");
+					ret = -ENODEV;
+				} else {
+					ret = prepare_qmi_response(subs, req_msg, &resp,
+							info_idx);
+				}
+				snd_usb_unlock_shutdown(chip);
+			}
+			if (ret)
+				disable_audio_stream(subs);
+		} else {
 			uaudio_dbg("enable_audio_stream failed %d\n", ret);
+		}
 
 		if (ret) {
 			mutex_lock(&chip->mutex);
@@ -1520,7 +1534,8 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
 			info->sync_ep_pipe = 0;
 		}
 
-		disable_audio_stream(subs);
+		if (subs->cur_audiofmt || subs->data_endpoint)
+			disable_audio_stream(subs);
 	}
 
 response:
