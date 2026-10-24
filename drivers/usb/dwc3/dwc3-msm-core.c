@@ -1479,7 +1479,7 @@ int dwc3_core_stop_hw_active_transfers(struct dwc3 *dwc)
 
 	for (i = 0; i < DWC3_ENDPOINTS_NUM; i++)
 		if (mdwc->hw_eps[i].mode == USB_EP_GSI)
-			dwc3_core_stop_active_transfer(dwc->eps[i], true);
+			dwc3_core_stop_active_transfer(dwc->eps[i], false);
 
 	return 0;
 }
@@ -2592,7 +2592,10 @@ static void gsi_set_clear_dbell(struct usb_ep *ep,
 /**
  * Performs necessary checks before stopping GSI channels
  *
- * @usb_ep - pointer to usb_ep instance to access DWC3 regs
+ * @mdwc - pointer to dwc3_msm instance to access DWC3 regs
+ *
+ * Busy-waits only (never sleeps): also called from kretprobe entry-handler
+ * context via handle_gsi_clear_db(), which cannot block.
  */
 static bool gsi_check_ready_to_suspend(struct dwc3_msm *mdwc)
 {
@@ -2605,6 +2608,7 @@ static bool gsi_check_ready_to_suspend(struct dwc3_msm *mdwc)
 			"Unable to suspend GSI ch. WR_CTRL_STATE != 0\n");
 			return false;
 		}
+		udelay(10);
 	}
 
 	return true;
@@ -2732,7 +2736,7 @@ int usb_gsi_ep_op(struct usb_ep *ep, void *op_data, enum gsi_ep_op op)
 		 * knows about the DEP flags for GSI based EPs.
 		 */
 		spin_lock_irqsave(&dwc->lock, flags);
-		dwc3_core_stop_active_transfer(dep, true);
+		dwc3_core_stop_active_transfer(dep, false);
 		spin_unlock_irqrestore(&dwc->lock, flags);
 		ret = ep->ops->disable(ep);
 		break;
@@ -3596,6 +3600,20 @@ static void handle_gsi_clear_db(struct dwc3 *dwc)
 		dwc3_msm_write_reg_field(mdwc->base,
 			GSI_GENERAL_CFG_REG(mdwc->gsi_reg),
 			BLOCK_GSI_WR_GO_MASK, true);
+		/*
+		 * Unlike the negotiated-suspend path (GSI_EP_OP_CHECK_FOR_SUSPEND
+		 * in usb_gsi_ep_op(), which aborts and re-arms the doorbell on a
+		 * false return), this runs during hard teardown: the caller
+		 * unconditionally proceeds to stop HW transfers and clear the GSI
+		 * event buffers right after, with no option to retry later. Leaving
+		 * GSI_EN set here would only mean GSI stays enabled while the rest
+		 * of teardown pulls the event buffers out from under it, so clear
+		 * it anyway on timeout and rely on the error log to flag the
+		 * anomaly for debugging.
+		 */
+		if (!gsi_check_ready_to_suspend(mdwc))
+			dev_err(mdwc->dev,
+				"clear_db: GSI wr ctrl not idle, clearing GSI_EN anyway\n");
 		dwc3_msm_write_reg_field(mdwc->base,
 			GSI_GENERAL_CFG_REG(mdwc->gsi_reg),
 			GSI_EN_MASK, 0);
