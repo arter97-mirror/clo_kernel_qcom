@@ -3743,6 +3743,20 @@ static const struct adsp_data glymur_cdsp_resource = {
 	.smem_host_id = 5,
 };
 
+static const struct adsp_data glymur_soccp_resource = {
+	.crash_reason_smem = 656,
+	.firmware_name = "soccp.mbn",
+	.dtb_firmware_name = "soccp_dtb.mbn",
+	.pas_id = 51,
+	.dtb_pas_id = 0x41,
+	.minidump_id = 24,
+	.uses_elf64 = true,
+	.ssr_name = "soccp",
+	.sysmon_name = "soccp",
+	.early_boot = true,
+	.auto_boot = true,
+};
+
 static const struct adsp_data waipio_adsp_resource = {
 	.crash_reason_smem = 423,
 	.firmware_name = "adsp.mdt",
@@ -3978,6 +3992,7 @@ static const struct of_device_id adsp_of_match[] = {
 	{ .compatible = "qcom,diwali-adsp-pas", .data = &diwali_adsp_resource},
 	{ .compatible = "qcom,diwali-cdsp-pas", .data = &diwali_cdsp_resource},
 	{ .compatible = "qcom,diwali-modem-pas", .data = &diwali_mpss_resource},
+	{ .compatible = "qcom,glymur-soccp-pas", .data = &glymur_soccp_resource},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, adsp_of_match);
