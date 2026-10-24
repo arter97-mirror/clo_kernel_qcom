@@ -44,6 +44,11 @@ struct cci_util_handle {
 	struct cci_util_dev *dev;
 };
 
+struct cam_cci_client_iface {
+	int32_t (*cci_ops)(struct v4l2_subdev *sd, unsigned int cmd,
+			   struct cam_cci_ctrl *cci_ctrl);
+};
+
 static struct cci_util_dev *g_cci_util;
 static struct device *g_cci_dev;
 static DEFINE_MUTEX(g_cci_util_lock);
@@ -147,16 +152,35 @@ struct lt7911_crc_info {
 #define LT7911_READNUM_SET_COMMAND      0x5f
 #define LT7911UXC_FW_AREA_SIZE          (64 * 1024)
 
+static struct cam_cci_client_iface *dpin_cci_get_iface(struct v4l2_subdev *sd)
+{
+	void *priv;
+
+	if (!sd)
+		return NULL;
+
+	priv = v4l2_get_subdev_hostdata(sd);
+	if (!priv)
+		return NULL;
+
+	return (struct cam_cci_client_iface *)priv;
+}
+
 static int dpin_cci_util_cmd(struct dpin_cci_util_sensor_client *client,
 			 enum dpin_cci_util_cmd_type cmd)
 {
-	struct dpin_cci_util_ctrl ctrl;
+	struct cam_cci_ctrl ctrl;
+	struct cam_cci_client_iface *iface;
+
+	iface = dpin_cci_get_iface(client->cci_subdev);
+	if (!iface || !iface->cci_ops)
+		return -ENODEV;
 
 	memset(&ctrl, 0, sizeof(ctrl));
 	ctrl.cmd      = cmd;
 	ctrl.cci_info = client;
 
-	return v4l2_subdev_call(client->cci_subdev, core, ioctl,
+	return iface->cci_ops(client->cci_subdev,
 				DPIN_CCI_UTIL_VIDIOC_MSM_CCI_CFG, &ctrl);
 }
 
@@ -164,7 +188,12 @@ static int dpin_cci_util_write(struct dpin_cci_util_sensor_client *client,
 			  struct dpin_cci_util_i2c_reg_setting *setting)
 {
 	int rc;
-	struct dpin_cci_util_ctrl ctrl;
+	struct cam_cci_ctrl ctrl;
+	struct cam_cci_client_iface *iface;
+
+	iface = dpin_cci_get_iface(client->cci_subdev);
+	if (!iface || !iface->cci_ops)
+		return -ENODEV;
 
 	memset(&ctrl, 0, sizeof(ctrl));
 	ctrl.cmd                               = DPIN_CCI_UTIL_MSM_CCI_I2C_WRITE;
@@ -175,7 +204,7 @@ static int dpin_cci_util_write(struct dpin_cci_util_sensor_client *client,
 	ctrl.cfg.cci_i2c_write_cfg.data_type   = setting->data_type;
 	ctrl.cfg.cci_i2c_write_cfg.delay       = setting->delay;
 
-	rc = v4l2_subdev_call(client->cci_subdev, core, ioctl,
+	rc = iface->cci_ops(client->cci_subdev,
 			      DPIN_CCI_UTIL_VIDIOC_MSM_CCI_CFG, &ctrl);
 	if (rc < 0)
 		return rc;
@@ -201,11 +230,16 @@ static int dpin_cci_util_read(struct dpin_cci_util_sensor_client *client,
 			 u16 num_bytes)
 {
 	int rc;
-	struct dpin_cci_util_ctrl ctrl;
+	struct cam_cci_ctrl ctrl;
+	struct cam_cci_client_iface *iface;
 	unsigned char buf[4] = { 0 };
 
 	if (!out_buf || num_bytes == 0 || num_bytes > sizeof(buf))
 		return -EINVAL;
+
+	iface = dpin_cci_get_iface(client->cci_subdev);
+	if (!iface || !iface->cci_ops)
+		return -ENODEV;
 
 	memset(&ctrl, 0, sizeof(ctrl));
 	ctrl.cmd                              = DPIN_CCI_UTIL_MSM_CCI_I2C_READ;
@@ -216,7 +250,7 @@ static int dpin_cci_util_read(struct dpin_cci_util_sensor_client *client,
 	ctrl.cfg.cci_i2c_read_cfg.num_byte    = num_bytes;
 	ctrl.cfg.cci_i2c_read_cfg.data        = buf;
 
-	rc = v4l2_subdev_call(client->cci_subdev, core, ioctl,
+	rc = iface->cci_ops(client->cci_subdev,
 			      DPIN_CCI_UTIL_VIDIOC_MSM_CCI_CFG, &ctrl);
 	if (rc < 0)
 		return rc;
@@ -464,7 +498,11 @@ EXPORT_SYMBOL_GPL(cci_util_lt7911_is_power_on);
 
 /**
  * dpin_cci_util_read_seq - sequential byte read of @num_bytes registers
- *                          starting at @reg_addr into @out_buf.
+ *                     starting at @reg_addr into @out_buf.
+ *
+ * Mirrors cam_camera_cci_i2c_read_seq() / camera_io_dev_read_seq() from
+ * cam_sensor_cci_i2c.c, adapted to use the local cam_cci_ctrl path.
+ *
  * @client:    populated CCI client
  * @reg_addr:  first register address to read
  * @out_buf:   caller-allocated buffer of at least @num_bytes bytes
@@ -481,11 +519,16 @@ static int dpin_cci_util_read_seq(struct dpin_cci_util_sensor_client *client,
 			     u16 num_bytes)
 {
 	int rc;
-	struct dpin_cci_util_ctrl ctrl;
+	struct cam_cci_ctrl ctrl;
+	struct cam_cci_client_iface *iface;
 	u8 *buf;
 
 	if (!out_buf || num_bytes == 0)
 		return -EINVAL;
+
+	iface = dpin_cci_get_iface(client->cci_subdev);
+	if (!iface || !iface->cci_ops)
+		return -ENODEV;
 
 	buf = kzalloc(num_bytes, GFP_KERNEL);
 	if (!buf)
@@ -500,7 +543,7 @@ static int dpin_cci_util_read_seq(struct dpin_cci_util_sensor_client *client,
 	ctrl.cfg.cci_i2c_read_cfg.num_byte    = num_bytes;
 	ctrl.cfg.cci_i2c_read_cfg.data        = buf;
 
-	rc = v4l2_subdev_call(client->cci_subdev, core, ioctl,
+	rc = iface->cci_ops(client->cci_subdev,
 			      DPIN_CCI_UTIL_VIDIOC_MSM_CCI_CFG, &ctrl);
 	if (rc < 0) {
 		dev_err(client->cci_subdev->dev,

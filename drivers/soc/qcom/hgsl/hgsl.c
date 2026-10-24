@@ -19,6 +19,7 @@
 #include <linux/uaccess.h>
 #include <uapi/linux/hgsl.h>
 #include <linux/delay.h>
+#include <linux/string.h>
 #include <trace/events/gpu_mem.h>
 #include <linux/suspend.h>
 
@@ -3406,14 +3407,83 @@ static int hgsl_ioctl_perfcounter_read(
 	return hgsl_hyp_perfcounter_read(&priv->hyp_priv, param);
 }
 
+static int hgsl_get_task_name(struct task_struct *task, char *buf, size_t buf_size)
+{
+	struct mm_struct *mm = NULL;
+	char *arg_buf = NULL;
+	char comm[TASK_COMM_LEN] = { 0 };
+	unsigned long arg_start;
+	unsigned long arg_end;
+	unsigned long len;
+	int ret = 0;
+	int size;
+	int retries = 3;
+
+	if (!task || !buf || !buf_size) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	get_task_comm(comm, task);
+	if (strscpy(buf, comm, buf_size) < 0) {
+		ret = -E2BIG;
+		goto out;
+	}
+
+	arg_buf = hgsl_zalloc(HGSL_PROCESS_NAME_MAX_LEN);
+	if (!arg_buf)
+		goto out;
+
+	mm = get_task_mm(task);
+	if (!mm)
+		goto out;
+
+retry:
+	spin_lock(&mm->arg_lock);
+	arg_start = mm->arg_start;
+	arg_end = mm->arg_end;
+	spin_unlock(&mm->arg_lock);
+
+	if (arg_start >= arg_end)
+		goto out;
+
+	len = arg_end - arg_start;
+	if (len >= HGSL_PROCESS_NAME_MAX_LEN)
+		len = HGSL_PROCESS_NAME_MAX_LEN - 1;
+
+	size = access_process_vm(task, arg_start, arg_buf, len, FOLL_FORCE);
+
+	spin_lock(&mm->arg_lock);
+	if (arg_start != mm->arg_start || arg_end != mm->arg_end) {
+		spin_unlock(&mm->arg_lock);
+		if (--retries > 0)
+			goto retry;
+
+		goto out;
+	}
+	spin_unlock(&mm->arg_lock);
+
+	if (size <= 0)
+		goto out;
+
+	arg_buf[size] = '\0';
+	(void)strscpy(buf, kbasename(arg_buf), buf_size);
+
+out:
+	if (mm)
+		mmput(mm);
+	hgsl_free(arg_buf);
+	return ret;
+}
+
 static int hgsl_open(struct inode *inodep, struct file *filep)
 {
 	struct hgsl_priv *priv = NULL;
-	struct qcom_hgsl  *hgsl = container_of(inodep->i_cdev,
-					       struct qcom_hgsl, cdev);
+	struct qcom_hgsl *hgsl = container_of(inodep->i_cdev, struct qcom_hgsl, cdev);
 	struct pid *pid = task_tgid(current);
 	struct task_struct *task = pid_task(pid, PIDTYPE_PID);
 	pid_t pid_nr;
+	char task_name[HGSL_PROCESS_NAME_MAX_LEN] = { 0 };
 	int ret = 0;
 
 	if (!task)
@@ -3440,8 +3510,11 @@ static int hgsl_open(struct inode *inodep, struct file *filep)
 	mutex_init(&priv->lock);
 	priv->pid = pid_nr;
 
-	ret = hgsl_hyp_init(&priv->hyp_priv, hgsl->dev,
-		priv->pid, task->comm);
+	ret = hgsl_get_task_name(task, task_name, sizeof(task_name));
+	if (ret != 0)
+		LOGW("Failed to get process name, ret = %d", ret);
+
+	ret = hgsl_hyp_init(&priv->hyp_priv, hgsl->dev, priv->pid, task_name);
 	if (ret != 0)
 		goto out;
 
@@ -3451,6 +3524,7 @@ static int hgsl_open(struct inode *inodep, struct file *filep)
 	list_add(&priv->node, &hgsl->active_list);
 	hgsl_sysfs_client_init(priv);
 	hgsl_debugfs_client_init(priv);
+
 out:
 	if (ret != 0)
 		kfree(priv);

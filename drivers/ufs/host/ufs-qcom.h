@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef UFS_QCOM_H_
@@ -625,6 +625,10 @@ struct ufs_qcom_host {
 	cpumask_t perf_mask;
 	cpumask_t def_mask;
 	cpumask_t cluster_mask[MAX_NUM_CLUSTERS];
+	/* mask of the highest valid (existing) CPU cluster */
+	cpumask_t max_cluster_mask;
+	/* mask of the lowest valid (existing) CPU cluster */
+	cpumask_t min_cluster_mask;
 	bool disable_wb_support;
 	struct ufs_qcom_ber_hist ber_hist[UFS_QCOM_BER_MODE_MAX];
 	struct list_head regs_list_head;

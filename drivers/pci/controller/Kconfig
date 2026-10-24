@@ -358,6 +358,19 @@ config PCI_MSM
 
 	  If unsure, say N.
 
+config PCI_PRSNT_HP
+	tristate "PCI Hotplug driver using PRSNT# signal"
+	depends on PCI_MSM
+	depends on GPIOLIB
+	depends on OF
+	help
+	  Say Y here if you want to enable support for a custom PCI hotplug driver
+	  that uses the PRSNT# signal for device presence detection. This driver
+	  monitors the PRSNT# signal to detect insertion and removal of PCI devices
+	  and handles hotplug events accordingly.
+
+	  If unsure, say N.
+
 config PCIE_QCOM_ECAM
 	tristate "QCOM PCIe ECAM host controller"
 	depends on ARCH_QCOM && PCI

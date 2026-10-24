@@ -270,7 +270,7 @@ static bool ready_for_freq_updates;
 static int freq_qos_request_init(void)
 {
 	unsigned int cpu;
-	int ret;
+	int ret = 0;
 
 	struct cpufreq_policy *policy;
 	struct freq_qos_request *req;
@@ -278,31 +278,35 @@ static int freq_qos_request_init(void)
 	for_each_present_cpu(cpu) {
 		policy = cpufreq_cpu_get(cpu);
 		if (!policy) {
-			pr_err("%s: Failed to get cpufreq policy for cpu%d\n",
+			/* Skip offline CPUs; hotplug_notify_up() adds their QoS requests. */
+			pr_debug("%s: cpu%d offline, skip qos init (add on hotplug)\n",
 				__func__, cpu);
-			ret = -EAGAIN;
-			goto cleanup;
+			continue;
 		}
-		per_cpu(msm_perf_cpu_stats, cpu).min = 0;
 		req = &per_cpu(qos_req_min, cpu);
-		ret = freq_qos_add_request(&policy->constraints, req,
-			FREQ_QOS_MIN, FREQ_QOS_MIN_DEFAULT_VALUE);
-		if (ret < 0) {
-			pr_err("%s: Failed to add min freq constraint (%d)\n",
-				__func__, ret);
-			cpufreq_cpu_put(policy);
-			goto cleanup;
+		if (!freq_qos_request_active(req)) {
+			per_cpu(msm_perf_cpu_stats, cpu).min = 0;
+			ret = freq_qos_add_request(&policy->constraints, req,
+				FREQ_QOS_MIN, FREQ_QOS_MIN_DEFAULT_VALUE);
+			if (ret < 0) {
+				pr_err("%s: Failed to add min freq constraint (%d)\n",
+					__func__, ret);
+				cpufreq_cpu_put(policy);
+				goto cleanup;
+			}
 		}
 
-		per_cpu(msm_perf_cpu_stats, cpu).max = FREQ_QOS_MAX_DEFAULT_VALUE;
 		req = &per_cpu(qos_req_max, cpu);
-		ret = freq_qos_add_request(&policy->constraints, req,
-			FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT_VALUE);
-		if (ret < 0) {
-			pr_err("%s: Failed to add max freq constraint (%d)\n",
-				__func__, ret);
-			cpufreq_cpu_put(policy);
-			goto cleanup;
+		if (!freq_qos_request_active(req)) {
+			per_cpu(msm_perf_cpu_stats, cpu).max = FREQ_QOS_MAX_DEFAULT_VALUE;
+			ret = freq_qos_add_request(&policy->constraints, req,
+				FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT_VALUE);
+			if (ret < 0) {
+				pr_err("%s: Failed to add max freq constraint (%d)\n",
+					__func__, ret);
+				cpufreq_cpu_put(policy);
+				goto cleanup;
+			}
 		}
 
 		cpufreq_cpu_put(policy);
@@ -324,6 +328,48 @@ cleanup:
 		per_cpu(msm_perf_cpu_stats, cpu).max = FREQ_QOS_MAX_DEFAULT_VALUE;
 	}
 	return ret;
+}
+
+/*
+ * Add the min/max freq qos requests for a single CPU that just came online.
+ * Idempotent: skips requests that are already active. Only runs after the
+ * one-time freq_qos_request_init() has succeeded (ready_for_freq_updates);
+ * before that, the first set_cpu_*_freq() write establishes all online CPUs.
+ */
+static void add_cpu_freq_qos_request(unsigned int cpu)
+{
+	struct cpufreq_policy *policy;
+	struct freq_qos_request *req;
+
+	mutex_lock(&freq_pmqos_lock);
+	if (!ready_for_freq_updates)
+		goto out;
+
+	policy = cpufreq_cpu_get(cpu);
+	if (!policy)
+		goto out;
+
+	req = &per_cpu(qos_req_min, cpu);
+	if (!freq_qos_request_active(req)) {
+		per_cpu(msm_perf_cpu_stats, cpu).min = 0;
+		if (freq_qos_add_request(&policy->constraints, req,
+				FREQ_QOS_MIN, FREQ_QOS_MIN_DEFAULT_VALUE) < 0)
+			pr_err("%s: Failed to add min freq req for cpu%d\n",
+				__func__, cpu);
+	}
+
+	req = &per_cpu(qos_req_max, cpu);
+	if (!freq_qos_request_active(req)) {
+		per_cpu(msm_perf_cpu_stats, cpu).max = FREQ_QOS_MAX_DEFAULT_VALUE;
+		if (freq_qos_add_request(&policy->constraints, req,
+				FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT_VALUE) < 0)
+			pr_err("%s: Failed to add max freq req for cpu%d\n",
+				__func__, cpu);
+	}
+
+	cpufreq_cpu_put(policy);
+out:
+	mutex_unlock(&freq_pmqos_lock);
 }
 
 /*******************************sysfs start************************************/
@@ -388,6 +434,9 @@ static ssize_t set_cpu_min_freq(struct kobject *kobj,
 		i_cpu_stats = &per_cpu(msm_perf_cpu_stats, i);
 
 		req = &per_cpu(qos_req_min, i);
+		/* Skip offline CPUs: their QoS requests are added on hotplug. */
+		if (!freq_qos_request_active(req))
+			continue;
 		if (freq_qos_update_request(req, i_cpu_stats->min) < 0)
 			continue;
 
@@ -466,6 +515,9 @@ static ssize_t set_cpu_max_freq(struct kobject *kobj,
 		i_cpu_stats = &per_cpu(msm_perf_cpu_stats, i);
 
 		req = &per_cpu(qos_req_max, i);
+		/* Skip offline CPUs: their QoS requests are added on hotplug. */
+		if (!freq_qos_request_active(req))
+			continue;
 		if (freq_qos_update_request(req, i_cpu_stats->max) < 0)
 			continue;
 
@@ -771,6 +823,9 @@ static int hotplug_notify_up(unsigned int cpu)
 	mutex_lock(&perfevent_lock);
 	per_cpu(cpu_is_hp, cpu) = false;
 	mutex_unlock(&perfevent_lock);
+
+	/* Add freq qos requests for this CPU now that it is online. */
+	add_cpu_freq_qos_request(cpu);
 
 	if (events_group.init_success) {
 		spin_lock_irqsave(&(events_group.cpu_hotplug_lock), flags);

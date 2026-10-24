@@ -140,6 +140,7 @@ def define_neo_le():
         "drivers/soc/qcom/minidump.ko",
         "drivers/soc/qcom/msm_performance.ko",
         "drivers/soc/qcom/pdr_interface.ko",
+        "drivers/soc/qcom/pdr_monitor.ko",
         "drivers/soc/qcom/pmic-pon-log.ko",
         "drivers/soc/qcom/pmic_glink.ko",
         "drivers/soc/qcom/power_state.ko",

@@ -9,6 +9,7 @@
 #include <linux/highmem.h>
 #include <linux/mem-buf-exporter.h>
 #include <linux/gunyah/gh_mem_notifier.h>
+#include <linux/gunyah/gh_vm.h>
 #include <linux/debugfs.h>
 #include "mem-buf-dev.h"
 #include "mem-buf-gh.h"
@@ -418,6 +419,28 @@ int mem_buf_dma_buf_set_destructor(struct dma_buf *buf,
 	return 0;
 }
 EXPORT_SYMBOL(mem_buf_dma_buf_set_destructor);
+
+/*
+ * Refer to documentation for smmu_proxy_vm_status_handler.
+ */
+int mem_buf_dma_buf_set_destructor_smmu_proxy(struct dma_buf *buf,
+					      mem_buf_dma_buf_destructor dtor,
+					      void *dtor_data)
+{
+	struct mem_buf_vmperm *vmperm = to_mem_buf_vmperm(buf);
+
+	if (IS_ERR(vmperm))
+		return PTR_ERR(vmperm);
+
+	mutex_lock(&vmperm->lock);
+	vmperm->dtor = dtor;
+	vmperm->dtor_data = dtor_data;
+	vmperm->flags |= MEM_BUF_WRAPPER_FLAG_SMMU_PROXY;
+	mutex_unlock(&vmperm->lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mem_buf_dma_buf_set_destructor_smmu_proxy);
 
 /*
  * With CFI enabled, ops->attach must be set from *this* modules in order
@@ -918,6 +941,73 @@ EXPORT_SYMBOL(mem_buf_dma_buf_get_memparcel_hdl);
 #ifdef CONFIG_QCOM_MEM_BUF_DEV_GH
 static void *gh_rm_mem_notifier_cookie;
 
+/*
+ * The smmu proxy destructor tries to communicate with TVM. If TVM is shutdown,
+ * the ipc mechanism returns an error. We normally handle destructor errors by
+ * refusing to release the dmabuf's memory. However, it is safe to do so
+ * anyway for this case.
+ * Handling of this scenario is not left to the destructor itself because
+ * of lack of guaranteed order between detection of VM poweroff and IPC
+ * failure.
+ */
+static int smmu_proxy_vm_status_handler(struct notifier_block *nb,
+					unsigned long cmd, void *data)
+{
+	struct mem_buf_vmperm *vmperm;
+	gh_vmid_t vmid;
+	unsigned long idx;
+	int i;
+
+	if (cmd != GH_VM_EARLY_POWEROFF || !data)
+		return NOTIFY_DONE;
+
+	/*
+	 * smmu proxy assigns memory to both TVM and OEMVM.
+	 * Buts its msgq is between TVM and Android VM, so we only care
+	 * about poweroff events for TVM.
+	 */
+	vmid = *((gh_vmid_t *)data);
+	if (vmid != VMID_TVM)
+		return NOTIFY_DONE;
+
+	rcu_read_lock();
+	xa_for_each(&vmperm_xa, idx, vmperm) {
+		if (!kref_get_unless_zero(&vmperm->kref))
+			continue;
+		rcu_read_unlock();
+
+		mutex_lock(&vmperm->lock);
+		if (!(vmperm->flags & MEM_BUF_WRAPPER_FLAG_SMMU_PROXY)) {
+			mutex_unlock(&vmperm->lock);
+			goto next;
+		}
+		for (i = 0; i < vmperm->nr_acl_entries; i++) {
+			if (vmperm->vmids[i] != vmid)
+				continue;
+
+			pr_debug("vmid %d shutdown: clearing dtor %pS for dmabuf-inode %lu handle %u\n",
+				 vmid, vmperm->dtor,
+				 file_inode(vmperm->dmabuf->file)->i_ino,
+				 vmperm->memparcel_hdl);
+			vmperm->dtor = NULL;
+			mutex_unlock(&vmperm->lock);
+			mem_buf_vmperm_try_reclaim(vmperm, true);
+			goto next;
+		}
+		mutex_unlock(&vmperm->lock);
+next:
+		kref_put(&vmperm->kref, vmperm->kref_release);
+		rcu_read_lock();
+	}
+	rcu_read_unlock();
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block mem_buf_vmperm_vm_status_nb = {
+	.notifier_call = smmu_proxy_vm_status_handler,
+};
+
 /* Find the object with matching memparcel_hdl, and grab a reference */
 static struct mem_buf_vmperm *vmperm_lookup(u32 hdl)
 {
@@ -960,12 +1050,23 @@ static void mem_buf_vmperm_gh_notifier(enum gh_mem_notifier_tag tag, unsigned lo
 
 static int mem_buf_vmperm_gh_notifier_register(void)
 {
+	int ret;
+
 	gh_rm_mem_notifier_cookie = gh_mem_notifier_register(GH_MEM_NOTIFIER_TAG_MEM_BUF,
 						mem_buf_vmperm_gh_notifier, NULL);
 	if (IS_ERR(gh_rm_mem_notifier_cookie)) {
 		pr_err("Failed: gh_mem_notifier_register\n");
 		return PTR_ERR(gh_rm_mem_notifier_cookie);
 	}
+
+	ret = gh_register_vm_notifier(&mem_buf_vmperm_vm_status_nb);
+	if (ret) {
+		pr_err("Failed: gh_register_vm_notifier\n");
+		gh_mem_notifier_unregister(gh_rm_mem_notifier_cookie);
+		gh_rm_mem_notifier_cookie = NULL;
+		return ret;
+	}
+
 	return 0;
 }
 #else /* CONFIG_QCOM_MEM_BUF_DEV_GH */

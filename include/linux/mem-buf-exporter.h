@@ -40,6 +40,7 @@ mem_buf_dma_buf_export(struct dma_buf_export_info *exp_info,
 #define MEM_BUF_WRAPPER_FLAG_ACCEPT BIT(2)
 #define MEM_BUF_WRAPPER_FLAG_ERR BIT(3)
 #define MEM_BUF_WRAPPER_FLAG_ZOMBIE BIT(4)
+#define MEM_BUF_WRAPPER_FLAG_SMMU_PROXY BIT(5)
 
 /*
  * A dmabuf owned by the current VM with RWX permissions.

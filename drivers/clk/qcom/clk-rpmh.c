@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/clk-provider.h>
@@ -710,10 +710,16 @@ static const struct clk_rpmh_desc clk_rpmh_lemans = {
 };
 
 DEFINE_CLK_RPMH_ARC(neo, bi_tcxo, bi_tcxo_ao, "xo.lvl", 0x3, 1);
+DEFINE_CLK_RPMH_VRM_OPT(neo, ln_bb_clk1, ln_bb_clk1_ao, "lnbclka1", 1);
+DEFINE_CLK_RPMH_VRM_OPT(neo, ln_bb_clk2, ln_bb_clk2_ao, "lnbclka2", 1);
 
 static struct clk_hw *neo_rpmh_clocks[] = {
 	[RPMH_CXO_CLK]		= &neo_bi_tcxo.hw,
 	[RPMH_CXO_CLK_A]	= &neo_bi_tcxo_ao.hw,
+	[RPMH_LN_BB_CLK1]	= &neo_ln_bb_clk1.hw,
+	[RPMH_LN_BB_CLK1_A]	= &neo_ln_bb_clk1_ao.hw,
+	[RPMH_LN_BB_CLK2]	= &neo_ln_bb_clk2.hw,
+	[RPMH_LN_BB_CLK2_A]	= &neo_ln_bb_clk2_ao.hw,
 };
 
 static const struct clk_rpmh_desc clk_rpmh_neo = {

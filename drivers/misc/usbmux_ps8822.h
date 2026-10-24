@@ -67,26 +67,30 @@
 #define ORIENTATION_COUNT               2
 
 /*
- * UCSI vendor commands used for DP-IN sink-only and CC reconnect control.
- * Bit layout common to all three commands:
+ * UCSI vendor commands used for DP-IN and CC reconnect control.
+ * Bit layout common to the mode commands:
  *   [7:0]   Command opcode
  *   [15:8]  DataLength = 0
  *   [22:16] ConnectorNumber (1-indexed; Port2 = ADSP Port[1] = connector 2)
- *   [24]    Mode bit (command-specific: SourceOnly / SinkOnly enable flag)
+ *   [24]    Mode bit (command-specific enable flag)
  */
 #define UCSI_CMD_SET_SOURCEONLY         0xF3
-#define UCSI_CMD_SET_SINKONLY           0xF4
+#define UCSI_CMD_SET_DPIN_ENABLED       0xF4
 #define UCSI_CMD_CC_RECONNECT           0xF5
+#define UCSI_CMD_SET_SINKONLY           0xF6
 
 #define UCSI_SOURCEONLY_CONNECTOR_SHIFT 16
+#define UCSI_DPIN_ENABLED_CONNECTOR_SHIFT 16
 #define UCSI_SINKONLY_CONNECTOR_SHIFT   16
 #define UCSI_RECONNECT_CONNECTOR_SHIFT  16
 
 #define UCSI_SOURCEONLY_BIT             24
+#define UCSI_DPIN_ENABLED_BIT           24
 #define UCSI_SINKONLY_BIT               24
 
 /* Port2 = ADSP Port[1] = UCSI connector 2 (1-indexed) */
 #define UCSI_SOURCEONLY_CONNECTOR_NUM   2
+#define UCSI_DPIN_ENABLED_CONNECTOR_NUM 2
 #define UCSI_SINKONLY_CONNECTOR_NUM     2
 #define UCSI_RECONNECT_CONNECTOR_NUM    2
 
@@ -124,7 +128,8 @@ struct usbmux_ps8822_data {
 	enum usbmux_compat_mode compat_mode;    /* DP-IN compat mode (SourceOnly) */
 	bool orientation_flip;
 	bool hpd_state;
-	bool dp_state;    /* DP state for sink-only mode control */
+	bool dp_state;    /* DP-IN enabled state */
+	bool is_sinkonly;
 	bool dwc3_dp_mode;
 	struct device *dwc3_msm_dev;
 };
