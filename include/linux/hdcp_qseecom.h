@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __HDCP_QSEECOM_H
@@ -63,6 +63,7 @@ static inline const char *hdcp2_app_cmd_str(enum hdcp2_app_cmd cmd)
 
 #if IS_ENABLED(CONFIG_HDCP_QSEECOM)
 void *hdcp1_init(void);
+void *hdcp1_init_multi_dp(uint32_t device_type);
 void hdcp1_deinit(void *data);
 bool hdcp1_feature_supported(void *data);
 int hdcp1_start(void *data, u32 *aksv_msb, u32 *aksv_lsb);
@@ -80,7 +81,15 @@ int hdcp2_open_stream(void *ctx, uint8_t vc_payload_id,
 int hdcp2_close_stream(void *ctx, uint32_t stream_id);
 int hdcp2_force_encryption(void *ctx, uint32_t enable);
 #else
+
+/* stubbed routines */
+
 static inline void *hdcp1_init(void)
+{
+	return NULL;
+}
+
+static inline void *hdcp1_init_multi_dp(uint32_t device_type)
 {
 	return NULL;
 }
