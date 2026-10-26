@@ -103,7 +103,6 @@ struct uaudio_dev {
 	int num_intf;
 	struct intf_info *info;
 	struct snd_usb_audio *chip;
-	bool disconnect_wq_init;
 };
 
 static struct uaudio_dev uadev[SNDRV_CARDS];
@@ -889,10 +888,6 @@ static int initialize_uadev_if_in_use(int card_num,
 {
 	uaudio_dbg("Device in use: card_num=%d, num_intf=%d",
 		card_num, subs->dev->config->desc.bNumInterfaces);
-	if (!uadev[card_num].disconnect_wq_init) {
-		init_waitqueue_head(&uadev[card_num].disconnect_wq);
-		uadev[card_num].disconnect_wq_init = true;
-	}
 	uadev[card_num].num_intf =
 		subs->dev->config->desc.bNumInterfaces;
 	uadev[card_num].info = kcalloc(uadev[card_num].num_intf,
@@ -949,7 +944,8 @@ static void uaudio_event_ring_cleanup_free(struct uaudio_dev *dev)
 	if (!uaudio_qdev->card_slot) {
 		uaudio_iommu_unmap(MEM_EVENT_RING, IOVA_BASE, PAGE_SIZE,
 			PAGE_SIZE);
-		xhci_sideband_remove_interrupter(uadev[dev->chip->card->number].sb);
+		if (dev->chip && dev->chip->card)
+			xhci_sideband_remove_interrupter(uadev[dev->chip->card->number].sb);
 		uaudio_dbg("all audio devices disconnected\n");
 	}
 }
@@ -1007,6 +1003,7 @@ static void uaudio_connect(struct snd_usb_audio *chip)
 		return;
 
 	mutex_init(&uadev[chip->card->number].cleanup_lock);
+	init_waitqueue_head(&uadev[chip->card->number].disconnect_wq);
 	uadev[chip->card->number].chip = chip;
 	uadev[chip->card->number].sb = sb;
 }
@@ -1037,7 +1034,7 @@ static void uaudio_disconnect(struct snd_usb_audio *chip)
 	dev = &uadev[card_num];
 
 	/* clean up */
-	if (!dev->udev) {
+	if (!dev->udev && !atomic_read(&dev->in_use)) {
 		uaudio_dbg("no clean up required\n");
 		goto done;
 	}
@@ -1049,7 +1046,8 @@ static void uaudio_disconnect(struct snd_usb_audio *chip)
 				svc->client_sq.sq_family,
 				svc->client_sq.sq_node, svc->client_sq.sq_port);
 		disconnect_ind.dev_event = USB_AUDIO_DEV_DISCONNECT_V01;
-		disconnect_ind.slot_id = dev->udev->slot_id;
+		if (dev->udev)
+			disconnect_ind.slot_id = dev->udev->slot_id;
 		disconnect_ind.controller_num = dev->usb_core_id;
 		disconnect_ind.controller_num_valid = 1;
 		ret = qmi_send_indication(svc->uaudio_svc_hdl, &svc->client_sq,
@@ -1504,6 +1502,7 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
 			uaudio_dbg("enable process failed %d\n", ret);
 			atomic_dec(&uadev[pcm_card_num].in_use);
 			mutex_unlock(&chip->mutex);
+			wake_up(&uadev[pcm_card_num].disconnect_wq);
 		}
 
 	} else {
