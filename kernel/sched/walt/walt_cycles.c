@@ -17,6 +17,33 @@ struct walt_cpu_cycle {
 
 static DEFINE_PER_CPU(struct walt_cpu_cycle, walt_cc);
 
+/*
+ * Convert a frequency in kHz into the multiplier used by the cycle
+ * computations below, which do:
+ *
+ *	cycles = (delta_ns * mult_fact) >> 20
+ *
+ * i.e. mult_fact is freq_khz scaled by 2^20 / 10^6, applied as two
+ * 1024/1000 steps, so the >> 20 above is 2 * SCHED_CAPACITY_SHIFT.
+ *
+ * Both shifts must be evaluated in 64 bits.  Shift operators do not apply the
+ * usual arithmetic conversions - the result type is that of the promoted left
+ * operand (C11 6.5.7p3) - so shifting a 32-bit value here wraps modulo 2^32
+ * from 4,096,000 kHz upwards.  That wrap is well defined for unsigned types,
+ * so it draws no warning, and it silently under-reports cycles on parts whose
+ * fmax exceeds ~4.1 GHz (Glymur's gold cluster tops out at 4,723,200 kHz,
+ * where the counter advanced 8.9x too slowly).
+ */
+static inline unsigned int walt_cycle_mult_fact(unsigned int freq_khz)
+{
+	u64 mult_fact;
+
+	mult_fact = div_u64((u64)freq_khz << SCHED_CAPACITY_SHIFT, 1000);
+	mult_fact = div_u64(mult_fact << SCHED_CAPACITY_SHIFT, 1000);
+
+	return mult_fact;
+}
+
 static u64 walt_compute_cpu_cycles(struct walt_cpu_cycle *wcc, u64 wc)
 {
 	unsigned long flags;
@@ -83,8 +110,7 @@ static void walt_cpufreq_transition(void *unused, struct cpufreq_policy *policy)
 		wcc->cur_freq_khz = policy->cur;
 	}
 
-	mult_fact = (policy->cur << SCHED_CAPACITY_SHIFT)/1000;
-	mult_fact = (mult_fact << SCHED_CAPACITY_SHIFT)/1000;
+	mult_fact = walt_cycle_mult_fact(policy->cur);
 	for_each_cpu(i, policy->related_cpus) {
 		wcc = &per_cpu(walt_cc, i);
 		wcc->mult_fact = mult_fact;
@@ -103,8 +129,7 @@ void walt_cycle_counter_init(void)
 		wcc->cur_freq_khz = cpufreq_quick_get(i);
 		wcc->last_time_ns = 0;
 		wcc->cycles = 0;
-		wcc->mult_fact = (wcc->cur_freq_khz << SCHED_CAPACITY_SHIFT)/1000;
-		wcc->mult_fact = (wcc->mult_fact << SCHED_CAPACITY_SHIFT)/1000;
+		wcc->mult_fact = walt_cycle_mult_fact(wcc->cur_freq_khz);
 	}
 
 	walt_get_cycle_counts_cb = walt_cpu_cycle_counter;
