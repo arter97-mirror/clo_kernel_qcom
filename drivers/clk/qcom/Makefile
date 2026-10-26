@@ -127,6 +127,8 @@ obj-$(CONFIG_SM_DISPCC_CANOE) += dispcc-canoe.o
 
 obj-$(CONFIG_SM_DISPCC_CHORA) += dispcc-chora.o
 
+obj-$(CONFIG_SM_DISPCC_DIWALI) += dispcc-diwali.o
+
 obj-$(CONFIG_SM_DISPCC_KHAJE) += dispcc-khaje.o
 
 obj-$(CONFIG_SM_DISPCC_MALABAR) += dispcc-malabar.o
@@ -196,6 +198,8 @@ obj-$(CONFIG_SM_VIDEOCC_8550) += videocc-sm8550.o
 obj-$(CONFIG_SM_VIDEOCC_CANOE) += videocc-canoe.o
 
 obj-$(CONFIG_SM_VIDEOCC_CHORA) += videocc-chora.o
+
+obj-$(CONFIG_SM_VIDEOCC_DIWALI) += videocc-diwali.o
 
 obj-$(CONFIG_SM_VIDEOCC_SUN) += videocc-sun.o
 
