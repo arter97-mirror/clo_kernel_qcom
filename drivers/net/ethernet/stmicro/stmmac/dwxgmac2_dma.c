@@ -270,6 +270,16 @@ static void dwxgmac2_dma_tx_mode(void __iomem *ioaddr, int mode,
 	writel(value, ioaddr +  XGMAC_MTL_TXQ_OPMODE(channel));
 }
 
+static void dwxgmac2_set_tx_queue_tc(void __iomem *ioaddr, u32 queue, u32 tc)
+{
+	u32 value;
+
+	value = readl(ioaddr + XGMAC_MTL_TXQ_OPMODE(queue));
+	value &= ~XGMAC_Q2TCMAP;
+	value |= (tc << XGMAC_Q2TCMAP_SHIFT) & XGMAC_Q2TCMAP;
+	writel(value, ioaddr + XGMAC_MTL_TXQ_OPMODE(queue));
+}
+
 static void dwxgmac2_enable_dma_ts_irq(struct stmmac_priv *priv, void __iomem *ioaddr, u32 chan,
 				       bool rx, bool tx)
 {
@@ -755,6 +765,7 @@ const struct stmmac_dma_ops dwxgmac210_dma_ops = {
 	.dump_regs = dwxgmac2_dma_dump_regs,
 	.dma_rx_mode = dwxgmac2_dma_rx_mode,
 	.dma_tx_mode = dwxgmac2_dma_tx_mode,
+	.set_tx_queue_tc = dwxgmac2_set_tx_queue_tc,
 	.enable_dma_irq = dwxgmac2_enable_dma_irq,
 	.enable_dma_ts_irq = dwxgmac2_enable_dma_ts_irq,
 	.disable_dma_irq = dwxgmac2_disable_dma_irq,
