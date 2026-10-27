@@ -249,6 +249,7 @@ waipio_perf_config = {
     "CONFIG_QCOM_Q6V5_MSS": "n",
     "CONFIG_QCOM_Q6V5_PAS": "m",
     "CONFIG_QCOM_Q6V5_WCSS": "n",
+    "CONFIG_QCOM_QFPROM_SYS": "m",
     "CONFIG_QCOM_QMI_HELPERS": "m",
     "CONFIG_QCOM_RAMDUMP": "m",
     "CONFIG_QCOM_RPMH": "m",
