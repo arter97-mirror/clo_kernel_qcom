@@ -1373,6 +1373,9 @@ extern int walt_find_cluster_packing_cpu(int start_cpu);
 extern bool walt_choose_packing_cpu(int packing_cpu, struct task_struct *p);
 extern void walt_cycle_counter_init(void);
 extern u64 walt_cpu_cycle_counter(int cpu, u64 wc);
+void walt_cgroup_init(void);
+void walt_init_tg_pointers(void);
+int __sched_set_group_id(struct task_struct *p, unsigned int group_id);
 
 static inline unsigned int cpu_max_possible_freq(int cpu)
 {
