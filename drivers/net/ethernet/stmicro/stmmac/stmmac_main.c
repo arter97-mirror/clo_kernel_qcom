@@ -290,8 +290,7 @@ static void stmmac_global_err(struct stmmac_priv *priv)
 
 void stmmac_handle_switch_reset(struct stmmac_priv *priv)
 {
-	if (netif_running(priv->dev) &&
-	    !test_bit(STMMAC_RESET_REQUESTED, &priv->state))
+	if (netif_running(priv->dev))
 		stmmac_global_err(priv);
 }
 EXPORT_SYMBOL_GPL(stmmac_handle_switch_reset);
@@ -3174,12 +3173,14 @@ static void stmmac_tx_timer_arm(struct stmmac_priv *priv, u32 queue)
 	 * Try to cancel any timer if napi is scheduled, timer will be armed
 	 * again in the next scheduled napi.
 	 */
-	if (unlikely(!napi_is_scheduled(napi)))
-		hrtimer_start(&tx_q->txtimer,
-			      STMMAC_COAL_TIMER(tx_coal_timer),
-			      HRTIMER_MODE_REL);
-	else
+	if (unlikely(!napi_is_scheduled(napi))) {
+		if (unlikely(!(hrtimer_active(&tx_q->txtimer))))
+			hrtimer_start(&tx_q->txtimer,
+				      STMMAC_COAL_TIMER(tx_coal_timer),
+				      HRTIMER_MODE_REL);
+	} else {
 		hrtimer_try_to_cancel(&tx_q->txtimer);
+	}
 }
 
 /**

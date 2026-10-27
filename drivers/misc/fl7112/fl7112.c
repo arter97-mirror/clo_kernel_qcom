@@ -31,7 +31,7 @@ static int fl7112_write(struct fl7112 *pdata, int reg,
 		const u8 *buf, int size)
 {
 	struct i2c_client *client = pdata->i2c_client;
-	u8 regAddr[2];
+	u8 reg_addr[2];
 
 	struct i2c_msg msg = {
 		.addr = client->addr,
@@ -40,10 +40,10 @@ static int fl7112_write(struct fl7112 *pdata, int reg,
 		.buf = pdata->i2c_wbuf,
 	};
 
-	regAddr[0] = (reg >> 8) & 0xFF;
-	regAddr[1] = reg & 0xFF;
-	pdata->i2c_wbuf[0] = regAddr[0];
-	pdata->i2c_wbuf[1] = regAddr[1];
+	reg_addr[0] = (reg >> 8) & 0xFF;
+	reg_addr[1] = reg & 0xFF;
+	pdata->i2c_wbuf[0] = reg_addr[0];
+	pdata->i2c_wbuf[1] = reg_addr[1];
 	if (size > (FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK - 1)) {
 		pr_err("invalid write buffer size %d\n", size);
 		return -EINVAL;
@@ -62,7 +62,7 @@ static int fl7112_write(struct fl7112 *pdata, int reg,
 static int fl7112_write_byte(struct fl7112 *pdata, int reg, u8 value)
 {
 	struct i2c_client *client = pdata->i2c_client;
-	u8 regAddr[2];
+	u8 reg_addr[2];
 
 	struct i2c_msg msg = {
 		.addr = client->addr,
@@ -71,12 +71,12 @@ static int fl7112_write_byte(struct fl7112 *pdata, int reg, u8 value)
 		.buf = pdata->i2c_wbuf,
 	};
 
-	regAddr[0] = (reg >> 8) & 0xFF;
-	regAddr[1] = reg & 0xFF;
+	reg_addr[0] = (reg >> 8) & 0xFF;
+	reg_addr[1] = reg & 0xFF;
 
 	memset(pdata->i2c_wbuf, 0, FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK);
-	pdata->i2c_wbuf[0] = regAddr[0];
-	pdata->i2c_wbuf[1] = regAddr[1];
+	pdata->i2c_wbuf[0] = reg_addr[0];
+	pdata->i2c_wbuf[1] = reg_addr[1];
 	pdata->i2c_wbuf[2] = value;
 
 	if (i2c_transfer(client->adapter, &msg, 1) < 1) {
@@ -90,14 +90,14 @@ static int fl7112_write_byte(struct fl7112 *pdata, int reg, u8 value)
 static int fl7112_read(struct fl7112 *pdata, int reg, char *buf, u32 size)
 {
 	struct i2c_client *client = pdata->i2c_client;
-	u8 regAddr[2];
+	u8 reg_addr[2];
 
 	struct i2c_msg msg[2] = {
 		{
 			.addr = client->addr,
 			.flags = 0,
-			.len = sizeof(regAddr),
-			.buf = regAddr,
+			.len = sizeof(reg_addr),
+			.buf = reg_addr,
 		},
 		{
 			.addr = client->addr,
@@ -107,8 +107,8 @@ static int fl7112_read(struct fl7112 *pdata, int reg, char *buf, u32 size)
 		}
 	};
 
-	regAddr[0] = (reg >> 8) & 0xFF;
-	regAddr[1] = reg & 0xFF;
+	reg_addr[0] = (reg >> 8) & 0xFF;
+	reg_addr[1] = reg & 0xFF;
 
 	if (size > FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK) {
 		pr_err("invalid read buff size %d\n", size);
@@ -128,48 +128,44 @@ static int fl7112_read(struct fl7112 *pdata, int reg, char *buf, u32 size)
 	return 0;
 }
 
-static bool i2cex_bitcheck(struct fl7112 *pdata, int i2coffset, int Bit, bool *IsOne)
+static bool i2cex_bitcheck(struct fl7112 *pdata, int i2c_offset, int bit,
+	bool *is_one)
 {
 	bool b_status = true;    /* error occur  */
 	bool ret = true;
-	u8 byteData = 0;
+	u8 byte_data = 0;
 
-	b_status = fl7112_read(pdata, i2coffset, &byteData, 1);
+	b_status = fl7112_read(pdata, i2c_offset, &byte_data, 1);
 	if (b_status) {
 		/* read error */
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
-	if (IS_BIT_SET(byteData, Bit))
-		*IsOne = true;
+	if (IS_BIT_SET(byte_data, bit))
+		*is_one = true;
 	else
-		*IsOne = false;
-Exit:
+		*is_one = false;
+exit:
 	return ret;
 }
 
-static bool i2cex_writebytecheck(struct fl7112 *pdata, int i2coffset, u8 ByteData)
+static bool i2cex_writebytecheck(struct fl7112 *pdata, int i2c_offset, u8 byte_data)
 {
 	bool b_status = true;
 	bool ret = true;
-	u8 byteDataReadBack;
+	u8 byte_data_read_back;
 
-	byteDataReadBack = 0;
-	b_status = fl7112_read(pdata,
-			i2coffset,
-			&byteDataReadBack,
-			1);
+	byte_data_read_back = 0;
+	b_status = fl7112_read(pdata, i2c_offset, &byte_data_read_back, 1);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
 	}
 
-	if (byteDataReadBack != ByteData) {
-		b_status = fl7112_write_byte(pdata,
-					i2coffset,
-					ByteData);
+	if (byte_data_read_back != byte_data) {
+		b_status = fl7112_write_byte(pdata, i2c_offset, byte_data);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
@@ -182,19 +178,14 @@ static bool i2cex_writebytecheck(struct fl7112 *pdata, int i2coffset, u8 ByteDat
 static void fl7112_mtpwritelock(struct fl7112 *pdata)
 {
 	bool b_status;
-	bool isOne;
+	bool is_one;
 
 	/* check if bit 3 is set */
-	b_status = i2cex_bitcheck(pdata,
-			FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-			3,
-			&isOne);
+	b_status = i2cex_bitcheck(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 3, &is_one);
 	/* bit is set */
-	if (isOne) {
+	if (is_one) {
 	/* write [0X9010] 0x0 to enable Write Protect */
-		b_status = fl7112_write_byte(pdata,
-					FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-					0x00);
+		b_status = fl7112_write_byte(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 0x00);
 		if (b_status)
 		/* write error */
 			pr_err("fl7112 %s error line:%d write [0X9010] failed\n",
@@ -203,103 +194,92 @@ static void fl7112_mtpwritelock(struct fl7112 *pdata)
 }
 
 static bool i2cex_bitset(struct fl7112 *pdata,
-	int i2coffset, int bit)
+	int i2c_offset, int bit)
 {
 	bool b_status = true;
 	bool ret = true;
-	u8 byteData = 0;
+	u8 byte_data = 0;
 
-	b_status = fl7112_read(pdata,
-			i2coffset,
-			&byteData,
-			1);
+	b_status = fl7112_read(pdata, i2c_offset, &byte_data, 1);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d read NG\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
-	BIT_SET(byteData, bit);
+	BIT_SET(byte_data, bit);
 
-	b_status = fl7112_write_byte(pdata,
-			i2coffset,
-			byteData);
+	b_status = fl7112_write_byte(pdata, i2c_offset, byte_data);
 	if (b_status) {
-		if (i2coffset != FL7112_FIRMWARE_INTERNAL_REGISTER_0XA003) {
+		if (i2c_offset != FL7112_FIRMWARE_INTERNAL_REGISTER_0XA003) {
 			pr_err("fl7112 %s error line:%d write NG\n", __func__, __LINE__);
 			ret = false;
 		}
 	}
 
-Exit:
+exit:
 	return ret;
 }
 
 bool i2cex_bitclear(struct fl7112 *pdata,
-	int i2coffset, int bit)
+	int i2c_offset, int bit)
 {
 	bool b_status;
-	u8 byteData;
+	u8 byte_data;
 
-	byteData = 0;
+	byte_data = 0;
 
-	b_status = fl7112_read(pdata,
-			i2coffset,
-			&byteData,
-			1);
+	b_status = fl7112_read(pdata, i2c_offset, &byte_data, 1);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d read NG\n", __func__, __LINE__);
 		b_status = false;
-		goto Exit;
+		goto exit;
 	}
 
-	byteData &= ~(1 << bit);
+	byte_data &= ~(1 << bit);
 
-	b_status = fl7112_write_byte(pdata,
-			i2coffset,
-			byteData);
+	b_status = fl7112_write_byte(pdata, i2c_offset, byte_data);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d write NG\n", __func__, __LINE__);
-	b_status = false;
+		b_status = false;
 	}
 
-Exit:
+exit:
 	return b_status;
 }
 
 static bool fl7112_mtp_block_setup(struct fl7112 *pdata,
-	u8 *block_current, int Address)
+	u8 *block_current, int address)
 {
 	bool b_status = true;
 	bool ret = true;
 	int block;
 
-	block = (u8)(Address / FL7112_MTP_BLOCK_SIZE);
+	block = (u8)(address / FL7112_MTP_BLOCK_SIZE);
 	if (*block_current != block) {
-		u8 byteData;
+		u8 byte_data;
 		*block_current = block;
-		byteData = 0;
-		b_status = fl7112_read(pdata,
-					FL7112_FIRMWARE_INTERNAL_REGISTER_0X9003, &byteData, 1);
+		byte_data = 0;
+		b_status = fl7112_read(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9003,
+			&byte_data, 1);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
-		byteData &= 0x0F;
-		byteData |= (*block_current << 4);
-		b_status = fl7112_write_byte(pdata,
-					FL7112_FIRMWARE_INTERNAL_REGISTER_0X9003,
-					byteData);
+		byte_data &= 0x0F;
+		byte_data |= (*block_current << 4);
+		b_status = fl7112_write_byte(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9003,
+			byte_data);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 	} else {
 		b_status = true;
 	}
-Exit:
+exit:
 	return ret;
 }
 
@@ -307,124 +287,109 @@ static bool fl7112_mtpwriteunlock(struct fl7112 *pdata)
 {
 	bool b_status = true;
 	bool ret = true;
-	bool isOne;
+	bool is_one;
 
-	b_status = i2cex_bitcheck(pdata,
-			FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-			3,
-			&isOne);
+	b_status = i2cex_bitcheck(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 3, &is_one);
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d bit check NG!\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	/* bit 3 not set */
-	if (!isOne) {
-		b_status = fl7112_write_byte(pdata,
-				FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-				0x55);
+	if (!is_one) {
+		b_status = fl7112_write_byte(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 0x55);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d 0x55\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		b_status = fl7112_write_byte(pdata,
-				FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-				0xAA);
+		b_status = fl7112_write_byte(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 0xAA);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d 0xAA\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		b_status = fl7112_write_byte(pdata,
-				FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-				0xFF);
+		b_status = fl7112_write_byte(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 0xFF);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d 0xFF\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		b_status = fl7112_write_byte(pdata,
-				FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010,
-				0x18);
+		b_status = fl7112_write_byte(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9010, 0x18);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d 0x18\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 	}
-Exit:
+exit:
 	return ret;
 }
 
-static bool fl7112_mtpcheckstatus(
-	struct fl7112 *pdata,
-	bool *IsError,
-	bool *IsBusy
-)
+static bool fl7112_mtpcheckstatus(struct fl7112 *pdata, bool *is_error, bool *is_busy)
 {
 	bool b_status;
 	bool ret = true;
-	u8 byteData;
-	int retryMax;
+	u8 byte_data;
+	int retry_max;
 	int retry;
-	bool isError;
-	bool isBusy;
+	bool is_error_local;
+	bool is_busy_local;
 
-	retryMax = FL7112_MTP_CHECK_STATUS_RETRY_MAX;
+	retry_max = FL7112_MTP_CHECK_STATUS_RETRY_MAX;
 	b_status = true;
-	isError = false;
-	isBusy = false;
+	is_error_local = false;
+	is_busy_local = false;
 
-	for (retry = 0; retry < retryMax; retry++) {
-		byteData = 0;
+	for (retry = 0; retry < retry_max; retry++) {
+		byte_data = 0;
 
 		/* read 0x9001  */
-		b_status = fl7112_read(pdata,
-					FL7112_FIRMWARE_INTERNAL_REGISTER_0X9001, &byteData, 1);
+		b_status = fl7112_read(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9001,
+			&byte_data, 1);
 		if (b_status) {
 			pr_err("%s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
 		/* check error */
-		if (IS_BIT_SET(byteData, 6))
-			isError = true;
+		if (IS_BIT_SET(byte_data, 6))
+			is_error_local = true;
 		else
-			isError = false;
+			is_error_local = false;
 
 		/* check busy */
-		if (IS_BIT_SET(byteData, 7))
-			isBusy = true;
+		if (IS_BIT_SET(byte_data, 7))
+			is_busy_local = true;
 		else
-			isBusy = false;
+			is_busy_local = false;
 
-		*IsError = isError;
-		*IsBusy = isBusy;
+		*is_error = is_error_local;
+		*is_busy = is_busy_local;
 
-		if (isError) {
+		if (is_error_local) {
 			/* Error Bit */
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		if (!isBusy) {
+		if (!is_busy_local) {
 			/* Good */
 			ret = true;
 			break;
 		}
 		/* Busy */
-		if (retry == (retryMax - 1)) {
+		if (retry == (retry_max - 1)) {
 			ret = false;
 			break;
 		}
 	}
-Exit:
+exit:
 	return ret;
 }
 
@@ -433,136 +398,112 @@ static void fl7112_mtppowermodedisable(struct fl7112 *pdata)
 	bool b_status;
 
 	/* write [0X9000]  0x71  */
-	b_status = i2cex_writebytecheck(pdata,
-				FL7112_FIRMWARE_INTERNAL_REGISTER_0X9000,
-				0x71);
+	b_status = i2cex_writebytecheck(pdata, FL7112_FIRMWARE_INTERNAL_REGISTER_0X9000, 0x71);
 	if (!b_status)
 		pr_err("fl7112 %s error line:%d Power Saving Disable failed\n", __func__, __LINE__);
 }
 
-bool FL7112_MtpWrite_Firmware_Recovery(
-	struct fl7112 *pdata,
-	int Address,
-	u32 DataBuffer,
-	bool *IsError,
-	bool *IsBusy
-)
+bool fl7112_mtpwrite_firmware_recovery(struct fl7112 *pdata, int address,
+	u32 data_buffer, bool *is_error, bool *is_busy)
 {
 	bool b_status;
 	bool ret = true;
-	bool isError = false;
-	bool isBusy = false;
-	union dword_mapping dwordMappingReadBack;
-	union dword_mapping *dwordMapping;
-	int indexOfByte;
+	bool is_error_local = false;
+	bool is_busy_local = false;
+	union dword_mapping dword_mapping_read_back;
+	union dword_mapping *dword_mapping;
+	int index_of_byte;
 
 	/* MTP Read Back */
 	fl7112_mtpwritelock(pdata);
 
-	dwordMappingReadBack.Value = 0;
-	b_status = fl7112_read(pdata,
-			Address,
-			(char *)&dwordMappingReadBack.Value,
-			4);
+	dword_mapping_read_back.value = 0;
+		b_status = fl7112_read(pdata, address, (char *)&dword_mapping_read_back.value, 4);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	b_status = fl7112_mtpwriteunlock(pdata);
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	/* Write each bytes */
-	dwordMapping = (union dword_mapping *)&DataBuffer;
-	for (indexOfByte = 0; indexOfByte < 4; indexOfByte++) {
+	dword_mapping = (union dword_mapping *)&data_buffer;
+	for (index_of_byte = 0; index_of_byte < 4; index_of_byte++) {
 		/* Low 4 */
-		dwordMappingReadBack.ByteData[indexOfByte] &= 0xF0;
-		dwordMappingReadBack.ByteData[indexOfByte] |=
-			(dwordMapping->ByteData[indexOfByte] & 0x0F);
+		dword_mapping_read_back.byte_data[index_of_byte] &= 0xF0;
+		dword_mapping_read_back.byte_data[index_of_byte] |=
+			(dword_mapping->byte_data[index_of_byte] & 0x0F);
 
-		b_status = fl7112_write(pdata,
-				Address,
-				(u8 *)&dwordMappingReadBack.Value,
-				4);
+		b_status = fl7112_write(pdata, address, (u8 *)&dword_mapping_read_back.value, 4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d  fl7112_write failed\n",
 				__func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		isError = false;
-		isBusy = false;
-		b_status = fl7112_mtpcheckstatus(pdata,
-						&isError,
-						&isBusy);
+		is_error_local = false;
+		is_busy_local = false;
+		b_status = fl7112_mtpcheckstatus(pdata, &is_error_local, &is_busy_local);
 		if (!b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
 		/* Full */
-		dwordMappingReadBack.ByteData[indexOfByte] = dwordMapping->ByteData[indexOfByte];
+		dword_mapping_read_back.byte_data[index_of_byte] =
+			dword_mapping->byte_data[index_of_byte];
 
-		b_status = fl7112_write(pdata,
-				Address,
-				(u8 *)&dwordMappingReadBack.Value,
-				4);
+		b_status = fl7112_write(pdata, address, (u8 *)&dword_mapping_read_back.value, 4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d  fl7112_write failed\n",
 				__func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		isError = false;
-		isBusy = false;
-		b_status = fl7112_mtpcheckstatus(pdata,
-						&isError,
-						&isBusy);
+		is_error_local = false;
+		is_busy_local = false;
+		b_status = fl7112_mtpcheckstatus(pdata, &is_error_local, &is_busy_local);
 		if (!b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 	}
 
-Exit:
+exit:
 
-	*IsError = isError;
-	*IsBusy = isBusy;
+	*is_error = is_error_local;
+	*is_busy = is_busy_local;
 
 	return ret;
 }
 
-static bool fl7112_mtpwrite_firmware(
-	struct fl7112 *pdata,
-	int Address,
-	const u8 *DataBuffer,
-	int DataBufferLength,
-	bool *IsError,
-	bool *IsBusy
-)
+static bool fl7112_mtpwrite_firmware(struct fl7112 *pdata, int address,
+	const u8 *data_buffer, int data_buffer_length, bool *is_error,
+	bool *is_busy)
 {
 	bool b_status;
 	bool ret = true;
-	int indexOfDword;
-	const u8 *byteData = DataBuffer;
+	int index_of_dword;
+	const u8 *byte_data = data_buffer;
 	u8 block_current;
-	int addressOfMtp;
+	int address_of_mtp;
 	int offset;
 	int offset_in_block;
-	bool isError;
-	bool isBusy;
+	bool is_error_local;
+	bool is_busy_local;
 
-	isError = false;
-	isBusy = false;
+	is_error_local = false;
+	is_busy_local = false;
 
 	fl7112_mtppowermodedisable(pdata);
 
@@ -570,75 +511,68 @@ static bool fl7112_mtpwrite_firmware(
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
-	offset = Address;
+	offset = address;
 	block_current = 0xFF;
-	for (indexOfDword = 0; indexOfDword < DataBufferLength; indexOfDword += 4) {
-		b_status = fl7112_mtp_block_setup(pdata,
-				&block_current,
-				offset);
+	for (index_of_dword = 0; index_of_dword < data_buffer_length; index_of_dword += 4) {
+		b_status = fl7112_mtp_block_setup(pdata, &block_current, offset);
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	offset_in_block = offset % FL7112_MTP_BLOCK_SIZE;
-	addressOfMtp = FL7112_FIRMWARE_INTERNAL_REGISTER_0X5000 + offset_in_block;
-	b_status = fl7112_write(pdata,
-			addressOfMtp,
-			byteData,
-			4);
+	address_of_mtp = FL7112_FIRMWARE_INTERNAL_REGISTER_0X5000 + offset_in_block;
+	b_status = fl7112_write(pdata, address_of_mtp, byte_data, 4);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d  fl7112_write failed\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
-	isError = false;
-	isBusy = false;
-	b_status = fl7112_mtpcheckstatus(pdata,
-					&isError,
-					&isBusy);
+		is_error_local = false;
+		is_busy_local = false;
+		b_status = fl7112_mtpcheckstatus(pdata, &is_error_local, &is_busy_local);
 #if FL7112_MTP_RECOVERY
-	if (!b_status && isError) {
-		union dword_mapping *dwordMapping;
-		int indexOfRecovery;
+		if (!b_status && is_error_local) {
+			union dword_mapping *dword_mapping;
+			int index_of_recovery;
 
-		dwordMapping = (union dword_mapping *)byteData;
+			dword_mapping = (union dword_mapping *)byte_data;
 
-	for (indexOfRecovery = 0;
-			indexOfRecovery < FL7112_MTP_WRITE_RECOVERY_MAX;
-			indexOfRecovery++) {
-		b_status = FL7112_MtpWrite_Firmware_Recovery(pdata,
-				addressOfMtp,
-				dwordMapping->Value,
-				&isError,
-				&isBusy);
-		if (b_status)
-			break;
-	}
-	if (!b_status) {
-		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
-		ret = false;
-		goto Exit;
-	}
-	}
+			for (index_of_recovery = 0;
+				index_of_recovery < FL7112_MTP_WRITE_RECOVERY_MAX;
+				index_of_recovery++) {
+				b_status = fl7112_mtpwrite_firmware_recovery(pdata,
+						address_of_mtp,
+						dword_mapping->value,
+						&is_error_local,
+						&is_busy_local);
+				if (b_status)
+					break;
+			}
+			if (!b_status) {
+				pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
+				ret = false;
+				goto exit;
+			}
+		}
 #else
-	if (!b_status) {
-		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
-		ret = false;
-		goto Exit;
-	}
+		if (!b_status) {
+			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
+			ret = false;
+			goto exit;
+		}
 #endif
-	byteData += 4;
+	byte_data += 4;
 	offset += 4;
 	}
 
-Exit:
-	*IsError = isError;
-	*IsBusy = isBusy;
+exit:
+	*is_error = is_error_local;
+	*is_busy = is_busy_local;
 
 	return ret;
 }
@@ -781,126 +715,108 @@ static void fl7112_enable_vreg(struct fl7112 *pdata, int enable)
 	}
 }
 
-bool FL7112_MtpWrite_InformationBlock_Recovery(
-	struct fl7112 *pdata,
-	int Address,
-	u32 Data,
-	bool *IsError,
-	bool *IsBusy
-)
+bool fl7112_mtpwrite_informationblock_recovery(struct fl7112 *pdata,
+	int address, u32 data, bool *is_error, bool *is_busy)
 {
 	bool b_status;
 	bool ret = true;
-	bool isError = false;
-	bool isBusy = false;
-	union dword_mapping dwordMappingReadBack;
-	union dword_mapping *dwordMapping;
-	int indexOfByte;
+	bool is_error_local = false;
+	bool is_busy_local = false;
+	union dword_mapping dword_mapping_read_back;
+	union dword_mapping *dword_mapping;
+	int index_of_byte;
 
 	/* MTP Read Back */
 	fl7112_mtpwritelock(pdata);
 
-	dwordMappingReadBack.Value = 0;
-	b_status = fl7112_read(pdata,
-			Address,
-			(char *)&dwordMappingReadBack.Value,
-			4);
+	dword_mapping_read_back.value = 0;
+		b_status = fl7112_read(pdata, address, (char *)&dword_mapping_read_back.value, 4);
 	if (b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	b_status = fl7112_mtpwriteunlock(pdata);
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	/* Write each bytes */
-	dwordMapping = (union dword_mapping *)&Data;
-	for (indexOfByte = 0; indexOfByte < 4; indexOfByte++) {
+	dword_mapping = (union dword_mapping *)&data;
+	for (index_of_byte = 0; index_of_byte < 4; index_of_byte++) {
 		/* Low 4 */
-		dwordMappingReadBack.ByteData[indexOfByte] &= 0xF0;
-		dwordMappingReadBack.ByteData[indexOfByte] |=
-			dwordMapping->ByteData[indexOfByte] & 0x0F;
+		dword_mapping_read_back.byte_data[index_of_byte] &= 0xF0;
+		dword_mapping_read_back.byte_data[index_of_byte] |=
+			dword_mapping->byte_data[index_of_byte] & 0x0F;
 
-		b_status = fl7112_write(pdata,
-				Address,
-				(u8 *)&dwordMappingReadBack.Value,
-				4);
+		b_status = fl7112_write(pdata, address, (u8 *)&dword_mapping_read_back.value, 4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d  fl7112_write failed\n",
 				__func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		isError = false;
-		isBusy = false;
+		is_error_local = false;
+		is_busy_local = false;
 		b_status = fl7112_mtpcheckstatus(pdata,
-					&isError,
-					&isBusy);
+					&is_error_local,
+					&is_busy_local);
 		if (!b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
 		/* Full */
-		dwordMappingReadBack.ByteData[indexOfByte] = dwordMapping->ByteData[indexOfByte];
+		dword_mapping_read_back.byte_data[index_of_byte] =
+			dword_mapping->byte_data[index_of_byte];
 
 		b_status = fl7112_write(pdata,
-				Address,
-				(u8 *)&dwordMappingReadBack.Value,
+				address,
+				(u8 *)&dword_mapping_read_back.value,
 				4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d  fl7112_write failed\n",
 				__func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		isError = false;
-		isBusy = false;
-		b_status = fl7112_mtpcheckstatus(pdata,
-						&isError,
-						&isBusy);
+		is_error_local = false;
+		is_busy_local = false;
+		b_status = fl7112_mtpcheckstatus(pdata, &is_error_local, &is_busy_local);
 		if (!b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 	}
 
-Exit:
+exit:
 
-	*IsError = isError;
-	*IsBusy = isBusy;
+	*is_error = is_error_local;
+	*is_busy = is_busy_local;
 
 	return ret;
 }
 
-bool fl7112_mtpwrite_informationblock(
-	struct fl7112 *pdata,
-	int Address,
-	u8 *DataBuffer,
-	int DataBufferLength,
-	bool *IsError,
-	bool *IsBusy
-)
+bool fl7112_mtpwrite_informationblock(struct fl7112 *pdata, int address,
+	u8 *data_buffer, int data_buffer_length, bool *is_error, bool *is_busy)
 {
 	bool b_status;
 	bool ret = true;
-	int indexOfDword;
-	u8 *byteData;
-	bool isError;
-	bool isBusy;
-	int addressOfMtp;
+	int index_of_dword;
+	u8 *byte_data;
+	bool is_error_local;
+	bool is_busy_local;
+	int address_of_mtp;
 
-	isError = false;
-	isBusy = false;
+	is_error_local = false;
+	is_busy_local = false;
 
 	fl7112_mtppowermodedisable(pdata);
 
@@ -908,79 +824,70 @@ bool fl7112_mtpwrite_informationblock(
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d Write Unlock NG!\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
-	byteData = DataBuffer;
-	for (indexOfDword = 0; indexOfDword < DataBufferLength; indexOfDword += 4) {
-		addressOfMtp = Address + indexOfDword;
-		b_status = fl7112_write(pdata,
-				addressOfMtp,
-				byteData,
-				4);
+	byte_data = data_buffer;
+	for (index_of_dword = 0; index_of_dword < data_buffer_length; index_of_dword += 4) {
+		address_of_mtp = address + index_of_dword;
+		b_status = fl7112_write(pdata, address_of_mtp, byte_data, 4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		isError = false;
-		isBusy = false;
-		b_status = fl7112_mtpcheckstatus(pdata,
-					&isError,
-					&isBusy);
-		#if FL7112_MTP_RECOVERY
-		if (!b_status && isError) {
-			union dword_mapping *dwordMapping;
-			int indexOfRecovery;
+		is_error_local = false;
+		is_busy_local = false;
+		b_status = fl7112_mtpcheckstatus(pdata, &is_error_local, &is_busy_local);
+#if FL7112_MTP_RECOVERY
+		if (!b_status && is_error_local) {
+			union dword_mapping *dword_mapping;
+			int index_of_recovery;
 
-			dwordMapping = (union dword_mapping *)byteData;
+			dword_mapping = (union dword_mapping *)byte_data;
 
-			for (indexOfRecovery = 0;
-					indexOfRecovery < FL7112_MTP_WRITE_RECOVERY_MAX;
-					indexOfRecovery++) {
-				b_status = FL7112_MtpWrite_InformationBlock_Recovery(pdata,
-								addressOfMtp,
-								dwordMapping->Value,
-								&isError,
-								&isBusy);
+			for (index_of_recovery = 0;
+				index_of_recovery < FL7112_MTP_WRITE_RECOVERY_MAX;
+				index_of_recovery++) {
+				b_status = fl7112_mtpwrite_informationblock_recovery(pdata,
+						address_of_mtp,
+						dword_mapping->value,
+						&is_error_local,
+						&is_busy_local);
 				if (b_status)
 					break;
 			}
 			if (!b_status) {
 				pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 				ret = false;
-				goto Exit;
+				goto exit;
 			}
 		}
-		#else
+#else
 		if (!b_status) {
 			pr_err("fl7112 %s error line:%d state NG!\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
-		#endif
-		byteData += 4;
+#endif
+		byte_data += 4;
 	}
 
-Exit:
-	*IsError = isError;
-	*IsBusy = isBusy;
+exit:
+	*is_error = is_error_local;
+	*is_busy = is_busy_local;
 	return ret;
 }
 
-bool fl7112_mtpread_informationblock(
-	struct fl7112 *pdata,
-	int Address,
-	u8 *DataBuffer,
-	int DataBufferLength
-)
+bool fl7112_mtpread_informationblock(struct fl7112 *pdata, int address,
+	u8 *data_buffer, int data_buffer_length)
 {
 	bool b_status = true;
 	bool ret = true;
-	int indexOfDword;
-	u8 *byteData = NULL;
-	int addressOfMtp;
+	int index_of_dword;
+	u8 *byte_data = NULL;
+	int address_of_mtp;
 
 	/* Disable Power Saving */
 	fl7112_mtppowermodedisable(pdata);
@@ -988,24 +895,24 @@ bool fl7112_mtpread_informationblock(
 	/* Write Protect Enable */
 	fl7112_mtpwritelock(pdata);
 
-	byteData = DataBuffer;
-	for (indexOfDword = 0; indexOfDword < DataBufferLength; indexOfDword += 4) {
-		addressOfMtp = Address + indexOfDword;
+	byte_data = data_buffer;
+	for (index_of_dword = 0; index_of_dword < data_buffer_length; index_of_dword += 4) {
+		address_of_mtp = address + index_of_dword;
 		/* Read the information block data in the MTP memory */
 		b_status = fl7112_read(pdata,
-				addressOfMtp,
-				byteData,
+				address_of_mtp,
+				byte_data,
 				4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
-		byteData += 4;
+		byte_data += 4;
 	}
 
-Exit:
+exit:
 	return ret;
 }
 
@@ -1015,11 +922,11 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 	int data_len = (int)cfg->size;
 	bool b_status = false;
 	bool ret = true;
-	u8 *dataBufferInformationBlock = NULL;
-	u8 *dataBufferFirmwareReadBack = NULL;
-	u8 *dataBufferInformationBlockReadBack = NULL;
-	bool isError = false;
-	bool isBusy = false;
+	u8 *data_buffer_information_block = NULL;
+	u8 *data_buffer_firmware_read_back = NULL;
+	u8 *data_buffer_information_block_read_back = NULL;
+	bool is_error = false;
+	bool is_busy = false;
 
 	if (!cfg) {
 		pr_err("fl7112 %s error line:%d param err : cfg\n", __func__, __LINE__);
@@ -1031,16 +938,16 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 		return false;
 	}
 
-	dataBufferInformationBlock =  (u8 *)cfg->data;
-	dataBufferInformationBlock += FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK;
-	dataBufferFirmwareReadBack = kzalloc(FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK, GFP_KERNEL);
-	if (!dataBufferFirmwareReadBack)
+	data_buffer_information_block =  (u8 *)cfg->data;
+	data_buffer_information_block += FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK;
+	data_buffer_firmware_read_back = kzalloc(FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK, GFP_KERNEL);
+	if (!data_buffer_firmware_read_back)
 		return false;
 
-	dataBufferInformationBlockReadBack =
+	data_buffer_information_block_read_back =
 		kzalloc(FL7112_MTP_MAX_SIZE_OF_INFORMATION_BLOCK, GFP_KERNEL);
-	if (!dataBufferInformationBlockReadBack) {
-		kfree(dataBufferFirmwareReadBack);
+	if (!data_buffer_information_block_read_back) {
+		kfree(data_buffer_firmware_read_back);
 		return false;
 	}
 
@@ -1055,7 +962,7 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d Hold MCU Reset NG\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	} else {
 		pr_debug("fl7112 Hold MCU Reset OK!\n");
 	}
@@ -1065,11 +972,11 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 					0x0,
 					cfg->data,
 					FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK,
-	&isError, &isBusy);
+	&is_error, &is_busy);
 	if (!b_status) {
 		pr_debug("fl7112 firmware write NG!\n");
 		ret = false;
-		goto Exit;
+		goto exit;
 	} else {
 		pr_debug("fl7112 firmware write OK!\n");
 	}
@@ -1077,33 +984,33 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 	/* 3. read back and compare firmware  */
 	b_status = fl7112_mtpread_firmware(pdata,
 				0x0,
-				dataBufferFirmwareReadBack,
+				data_buffer_firmware_read_back,
 				FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK);
 	if (!b_status)
 		pr_err("fl7112 %s error line:%d - read back firmware NG!\n", __func__, __LINE__);
 
-	b_status = memcmp(cfg->data, dataBufferFirmwareReadBack,
+	b_status = memcmp(cfg->data, data_buffer_firmware_read_back,
 		FL7112_MTP_MAX_SIZE_OF_FIRMWARE_BLOCK);
 	if (!b_status) {
 		pr_debug("fl7112 firmware Compare OK!\n");
 	} else {
 		pr_err("fl7112 %s error line:%d - firmware Compare NG!\n", __func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	}
 
 	/* 4. InformationBlock write */
 	b_status = fl7112_mtpwrite_informationblock(pdata,
 						FL7112_FIRMWARE_INTERNAL_REGISTER_0X9800,
-						dataBufferInformationBlock,
+						data_buffer_information_block,
 						FL7112_MTP_MAX_SIZE_OF_INFORMATION_BLOCK,
-						&isError,
-						&isBusy);
+						&is_error,
+						&is_busy);
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d - write Information Block NG!\n",
 			__func__, __LINE__);
 		ret = false;
-		goto Exit;
+		goto exit;
 	} else {
 		pr_debug("fl7112 Information block write OK!\n");
 	}
@@ -1111,7 +1018,7 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 	/* 5. read back and compare informationblock */
 	b_status = fl7112_mtpread_informationblock(pdata,
 					FL7112_FIRMWARE_INTERNAL_REGISTER_0X9800,
-					dataBufferInformationBlockReadBack,
+					data_buffer_information_block_read_back,
 					FL7112_MTP_MAX_SIZE_OF_INFORMATION_BLOCK
 	);
 
@@ -1119,8 +1026,8 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 		pr_err("fl7112 %s error line:%d - read back informationblock NG!\n",
 			__func__, __LINE__);
 
-	b_status = memcmp(dataBufferInformationBlock,
-			dataBufferInformationBlockReadBack,
+	b_status = memcmp(data_buffer_information_block,
+			data_buffer_information_block_read_back,
 			FL7112_MTP_MAX_SIZE_OF_INFORMATION_BLOCK);
 	if (!b_status) {
 		pr_debug("fl7112 InformationBlock Compare OK!\n");
@@ -1132,14 +1039,14 @@ static bool fl7112_firmware_upgrade(struct fl7112 *pdata,
 
 	pr_debug("fl7112 FW upgrade success!\n");
 
-Exit:
+exit:
 	/* Release MCU Reset */
 	b_status = i2cex_bitclear(pdata,
 			FL7112_FIRMWARE_INTERNAL_REGISTER_0XA002,
 			5);
 
-	kfree(dataBufferFirmwareReadBack);
-	kfree(dataBufferInformationBlockReadBack);
+	kfree(data_buffer_firmware_read_back);
+	kfree(data_buffer_information_block_read_back);
 	return ret;
 }
 
@@ -1171,25 +1078,25 @@ static void fl7112_firmware_cb(const struct firmware *cfg, void *data)
 
 u8 fl7112_read_addr_info(struct fl7112 *pdata, int addr)
 {
-	u8 rDat = 0;
+	u8 r_dat = 0;
 	bool b_status = true;
 
-	b_status = fl7112_read(pdata, addr, &rDat, 1);
+	b_status = fl7112_read(pdata, addr, &r_dat, 1);
 	if (b_status)
 		pr_err("fl7112 read addr 0x%x failed, ret: %d\n", addr, b_status);
 	else
-		pr_debug("fl7112 read addr 0x%x : %x\n", addr, rDat);
+		pr_debug("fl7112 read addr 0x%x : %x\n", addr, r_dat);
 
-	return rDat;
+	return r_dat;
 }
 
-bool fl7112_mtpread_firmware(struct fl7112 *pdata, int address, u8 *DataBuffer,
-	int DataBufferLength)
+bool fl7112_mtpread_firmware(struct fl7112 *pdata, int address,
+	u8 *data_buffer, int data_buffer_length)
 {
 	bool b_status = true;
 	bool ret = true;
 	int index;
-	u8 *byteData;
+	u8 *byte_data;
 	int offset;
 	int offset_in_block;
 	u8 block_current;
@@ -1198,45 +1105,39 @@ bool fl7112_mtpread_firmware(struct fl7112 *pdata, int address, u8 *DataBuffer,
 
 	fl7112_mtpwritelock(pdata);
 
-	byteData = DataBuffer;
+	byte_data = data_buffer;
 	offset = address;
 	block_current = 0xFF;
-	for (index = 0; index < DataBufferLength; index += 4) {
+	for (index = 0; index < data_buffer_length; index += 4) {
 
-		b_status = fl7112_mtp_block_setup(pdata,
-					&block_current,
-					offset);
+		b_status = fl7112_mtp_block_setup(pdata, &block_current, offset);
 		if (!b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
 
 		offset_in_block = offset % FL7112_MTP_BLOCK_SIZE;
 		b_status = fl7112_read(pdata,
-				FL7112_FIRMWARE_INTERNAL_REGISTER_0X5000 + offset_in_block,
-				byteData,
-				4);
+			FL7112_FIRMWARE_INTERNAL_REGISTER_0X5000 +
+			offset_in_block, byte_data, 4);
 		if (b_status) {
 			pr_err("fl7112 %s error line:%d\n", __func__, __LINE__);
 			ret = false;
-			goto Exit;
+			goto exit;
 		}
-		byteData += 4;
+		byte_data += 4;
 		offset += 4;
 	}
-Exit:
+exit:
 	return ret;
 }
 
-static bool fl7112_firmware_get_version(struct fl7112 *pdata, u8 *VersionString)
+static bool fl7112_firmware_get_version(struct fl7112 *pdata, u8 *version_string)
 {
 	bool b_status = true;
 
-	b_status = fl7112_mtpread_firmware(pdata,
-				FL7112_FIRMWARE_OFFSET_0X1000,
-				VersionString,
-				4);
+	b_status = fl7112_mtpread_firmware(pdata, FL7112_FIRMWARE_OFFSET_0X1000, version_string, 4);
 	if (!b_status) {
 		pr_err("%s error line:%d get version Failed!\n", __func__, __LINE__);
 		return false;
@@ -1245,23 +1146,23 @@ static bool fl7112_firmware_get_version(struct fl7112 *pdata, u8 *VersionString)
 	return true;
 }
 
-bool fl7112_read_fw_version(struct fl7112 *pdata, uint32_t *Version)
+bool fl7112_read_fw_version(struct fl7112 *pdata, uint32_t *version)
 {
 	bool b_status = true;
-	u8 VersionString[4] = {0};
+	u8 version_string[4] = {0};
 	uint32_t ver = 0;
 
-	b_status = fl7112_firmware_get_version(pdata, VersionString);
+	b_status = fl7112_firmware_get_version(pdata, version_string);
 	if (!b_status) {
 		pr_err("fl7112 %s error line:%d read version failed!\n", __func__, __LINE__);
 		return false;
 	}
 
-	ver = ((VersionString[3] << 24) |
-		(VersionString[2] << 16) |
-		(VersionString[1] << 8) |
-		VersionString[0]);
-	*Version = ver;
+	ver = ((version_string[3] << 24) |
+		(version_string[2] << 16) |
+		(version_string[1] << 8) |
+		version_string[0]);
+	*version = ver;
 
 	return true;
 }
@@ -1278,9 +1179,9 @@ static void fl7112_fw_upgrade_work(struct work_struct *work)
 		return;
 	}
 
-	ret = request_firmware_nowait(THIS_MODULE, true,
-				"fl7112_fw.bin", &pdata->i2c_client->dev, GFP_KERNEL,
-				pdata, fl7112_firmware_cb);
+	ret = request_firmware_nowait(THIS_MODULE, true, "fl7112_fw.bin",
+		&pdata->i2c_client->dev, GFP_KERNEL, pdata,
+		fl7112_firmware_cb);
 	if (ret < 0)
 		pr_err("[fl7112] request firmware upgrade failed\n");
 }
@@ -1380,7 +1281,7 @@ static void fl7112_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id fl7112_of_match[] = {
-	{ .compatible = "qcom,fl7112-fs8822" },
+	{ .compatible = "parade,fl7112-fs8822" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, fl7112_of_match);

@@ -62,19 +62,19 @@ union fl7112_information_block {
 
 union dword_mapping {
 	struct {
-		u32 Byte0:8;
-		u32 Byte1:8;
-		u32 Byte2:8;
-		u32 Byte3:8;
-	} Map;
-	u8 ByteData[4];
-	u16 WordData[2];
-	u32 Value;
+		u32 byte0:8;
+		u32 byte1:8;
+		u32 byte2:8;
+		u32 byte3:8;
+	} map;
+	u8 byte_data[4];
+	u16 word_data[2];
+	u32 value;
 };
 
 union chartofloat {
-	float fvalue;
-	u8 cvalue[4];
+	float f_value;
+	u8 c_value[4];
 };
 
 enum fw_upgrade_status {
@@ -95,7 +95,7 @@ struct fl7112 {
 	uint32_t version;
 	struct workqueue_struct *wq;  /* upgrade queue */
 	struct work_struct wk;        /* upgrade work */
-	u32 reset_pin;   /*reset pin */
+	u32 reset_pin;   /* reset pin */
 	u32 pwr_1v2;
 	u32 pwr_3v3;
 };
@@ -103,18 +103,18 @@ struct fl7112 {
 static int fl7112_read(struct fl7112 *pdata, int reg, char *buf, u32 size);
 static bool fl7112_mtpread_firmware(struct fl7112 *pdata,
 					int address,
-					u8 *DataBuffer,
-					int DataBufferLength);
+					u8 *data_buffer,
+					int data_buffer_length);
 static bool fl7112_mtpwrite_firmware(struct fl7112 *pdata,
-					int Address,
-					const u8 *DataBuffer,
-					int DataBufferLength,
-					bool *IsError,
-					bool *IsBusy);
+					int address,
+					const u8 *data_buffer,
+					int data_buffer_length,
+					bool *is_error,
+					bool *is_busy);
 static void fl7112_mtppowermodedisable(struct fl7112 *pdata);
 static bool fl7112_mtpwriteunlock(struct fl7112 *pdata);
 static void fl7112_mtpwritelock(struct fl7112 *pdata);
-static bool fl7112_mtpcheckstatus(struct fl7112 *pdata, bool *IsError, bool *IsBusy);
+static bool fl7112_mtpcheckstatus(struct fl7112 *pdata, bool *is_error, bool *is_busy);
 static void fl7112_reset(struct fl7112 *pdata);
 
 #endif /* __FL7112_H_ */

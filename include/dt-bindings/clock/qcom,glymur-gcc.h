@@ -453,6 +453,9 @@
 #define GCC_VIDEO_XO_CLK					443
 #define GCC_USB30_PRIM_ATB_CLK					444
 #define GCC_HLOS1_VOTE_MMU_TCU_CLK				445
+#define GCC_QSPI_CNOC_PERIPH_AHB_CLK				446
+#define GCC_QSPI_CORE_CLK					447
+#define GCC_QSPI_CORE_CLK_SRC					448
 
 /* GCC power domains */
 #define GCC_PCIE_0_TUNNEL_GDSC					0

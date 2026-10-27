@@ -1784,7 +1784,7 @@ static int ufs_qcom_cpu_online(unsigned int cpu)
 	return 0;
 }
 
-static void ufs_qcom_toggle_pri_affinity(struct ufs_hba *hba, bool on)
+static void ufs_qcom_set_sched_boost(struct ufs_hba *hba, bool on)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
 
@@ -1813,8 +1813,10 @@ static void ufs_qcom_toggle_pri_affinity(struct ufs_hba *hba, bool on)
 	}
 #endif
 
-	atomic_set(&host->hi_pri_en, on);
-	ufs_qcom_set_affinity_hint(hba, on);
+	if (host->irq_affinity_support) {
+		atomic_set(&host->hi_pri_en, on);
+		ufs_qcom_set_affinity_hint(hba, on);
+	}
 }
 
 static void ufs_qcom_cpufreq_dwork(struct work_struct *work)
@@ -1832,12 +1834,10 @@ static void ufs_qcom_cpufreq_dwork(struct work_struct *work)
 
 	if (cur_thres > host->max_boost_thres && !host->cur_freq_vote) {
 		scale_up = 1;
-		if (host->irq_affinity_support)
-			ufs_qcom_toggle_pri_affinity(host->hba, true);
+		ufs_qcom_set_sched_boost(host->hba, true);
 	} else if (cur_thres < host->min_boost_thres && host->cur_freq_vote) {
 		scale_up = 0;
-		if (host->irq_affinity_support)
-			ufs_qcom_toggle_pri_affinity(host->hba, false);
+		ufs_qcom_set_sched_boost(host->hba, false);
 	} else
 		goto out;
 
@@ -1973,6 +1973,17 @@ static int ufs_qcom_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op,
 	} else {
 		ufs_qcom_genpd_setup(hba, true, true);
 	}
+
+	/*
+	 * Apply shared ICE workaround: arm the vdd_hba power-collapse flag so
+	 * it is handled on hibern8 exit. Only for hw v5.0/v5.1 with genpd, when
+	 * the link is in hibern8 and a non-static allocation algorithm is used.
+	 */
+	if (ufs_qcom_is_link_hibern8(hba) &&
+	    host->chosen_algo != STATIC_ALLOC_ALG1 &&
+	    host->hw_ver.major == 5 && host->hw_ver.minor <= 1 &&
+	    ufs_qcom_is_genpd_supported(hba))
+		host->vdd_hba_pc = true;
 
 	if (!err && ufs_qcom_is_link_off(hba) && host->device_reset)
 		ufs_qcom_device_reset_ctrl(hba, true);
@@ -3470,8 +3481,7 @@ static int ufs_qcom_set_cur_therm_state(struct thermal_cooling_device *tcd,
 		/* Stop setting hi-pri to requests and set irq affinity to default value */
 		atomic_set(&host->therm_mitigation, 1);
 		cancel_dwork_unvote_cpufreq(hba);
-		if (host->irq_affinity_support)
-			ufs_qcom_toggle_pri_affinity(hba, false);
+		ufs_qcom_set_sched_boost(hba, false);
 
 		/* Set the default auto-hiberate idle timer to 1 ms */
 		ufshcd_auto_hibern8_update(hba, ufs_qcom_us_to_ahit(1000));

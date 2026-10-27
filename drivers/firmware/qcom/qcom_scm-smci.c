@@ -290,17 +290,26 @@ void qcom_smci_store_smo(u32 uid, u32 peripheral, struct si_object *smo)
 	mutex_unlock(&service_list_mutex);
 }
 
-void qcom_smci_release_smo(u32 uid, u32 peripheral)
+void qcom_smci_release_image_service(u32 uid, u32 peripheral)
 {
 	struct smci_image_service_info *image_service_info = NULL;
 	struct smci_service_info *service_info = NULL;
 
 	mutex_lock(&service_list_mutex);
 	__qcom_smci_find_service(uid, peripheral, &service_info, &image_service_info);
-	if (image_service_info && image_service_info->smo != NULL_SI_OBJECT) {
-		put_si_object(image_service_info->smo);
-		image_service_info->smo = NULL_SI_OBJECT;
+	if (!image_service_info) {
+		mutex_unlock(&service_list_mutex);
+		return;
 	}
+	if (image_service_info->smci_image_service)
+		put_si_object(image_service_info->smci_image_service);
+	if (image_service_info->smo)
+		put_si_object(image_service_info->smo);
+
+	image_service_info->smci_image_service = NULL_SI_OBJECT;
+	image_service_info->smo = NULL_SI_OBJECT;
+	list_del(&image_service_info->list);
+	kfree(image_service_info);
 	mutex_unlock(&service_list_mutex);
 }
 

@@ -772,6 +772,9 @@ static int msm_eud_probe(struct platform_device *pdev)
 			ret = PTR_ERR(chip->eud_ahb2phy_clk);
 			return ret;
 		}
+		ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
+		if (ret)
+			return ret;
 	}
 
 	chip->eud_clkref_clk = devm_clk_get(&pdev->dev, "eud_clkref_clk");
@@ -865,16 +868,6 @@ static int msm_eud_probe(struct platform_device *pdev)
 		 * so the clk driver can track the use count and we can
 		 * unprepare it cleanly when EUD is disabled later.
 		 */
-		if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk) {
-			ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
-			if (ret) {
-				dev_err(&pdev->dev,
-					"Failed to enable eud_ahb2phy_clk rc:%d\n",
-					ret);
-				goto error;
-			}
-		}
-
 		msm_eud_clkref_en(chip, true);
 
 		set_eud_utmi_switch_delay(chip);
@@ -899,11 +892,14 @@ static int msm_eud_probe(struct platform_device *pdev)
 
 		enable = EUD_ENABLE_CMD;
 		chip->eud_enabled = true;
+
+		return 0;
 	}
 
-	return 0;
-
 error:
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk)
+		clk_disable_unprepare(chip->eud_ahb2phy_clk);
+
 	return ret;
 }
 

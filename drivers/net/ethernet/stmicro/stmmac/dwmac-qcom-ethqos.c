@@ -16,7 +16,6 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
-#include <linux/gunyah/gh_dbl.h>
 #include <linux/workqueue.h>
 
 #include "stmmac.h"
@@ -190,10 +189,7 @@ struct qcom_ethqos {
 
 	int gpio_phy_intr_redirect;
 	int switch_reset_detect_irq;
-	gh_label_t dbl_label;
-	void *dbl_rx_desc;
-	struct work_struct dbl_rx_work;
-	bool dbl_rx_enabled;
+	struct work_struct switch_irq_work;
 	u32 phy_intr;
 
 	struct regulator *gdsc_emac;
@@ -801,6 +797,7 @@ static const struct ethqos_emac_driver_data emac_v6_6_1_data = {
 		.mtl_chan_base = 0x00008000,
 		.mtl_chan_offset =  0x00001000,
 		.timestamp_base = 0x00007000,
+		.systime_base = 0x00006000,
 		.pps_base = 0x00007080,
 		.pps_offset = 0x10,
 	},
@@ -1625,127 +1622,90 @@ static int qcom_ethqos_init(struct platform_device *pdev, void *prv)
 	return 0;
 }
 
-static void qcom_ethqos_dbl_rx_work(struct work_struct *work)
+static void qcom_ethqos_switch_irq_work(struct work_struct *work)
 {
 	struct qcom_ethqos *ethqos =
-		container_of(work, struct qcom_ethqos, dbl_rx_work);
+		container_of(work, struct qcom_ethqos, switch_irq_work);
 	struct device *dev = &ethqos->pdev->dev;
 	struct net_device *ndev = platform_get_drvdata(ethqos->pdev);
 	struct stmmac_priv *priv;
 
-	if (!ethqos->dbl_rx_enabled) {
-		dev_dbg(dev, "RX doorbell work skipped: doorbell disabled\n");
-		return;
-	}
-
 	if (!ndev) {
-		dev_err(dev, "ndev is NULL in dbl_rx_work\n");
+		dev_err(dev, "ndev is NULL in switch_irq_work\n");
 		return;
 	}
 
 	priv = netdev_priv(ndev);
 
-	dev_dbg(dev, "RX doorbell work: handling switch reset\n");
+	dev_dbg(dev, "Switch irq work: handling switch reset\n");
 	stmmac_handle_switch_reset(priv);
 }
 
-static void qcom_ethqos_dbl_rx_callback(int irq, void *data)
-{
-	struct qcom_ethqos *ethqos = data;
-	gh_dbl_flags_t clear_flags = ~0U;
-	int ret;
-
-	if (!ethqos->dbl_rx_enabled) {
-		dev_dbg(&ethqos->pdev->dev,
-			"RX doorbell callback skipped: doorbell disabled\n");
-		return;
-	}
-
-	if (IS_ERR_OR_NULL(ethqos->dbl_rx_desc)) {
-		dev_warn(&ethqos->pdev->dev,
-			 "RX doorbell callback skipped: invalid desc\n");
-		return;
-	}
-
-	ret = gh_dbl_read_and_clean(ethqos->dbl_rx_desc, &clear_flags, 0);
-	if (ret) {
-		dev_err(&ethqos->pdev->dev,
-			"gh_dbl_read_and_clean failed: %d\n", ret);
-		return;
-	}
-
-	dev_dbg(&ethqos->pdev->dev,
-		"RX doorbell callback: flags=0x%llx\n", clear_flags);
-
-	schedule_work(&ethqos->dbl_rx_work);
-}
-
-static void qcom_ethqos_dbl_rx_cleanup(void *data)
+static void qcom_ethqos_switch_irq_cleanup(void *data)
 {
 	struct qcom_ethqos *ethqos = data;
 
-	ethqos->dbl_rx_enabled = false;
-
-	if (!IS_ERR_OR_NULL(ethqos->dbl_rx_desc)) {
-		gh_dbl_rx_unregister(ethqos->dbl_rx_desc);
-		ethqos->dbl_rx_desc = NULL;
-	}
-
-	cancel_work_sync(&ethqos->dbl_rx_work);
+	cancel_work_sync(&ethqos->switch_irq_work);
 }
 
-static void qcom_ethqos_setup_dbl_rx(struct device *dev, struct qcom_ethqos *ethqos)
+static irqreturn_t qcom_ethqos_switch_reset_detect_irq_handler(int irq, void *data)
 {
-	struct device_node *np = dev->of_node;
-	int ret;
+	struct qcom_ethqos *ethqos = data;
 
-	ethqos->dbl_rx_enabled = false;
-	ethqos->dbl_rx_desc = NULL;
+	schedule_work(&ethqos->switch_irq_work);
+	return IRQ_HANDLED;
+}
 
-	ret = of_property_read_u32(np, "qcom,dbl-label", &ethqos->dbl_label);
+static void qcom_ethqos_setup_switch_reset_detect_irq(struct device *dev,
+						      struct qcom_ethqos *ethqos)
+{
+	struct device_node *np;
+	int irq, ret;
+
+	ethqos->switch_reset_detect_irq = 0;
+
+	if (!of_property_present(dev->of_node, "qcom,en-eth-switch-dbl")) {
+		dev_dbg(dev, "en-eth-switch-dbl not configured\n");
+		return;
+	}
+
+	np = of_find_compatible_node(NULL, NULL, "qcom,eth-switch-dbl");
+	if (!np) {
+		dev_warn(dev, "eth-switch-dbl node not found\n");
+		return;
+	}
+
+	irq = of_irq_get(np, 0);
+	of_node_put(np);
+
+	if (irq <= 0) {
+		dev_warn(dev, "Failed to get eth-switch-dbl IRQ: %d\n", irq);
+		return;
+	}
+
+	INIT_WORK(&ethqos->switch_irq_work, qcom_ethqos_switch_irq_work);
+
+	ret = devm_add_action_or_reset(dev,
+				       qcom_ethqos_switch_irq_cleanup,
+				       ethqos);
 	if (ret) {
-		dev_dbg(dev, "qcom,dbl-label not found\n");
+		dev_err(dev, "Failed to register IRQ cleanup: %d\n", ret);
 		return;
 	}
 
-	INIT_WORK(&ethqos->dbl_rx_work, qcom_ethqos_dbl_rx_work);
-	dev_dbg(dev, "Setting up RX doorbell label=0x%x\n", ethqos->dbl_label);
-
-	ethqos->dbl_rx_desc = gh_dbl_rx_register(ethqos->dbl_label,
-						 qcom_ethqos_dbl_rx_callback,
-						 ethqos);
-	if (IS_ERR(ethqos->dbl_rx_desc)) {
-		dev_warn(dev, "gh_dbl_rx_register failed for label=0x%x: %ld\n",
-			 ethqos->dbl_label, PTR_ERR(ethqos->dbl_rx_desc));
-		ethqos->dbl_rx_desc = NULL;
-		return;
-	}
-
-	ret = gh_dbl_set_mask(ethqos->dbl_rx_desc, BIT(0), 0, GH_DBL_NONBLOCK);
+	ret = devm_request_irq(dev, irq,
+			       qcom_ethqos_switch_reset_detect_irq_handler,
+			       IRQF_SHARED, "eth-switch-dbl", ethqos);
 	if (ret) {
-		dev_warn(dev, "gh_dbl_set_mask failed for label=0x%x: %d\n",
-			 ethqos->dbl_label, ret);
-		gh_dbl_rx_unregister(ethqos->dbl_rx_desc);
-		ethqos->dbl_rx_desc = NULL;
-		cancel_work_sync(&ethqos->dbl_rx_work);
+		dev_err(dev, "Failed to request switch reset detect IRQ %d: %d\n",
+			irq, ret);
 		return;
 	}
 
-	ret = devm_add_action_or_reset(dev, qcom_ethqos_dbl_rx_cleanup, ethqos);
-	if (ret) {
-		/* The qcom_ethqos_dbl_rx_cleanup will be called on failure,
-		 * which unregisters dbl_rx_desc and cancels dbl_rx_work.
-		 */
-		dev_warn(dev,
-			 "Failed to register RX doorbell cleanup for label=0x%x: %d\n",
-			 ethqos->dbl_label, ret);
-		return;
-	}
+	ethqos->switch_reset_detect_irq = irq;
 
-	ethqos->dbl_rx_enabled = true;
-
-	dev_info(dev, "RX doorbell setup done label=0x%x\n",
-		 ethqos->dbl_label);
+	dev_info(dev, "Registered switch reset detect IRQ %d\n",
+		 ethqos->switch_reset_detect_irq);
 }
 
 static int qcom_ethqos_serdes_powerup(struct net_device *ndev, void *priv)
@@ -2119,7 +2079,7 @@ static int qcom_ethqos_check_mdio_and_fix_link(struct platform_device *pdev,
 	}
 
 	/* Restore DT-provided mdio node for phylink phy-handle resolution. */
-	if (dt_mdio)
+	if (!plat->has_virtio_mdio && dt_mdio)
 		plat->mdio_node = dt_mdio;
 
 	return 0;
@@ -2151,12 +2111,8 @@ static int qcom_ethqos_hib_restore(struct device *dev)
 		goto err_restore;
 	}
 
-	ret = ethqos_init_gpio(ethqos);
-	if (ret) {
-		dev_err(dev, "%s: GPIO init failed with ret = %d\n", __func__, ret);
-		ethqos_disable_regulators(ethqos);
-		goto err_restore;
-	}
+	if (ethqos_init_gpio(ethqos))
+		dev_warn(dev, "ethqos_init_gpio failed.\n");
 
 	ret = pm_runtime_force_resume(dev);
 	if (ret) {
@@ -2415,6 +2371,9 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	ethqos->pdev = pdev;
 	ethqos->speed = SPEED_1000;
 
+	if (of_property_read_bool(np, "virtio-mdio"))
+		plat_dat->has_virtio_mdio = true;
+
 	qcom_ethqos_check_mdio_and_fix_link(pdev, plat_dat);
 
 	ethqos->rgmii_base = devm_platform_ioremap_resource_byname(pdev, "rgmii");
@@ -2487,11 +2446,8 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 
-		ret = ethqos_init_gpio(ethqos);
-
-		if (ret)
-			return dev_err_probe(dev, ret, "%s: init_gpio failed with ret = %d\n",
-					     __func__, ret);
+		if (ethqos_init_gpio(ethqos))
+			dev_warn(dev, "ethqos_init_gpio failed.\n");
 
 		ethqos->link_clk = devm_clk_get(dev, data->link_clk_name ?: "rgmii");
 		if (IS_ERR(ethqos->link_clk))
@@ -2550,8 +2506,6 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->safety_irq = ethqos_safety_feature;
 		plat_dat->safety_pcs_stats = ethqos_xpcs_safety_stats;
 	}
-	if (of_property_read_bool(np, "virtio-mdio"))
-		plat_dat->has_virtio_mdio = true;
 	if (of_property_read_bool(np, "snps,tso"))
 		plat_dat->flags |= STMMAC_FLAG_TSO_EN;
 	if (of_device_is_compatible(np, "qcom,qcs404-ethqos"))
@@ -2580,7 +2534,7 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	qcom_ethqos_setup_dbl_rx(dev, ethqos);
+	qcom_ethqos_setup_switch_reset_detect_irq(dev, ethqos);
 	return ret;
 }
 

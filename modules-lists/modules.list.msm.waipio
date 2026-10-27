@@ -17,6 +17,8 @@ crm-v2.ko
 debug_symbol.ko
 qcom_soc_wdt.ko
 debug-regulator.ko
+gcc-sm8450.ko
+dispcc-sm8450.ko
 qcom-cpufreq-hw.ko
 gdsc-regulator.ko
 smem.ko
@@ -90,6 +92,7 @@ gh_msgq.ko
 gh_vcpu_mgr.ko
 gh_rm_drv.ko
 gh_rm_heap_manager.ko
+gh_virt_wdt.ko
 gunyah_loader.ko
 mdt_loader.ko
 qcom_wdt_core.ko
@@ -106,4 +109,5 @@ msm_gpi.ko
 msm_geni_serial.ko
 pinctrl-spmi-gpio.ko
 qcom_geni_serial.ko
+phy-qcom-ufs-qmp-v4-diwali.ko
 phy-qcom-ufs-qmp-v4-waipio.ko

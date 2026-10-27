@@ -20,6 +20,7 @@
 #include <linux/workqueue.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/of_platform.h>
+#include <linux/usb/dwc3-msm.h>
 
 
 struct ktm5000b0t {
@@ -43,7 +44,8 @@ static const unsigned int usb_extcon_cable[] = {
 };
 
 #define USB_GPIO_DEBOUNCE_MS	20	/* ms */
-extern int dwc3_msm_set_ss_mode(struct device *dev, bool mode);
+#define USB_DWC3_MODE_RETRY_COUNT	100
+#define USB_DWC3_MODE_RETRY_DELAY_MS	20
 
 /* Perform initial detection */
 static void extcon_initial_detect(struct ktm5000b0t *pdata)
@@ -61,31 +63,33 @@ static void extcon_initial_detect(struct ktm5000b0t *pdata)
 		extcon_set_state_sync(pdata->edev, EXTCON_USB_HOST, true);
 		extcon_set_state_sync(pdata->edev, EXTCON_USB, false);
 	}
+
 }
 
 static int extcon_set_dwc3_msm_mode(struct ktm5000b0t *pdata,
 		bool mode)
 {
 	int rc;
-	int timeout = 100;
+	int retry_count = USB_DWC3_MODE_RETRY_COUNT;
 
 	if (!pdata || !pdata->usb_pdev) {
 		pr_err("invalid args or usb pdev not found\n");
 		return -EINVAL;
 	}
 
-	while (timeout) {
+	while (retry_count) {
 		rc = dwc3_msm_set_ss_mode(&pdata->usb_pdev->dev, mode);
 		if (rc != -EAGAIN)
 			break;
 		dev_err(pdata->dev, "USB busy, retry\n");
 		/* wait for hw recommended delay for usb */
-		msleep(20);
-		timeout--;
+		msleep(USB_DWC3_MODE_RETRY_DELAY_MS);
+		retry_count--;
 	}
 
 	if (rc)
 		dev_err(pdata->dev, "Error switch USB mode: %d\n", rc);
+
 	return rc;
 }
 
@@ -100,7 +104,7 @@ static void ktm5000_detect_cable(struct work_struct *work)
 	id = pdata->irq_gpio ?
 		gpio_get_value_cansleep(pdata->irq_gpio) : 1;
 
-	dev_info(pdata->dev, "Cable detect work triggered: id=%d\n", id);
+	dev_dbg(pdata->dev, "Cable detect work triggered: id=%d\n", id);
 
 	if (id) {
 		extcon_set_state_sync(pdata->edev, EXTCON_USB_HOST, false);
@@ -111,6 +115,7 @@ static void ktm5000_detect_cable(struct work_struct *work)
 		extcon_set_state_sync(pdata->edev, EXTCON_USB, false);
 		extcon_set_dwc3_msm_mode(pdata, 0);
 	}
+
 }
 
 static irqreturn_t usb_irq_handler(int irq, void *dev_id)
@@ -169,6 +174,7 @@ static int ktm5000_gpio_configure(struct ktm5000b0t *pdata, bool on)
 			dev_err(pdata->dev, "ktm5000 request kinetic-gpio-3v3 fail\n");
 			goto error;
 		}
+
 		ret = gpio_direction_output(pdata->power_3v3, 1);
 		if (ret) {
 			dev_err(pdata->dev, "set kinetic-gpio-3v3 direction fail\n");
@@ -181,11 +187,13 @@ static int ktm5000_gpio_configure(struct ktm5000b0t *pdata, bool on)
 				pdata->reset);
 			goto power_err;
 		}
+
 		ret = gpio_direction_output(pdata->reset, 0);
 		if (ret < 0) {
 			dev_err(pdata->dev, "set kinetic-reset-gpio %d fail\n", pdata->reset);
 			goto reset_err;
 		}
+
 		usleep_range(2000, 5000);
 		gpio_direction_output(pdata->reset, 1);
 		usleep_range(5000, 8000);
@@ -195,6 +203,7 @@ static int ktm5000_gpio_configure(struct ktm5000b0t *pdata, bool on)
 		if (gpio_is_valid(pdata->reset))
 			gpio_free(pdata->reset);
 	}
+
 	return ret;
 
 reset_err:
@@ -222,6 +231,7 @@ static ssize_t gpio3v3_store(struct device *dev,
 		if (ret)
 			pr_err("Failed to direction output kinetic_power_3v3=1 err\n");
 	}
+
 	return len;
 }
 
@@ -252,6 +262,7 @@ static ssize_t reset_store(struct device *dev,
 		if (ret)
 			pr_err("Failed to direction output kinetic_reset=1 err\n");
 	}
+
 	return len;
 }
 static DEVICE_ATTR_WO(reset);
@@ -260,8 +271,9 @@ static int ktm5000_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct ktm5000b0t *pdata;
+	struct device_node *usb_node;
 
-	pdata = kzalloc(sizeof(struct ktm5000b0t), GFP_KERNEL);
+	pdata = devm_kzalloc(&pdev->dev, sizeof(struct ktm5000b0t), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
 
@@ -285,23 +297,19 @@ static int ktm5000_probe(struct platform_device *pdev)
 		goto err_dt_parse;
 	}
 
-	{
-		struct device_node *usb_node;
+	usb_node = of_parse_phandle(pdata->dev->of_node, "usb-controller", 0);
+	if (!usb_node) {
+		dev_err(pdata->dev, "unable to get usb node\n");
+		ret = -EINVAL;
+		goto err_dt_parse;
+	}
 
-		usb_node = of_parse_phandle(pdata->dev->of_node, "usb-controller", 0);
-		if (!usb_node) {
-			dev_err(pdata->dev, "unable to get usb node\n");
-			ret = -EINVAL;
-			goto err_dt_parse;
-		}
-
-		pdata->usb_pdev = of_find_device_by_node(usb_node);
-		of_node_put(usb_node);
-		if (!pdata->usb_pdev) {
-			dev_err(pdata->dev, "unable to get usb pdev\n");
-			ret = -EPROBE_DEFER;
-			goto err_dt_parse;
-		}
+	pdata->usb_pdev = of_find_device_by_node(usb_node);
+	of_node_put(usb_node);
+	if (!pdata->usb_pdev) {
+		dev_err(pdata->dev, "unable to get usb pdev\n");
+		ret = -EPROBE_DEFER;
+		goto err_dt_parse;
 	}
 
 	ret = ktm5000_gpio_configure(pdata, true);
@@ -352,7 +360,6 @@ error:
 err_dt_parse:
 	if (pdata->usb_pdev)
 		platform_device_put(pdata->usb_pdev);
-	kfree(pdata);
 	return ret;
 }
 
@@ -367,30 +374,20 @@ static void ktm5000_remove(struct platform_device *pdev)
 
 }
 
-static const struct of_device_id sn_match_table[] = {
+static const struct of_device_id ktm5000_match_table[] = {
 	{ .compatible = "kinetic,ktm5000b0t", },
-	{ },
+	{ }
 };
+MODULE_DEVICE_TABLE(of, ktm5000_match_table);
 
-static struct platform_driver gpio_driver = {
-	.probe                = ktm5000_probe,
-	.remove               = ktm5000_remove,
-	.driver               = {
-		.name        = "kinetic,ktm5000b0t",
-		.of_match_table = sn_match_table,
+static struct platform_driver ktm5000_driver = {
+	.probe		= ktm5000_probe,
+	.remove		= ktm5000_remove,
+	.driver		= {
+		.name		= "kinetic,ktm5000b0t",
+		.of_match_table	= ktm5000_match_table,
 	},
 };
 
-static int __init ktm5000_init(void)
-{
-	return platform_driver_register(&gpio_driver);
-}
-
-static void __exit ktm5000_exit(void)
-{
-	platform_driver_unregister(&gpio_driver);
-}
-
-module_init(ktm5000_init);
-module_exit(ktm5000_exit);
+module_platform_driver(ktm5000_driver);
 MODULE_LICENSE("GPL");

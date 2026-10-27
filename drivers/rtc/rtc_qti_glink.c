@@ -29,7 +29,6 @@
 #define RTC_GLINK_SET_REAL_TIME		0x69
 #define RTC_GLINK_ALARM_EXPIRED		0x6A
 #define RTC_GLINK_WAIT_TIME_MS		5000
-#define RTC_GLINK_MIN_ALARM_SECS	3
 #define RTC_GLINK_TAD_DC_TIMER_ID	1
 
 struct rtc_glink_tad_real_time_data {
@@ -349,27 +348,38 @@ static int rtc_glink_set_alarm(struct device *dev,
 			       struct rtc_wkalrm *alarm)
 {
 	struct rtc_glink_dev *rtc_glink = dev_get_drvdata(dev);
-	time64_t alarm_time = rtc_tm_to_time64(&alarm->time);
+	time64_t alarm_time;
 	time64_t secs_until_alarm;
 	struct rtc_time now_tm;
 	time64_t now_real;
+	u32 alarm_secs;
 	int ret;
+
+	/*
+	 * The alarm time is irrelevant for a disable request.
+	 */
+	if (!alarm->enabled)
+		return _rtc_glink_update_alarm_state(rtc_glink, false);
 
 	ret = rtc_glink_get_real_time(rtc_glink, &now_tm);
 	if (ret)
 		return ret;
 
+	alarm_time = rtc_tm_to_time64(&alarm->time);
 	now_real = rtc_tm_to_time64(&now_tm);
 	secs_until_alarm = alarm_time - now_real;
 
-	if (secs_until_alarm <= RTC_GLINK_MIN_ALARM_SECS) {
-		dev_err(rtc_glink->dev, "alarm time is too soon (min %d sec)\n",
-			RTC_GLINK_MIN_ALARM_SECS);
-		return -EINVAL;
-	}
+	/*
+	 * A zero or negative relative timeout must not be sent to
+	 * the firmware, so clamp it to one second.
+	 */
+	if (secs_until_alarm <= 0)
+		secs_until_alarm = 1;
 
 	if (secs_until_alarm > U32_MAX)
-		return -ERANGE;
+		secs_until_alarm = U32_MAX;
+
+	alarm_secs = (u32)secs_until_alarm;
 
 	ret = rtc_glink_set_alarm_en(rtc_glink, 0);
 	if (ret)
@@ -377,13 +387,13 @@ static int rtc_glink_set_alarm(struct device *dev,
 
 	ret = rtc_glink_alarm_set_req(rtc_glink,
 				      RTC_GLINK_SET_ALARM_TIME,
-				      (u32)secs_until_alarm);
+				      alarm_secs);
 	if (ret) {
 		/* Leave alarm disabled to prevent stale wakeups on failure */
 		return ret;
 	}
 
-	dev_dbg(rtc_glink->dev, "alarm set for (%u) seconds\n", (u32)secs_until_alarm);
+	dev_dbg(rtc_glink->dev, "alarm set for (%u) seconds\n", alarm_secs);
 
 	return _rtc_glink_update_alarm_state(rtc_glink, alarm->enabled);
 }

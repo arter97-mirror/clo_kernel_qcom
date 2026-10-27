@@ -20,6 +20,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/remoteproc.h>
 #include <linux/remoteproc/qcom_rproc.h>
+#include <linux/string.h>
 #include <linux/suspend.h>
 #include <linux/sysfs.h>
 #include <linux/uaccess.h>
@@ -137,11 +138,16 @@ static int subsys_suspend(struct subsystem_data *ss_data, struct rproc *rproc, u
 static int subsys_resume(struct subsystem_data *ss_data, struct rproc *rproc, u32 state)
 {
 	int ret = 0;
-
 	switch (state) {
 	case SUBSYS_DEEPSLEEP:
 	case SUBSYS_HIBERNATE:
 		ss_data->ignore_ssr = true;
+		ret = hibernation_rproc_early_boot_ping(rproc);
+		if (ret) {
+			pr_err("%s early boot ping init failed: %d\n",
+				ss_data->name, ret);
+			return ret;
+		}
 		ret = rproc_boot(rproc);
 		ss_data->ignore_ssr = false;
 		break;

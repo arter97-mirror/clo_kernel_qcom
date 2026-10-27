@@ -106,6 +106,13 @@ int dpd_svc_map(struct dpd_scatterlist *dpd_sg, u32 domain_id, u32 flags, u64 io
 	if (result) {
 		pr_err("Map service call failed with %d for domain %d\n",
 			result, domain_id);
+		/*
+		 * Return -ENOMEM to client directly when the limit of
+		 * number of FFA SPM handles in pKVM hypervisor is getting
+		 * exhausted and ENOMEM is returned in result of SMCInvoke.
+		 */
+		if (result == ENOMEM)
+			return -ENOMEM;
 		return -EINVAL;
 	}
 
@@ -346,12 +353,6 @@ static int dpd_args_validate(struct dpd_mem_ops_args *args, struct sg_table *sgt
 	args->op = dpd_args_op(args);
 	if (args->op == OP_INVALID) {
 		dpd_args_show(args, false, "Failed to detect Reclaim/Lend/Share Op\n");
-		return -EINVAL;
-	}
-
-	if (is_protected_kvm_enabled() && sgt->orig_nents > KVM_FFA_MAX_NR_CONSTITUENTS) {
-		dpd_args_show(args, false, "%d nents greater than KVM_FFA_MAX_NR_CONSTITUENTS\n",
-			sgt->orig_nents);
 		return -EINVAL;
 	}
 

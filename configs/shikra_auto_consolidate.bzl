@@ -19,5 +19,6 @@ shikra_auto_consolidate_config = {
     "CONFIG_REGMAP_QTI_DEBUGFS_ALLOW_WRITE": "y",
     "CONFIG_SCHED_WALT_DEBUG": "m",
     "CONFIG_SDHCI_MSM_DBG": "y",
+    "CONFIG_SND_SOC_MAX98090": "m",
     "CONFIG_TORTURE_TEST": "m",
 }

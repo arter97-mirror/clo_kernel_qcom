@@ -19,6 +19,7 @@
 #include <soc/qcom/rpm-smd.h>
 
 #include "icc-rpm.h"
+#include "icc-debug.h"
 #include "qnoc-qos-rpm.h"
 #include "rpm-ids.h"
 
@@ -1855,6 +1856,8 @@ static int qnoc_probe(struct platform_device *pdev)
 	list_add_tail(&qp->probe_list, &qnoc_probe_list);
 	mutex_unlock(&probe_list_lock);
 
+	qcom_icc_debug_register(provider);
+
 	return 0;
 err:
 	clk_bulk_disable_unprepare(qp->num_qos_clks, qp->qos_clks);
@@ -1869,6 +1872,7 @@ static void qnoc_remove(struct platform_device *pdev)
 {
 	struct qcom_icc_provider *qp = platform_get_drvdata(pdev);
 
+	qcom_icc_debug_unregister(&qp->provider);
 	clk_bulk_disable_unprepare(qp->num_clks, qp->bus_clks);
 
 	icc_nodes_remove(&qp->provider);

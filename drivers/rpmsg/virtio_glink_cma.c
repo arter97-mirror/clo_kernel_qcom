@@ -403,14 +403,13 @@ static void virtio_glink_bridge_rx_work(struct work_struct *work)
 
 	mutex_lock(&dsp_info->ssr_lock);
 
+	if (dsp_info->gdev) {
+		dev_err(dev, "DSP already registered\n");
+		rc = VIRTIO_GLINK_BRIDGE_EINVAL;
+		goto unlock;
+	}
 	switch (msg_type) {
 	case MSG_SETUP:
-		if (dsp_info->gdev) {
-			dev_err(dev, "DSP already registered\n");
-			rc = VIRTIO_GLINK_BRIDGE_EINVAL;
-			goto unlock;
-		}
-
 		dsp_info->vgbridge = vgbridge;
 
 		address = virtio32_to_cpu(vdev, msg->address);
@@ -699,3 +698,4 @@ module_virtio_driver(virtio_glink_bridge_driver);
 MODULE_DEVICE_TABLE(virtio, id_table);
 MODULE_DESCRIPTION("Virtio glink cma driver");
 MODULE_LICENSE("GPL");
+MODULE_SOFTDEP("pre: qcom-ipcc");

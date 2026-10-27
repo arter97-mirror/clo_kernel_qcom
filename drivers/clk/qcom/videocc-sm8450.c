@@ -20,9 +20,14 @@
 #include "common.h"
 #include "gdsc.h"
 #include "reset.h"
+#include "vdd-level.h"
 
-enum {
-	DT_BI_TCXO,
+static DEFINE_VDD_REGULATORS(vdd_mm, VDD_NOMINAL + 1, 1, vdd_corner);
+static DEFINE_VDD_REGULATORS(vdd_mxc, VDD_HIGH + 1, 1, vdd_corner);
+
+static struct clk_vdd_class *video_cc_sm8450_regulators[] = {
+	&vdd_mm,
+	&vdd_mxc,
 };
 
 enum {
@@ -36,8 +41,8 @@ static const struct pll_vco lucid_evo_vco[] = {
 };
 
 static const struct alpha_pll_config video_cc_pll0_config = {
-	/* .l includes CAL_L_VAL, L_VAL fields */
-	.l = 0x0044001e,
+	.l = 0x1e,
+	.cal_l = 0x44,
 	.alpha = 0x0,
 	.config_ctl_val = 0x20485699,
 	.config_ctl_hi_val = 0x00182261,
@@ -55,17 +60,28 @@ static struct clk_alpha_pll video_cc_pll0 = {
 		.hw.init = &(const struct clk_init_data) {
 			.name = "video_cc_pll0",
 			.parent_data = &(const struct clk_parent_data) {
-				.index = DT_BI_TCXO,
+				.fw_name = "bi_tcxo",
 			},
 			.num_parents = 1,
 			.ops = &clk_alpha_pll_lucid_evo_ops,
+		},
+		.vdd_data = {
+			.vdd_class = &vdd_mxc,
+			.num_rate_max = VDD_NUM,
+			.rate_max = (unsigned long[VDD_NUM]) {
+				[VDD_LOWER_D1] = 500000000,
+				[VDD_LOWER] = 615000000,
+				[VDD_LOW] = 1066000000,
+				[VDD_LOW_L1] = 1500000000,
+				[VDD_NOMINAL] = 1750000000,
+				[VDD_HIGH] = 2000000000},
 		},
 	},
 };
 
 static const struct alpha_pll_config video_cc_pll1_config = {
-	/* .l includes CAL_L_VAL, L_VAL fields */
-	.l = 0x0044002b,
+	.l = 0x2b,
+	.cal_l = 0x44,
 	.alpha = 0xc000,
 	.config_ctl_val = 0x20485699,
 	.config_ctl_hi_val = 0x00182261,
@@ -83,10 +99,21 @@ static struct clk_alpha_pll video_cc_pll1 = {
 		.hw.init = &(const struct clk_init_data) {
 			.name = "video_cc_pll1",
 			.parent_data = &(const struct clk_parent_data) {
-				.index = DT_BI_TCXO,
+				.fw_name = "bi_tcxo",
 			},
 			.num_parents = 1,
 			.ops = &clk_alpha_pll_lucid_evo_ops,
+		},
+		.vdd_data = {
+			.vdd_class = &vdd_mxc,
+			.num_rate_max = VDD_NUM,
+			.rate_max = (unsigned long[VDD_NUM]) {
+				[VDD_LOWER_D1] = 500000000,
+				[VDD_LOWER] = 615000000,
+				[VDD_LOW] = 1066000000,
+				[VDD_LOW_L1] = 1500000000,
+				[VDD_NOMINAL] = 1750000000,
+				[VDD_HIGH] = 2000000000},
 		},
 	},
 };
@@ -97,7 +124,7 @@ static const struct parent_map video_cc_parent_map_0[] = {
 };
 
 static const struct clk_parent_data video_cc_parent_data_0[] = {
-	{ .index = DT_BI_TCXO },
+	{ .fw_name = "bi_tcxo" },
 	{ .hw = &video_cc_pll0.clkr.hw },
 };
 
@@ -107,7 +134,7 @@ static const struct parent_map video_cc_parent_map_1[] = {
 };
 
 static const struct clk_parent_data video_cc_parent_data_1[] = {
-	{ .index = DT_BI_TCXO },
+	{ .fw_name = "bi_tcxo" },
 	{ .hw = &video_cc_pll1.clkr.hw },
 };
 
@@ -126,12 +153,25 @@ static struct clk_rcg2 video_cc_mvs0_clk_src = {
 	.hid_width = 5,
 	.parent_map = video_cc_parent_map_0,
 	.freq_tbl = ftbl_video_cc_mvs0_clk_src,
+	.enable_safe_config = true,
+	.flags = HW_CLK_CTRL_MODE,
 	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "video_cc_mvs0_clk_src",
 		.parent_data = video_cc_parent_data_0,
 		.num_parents = ARRAY_SIZE(video_cc_parent_data_0),
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_rcg2_shared_ops,
+		.ops = &clk_rcg2_ops,
+	},
+	.clkr.vdd_data = {
+		.vdd_classes = video_cc_sm8450_regulators,
+		.num_vdd_classes = ARRAY_SIZE(video_cc_sm8450_regulators),
+		.num_rate_max = VDD_NUM,
+		.rate_max = (unsigned long[VDD_NUM]) {
+			[VDD_LOWER_D1] = 576000000,
+			[VDD_LOWER] = 720000000,
+			[VDD_LOW] = 1014000000,
+			[VDD_LOW_L1] = 1098000000,
+			[VDD_NOMINAL] = 1332000000},
 	},
 };
 
@@ -150,12 +190,25 @@ static struct clk_rcg2 video_cc_mvs1_clk_src = {
 	.hid_width = 5,
 	.parent_map = video_cc_parent_map_1,
 	.freq_tbl = ftbl_video_cc_mvs1_clk_src,
+	.enable_safe_config = true,
+	.flags = HW_CLK_CTRL_MODE,
 	.clkr.hw.init = &(const struct clk_init_data) {
 		.name = "video_cc_mvs1_clk_src",
 		.parent_data = video_cc_parent_data_1,
 		.num_parents = ARRAY_SIZE(video_cc_parent_data_1),
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_rcg2_shared_ops,
+		.ops = &clk_rcg2_ops,
+	},
+	.clkr.vdd_data = {
+		.vdd_classes = video_cc_sm8450_regulators,
+		.num_vdd_classes = ARRAY_SIZE(video_cc_sm8450_regulators),
+		.num_rate_max = VDD_NUM,
+		.rate_max = (unsigned long[VDD_NUM]) {
+			[VDD_LOWER_D1] = 840000000,
+			[VDD_LOWER] = 1050000000,
+			[VDD_LOW] = 1350000000,
+			[VDD_LOW_L1] = 1500000000,
+			[VDD_NOMINAL] = 1650000000},
 	},
 };
 
@@ -221,7 +274,7 @@ static struct clk_regmap_div video_cc_mvs1c_div2_div_clk_src = {
 
 static struct clk_branch video_cc_mvs0_clk = {
 	.halt_reg = 0x80b0,
-	.halt_check = BRANCH_HALT_SKIP,
+	.halt_check = BRANCH_HALT_VOTED,
 	.hwcg_reg = 0x80b0,
 	.hwcg_bit = 1,
 	.clkr = {
@@ -259,7 +312,7 @@ static struct clk_branch video_cc_mvs0c_clk = {
 
 static struct clk_branch video_cc_mvs1_clk = {
 	.halt_reg = 0x80d4,
-	.halt_check = BRANCH_HALT_SKIP,
+	.halt_check = BRANCH_HALT_VOTED,
 	.hwcg_reg = 0x80d4,
 	.hwcg_bit = 1,
 	.clkr = {
@@ -393,6 +446,8 @@ static struct qcom_cc_desc video_cc_sm8450_desc = {
 	.num_resets = ARRAY_SIZE(video_cc_sm8450_resets),
 	.gdscs = video_cc_sm8450_gdscs,
 	.num_gdscs = ARRAY_SIZE(video_cc_sm8450_gdscs),
+	.clk_regulators = video_cc_sm8450_regulators,
+	.num_clk_regulators = ARRAY_SIZE(video_cc_sm8450_regulators),
 };
 
 static const struct of_device_id video_cc_sm8450_match_table[] = {
@@ -406,19 +461,17 @@ static int video_cc_sm8450_probe(struct platform_device *pdev)
 	struct regmap *regmap;
 	int ret;
 
-	ret = devm_pm_runtime_enable(&pdev->dev);
+	regmap = qcom_cc_map(pdev, &video_cc_sm8450_desc);
+	if (IS_ERR(regmap))
+		return PTR_ERR(regmap);
+
+	ret = qcom_cc_runtime_init(pdev, &video_cc_sm8450_desc);
 	if (ret)
 		return ret;
 
 	ret = pm_runtime_resume_and_get(&pdev->dev);
 	if (ret)
 		return ret;
-
-	regmap = qcom_cc_map(pdev, &video_cc_sm8450_desc);
-	if (IS_ERR(regmap)) {
-		pm_runtime_put(&pdev->dev);
-		return PTR_ERR(regmap);
-	}
 
 	clk_lucid_evo_pll_configure(&video_cc_pll0, regmap, &video_cc_pll0_config);
 	clk_lucid_evo_pll_configure(&video_cc_pll1, regmap, &video_cc_pll1_config);
@@ -428,18 +481,42 @@ static int video_cc_sm8450_probe(struct platform_device *pdev)
 	qcom_branch_set_clk_en(regmap, 0x8130); /* VIDEO_CC_SLEEP_CLK */
 	qcom_branch_set_clk_en(regmap, 0x8114); /* VIDEO_CC_XO_CLK */
 
-	ret = qcom_cc_really_probe(&pdev->dev, &video_cc_sm8450_desc, regmap);
+	video_cc_sm8450_desc.gdscs = NULL;
+	video_cc_sm8450_desc.num_gdscs = 0;
 
-	pm_runtime_put(&pdev->dev);
+	ret = qcom_cc_really_probe(&pdev->dev, &video_cc_sm8450_desc, regmap);
+	if (ret) {
+		dev_err_probe(&pdev->dev, ret, "Failed to register VIDEO CC clocks\n");
+		goto err_put_rpm;
+	}
+
+	dev_info(&pdev->dev, "Registered VIDEO CC clocks\n");
+	return 0;
+
+err_put_rpm:
+	pm_runtime_put_sync(&pdev->dev);
 
 	return ret;
 }
+
+static void video_cc_sm8450_sync_state(struct device *dev)
+{
+	qcom_cc_sync_state(dev, &video_cc_sm8450_desc);
+}
+
+static const struct dev_pm_ops video_cc_sm8450_pm_ops = {
+	SET_RUNTIME_PM_OPS(qcom_cc_runtime_suspend, qcom_cc_runtime_resume, NULL)
+	SET_LATE_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				     pm_runtime_force_resume)
+};
 
 static struct platform_driver video_cc_sm8450_driver = {
 	.probe = video_cc_sm8450_probe,
 	.driver = {
 		.name = "video_cc-sm8450",
 		.of_match_table = video_cc_sm8450_match_table,
+		.sync_state = video_cc_sm8450_sync_state,
+		.pm = &video_cc_sm8450_pm_ops,
 	},
 };
 

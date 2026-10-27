@@ -1524,14 +1524,23 @@ int qcom_hwkm_program_key(void __iomem *base,
 		return -EINVAL;
 	}
 
+	err = qti_hwkm_clocks(true);
+	if (err) {
+		pr_err("%s: Error enabling clocks %d\n", __func__, err);
+		return err;
+	}
+
 	if (qti_hwkm_init_required(&mmio_data) || !qti_hwkm_is_ice_tpkey_set(&mmio_data)) {
 		err = qti_hwkm_init(&mmio_data);
 		if (err) {
 			pr_err("%s: Error with HWKM init %d\n", __func__, err);
+			qti_hwkm_clocks(false);
 			return -EINVAL;
 		}
 		qti_hwkm_init_done = true;
 	}
+
+	qti_hwkm_clocks(false);
 
 	return qcom_hwkm_program_key_v1(&mmio_data, key, slot, data_unit_mask, capid);
 }

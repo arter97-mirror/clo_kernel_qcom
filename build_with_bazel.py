@@ -202,6 +202,10 @@ class BazelBuilder:
 
     def get_build_targets(self):
         """Query for build targets, using a disk cache to avoid repeated Bazel queries."""
+        if self.out_dir and any(v == "ALL" for _, v in self.target_list):
+            logging.error("cannot specify multiple targets (ALL variants) with one out dir")
+            sys.exit(1)
+
         cache_file = os.path.join(
             self.cache_dir, "target_query_cache_{}.json".format(self._query_cache_key())
         )
@@ -213,7 +217,13 @@ class BazelBuilder:
                 if cached.get("version") == _QUERY_CACHE_VERSION:
                     logging.info("Using cached build targets (skipping Bazel query).")
                     targets = [
-                        Target(t["workspace"], t["target"], t["variant"], t["bazel_label"])
+                        Target(
+                            t["workspace"],
+                            t["target"],
+                            t["variant"],
+                            t["bazel_label"],
+                            self.out_dir,
+                        )
                         for t in cached["targets"]
                     ]
                     targets.sort()
@@ -226,10 +236,6 @@ class BazelBuilder:
         targets = []
         for t, v in self.target_list:
             if v == "ALL":
-                if self.out_dir:
-                    logging.error("cannot specify multiple targets (ALL variants) with one out dir")
-                    sys.exit(1)
-
                 skip_list_re = [
                     re.compile(r"//{}:{}_.*_{}_dist".format(self.kernel_dir, t, s))
                     for s in self.skip_list
@@ -515,6 +521,17 @@ class BazelBuilder:
             self.write_opts(out_dir, opts_content)
             if out_dir == target.get_out_dir("dist"):
                 self.setup_kbdev_symlinks(out_dir)
+
+            abl_elf = os.path.join(out_dir, "abl-userdebug", "unsigned_abl.elf")
+            if os.path.isfile(abl_elf):
+                os.utime(abl_elf, None)
+            for name in ("abl_userdebug.elf", "unsigned_abl_userdebug.elf"):
+                p = os.path.join(out_dir, name)
+                if os.path.isfile(p):
+                    os.utime(p, None)
+            abl_link = os.path.join(out_dir, "abl.elf")
+            if os.path.islink(abl_link):
+                os.utime(abl_link, follow_symlinks=False)
 
     def setup_kbdev_symlinks(self, out_dir):
         """Setup k*.img sylinks needed for test builds"""

@@ -1981,6 +1981,7 @@ static int qcom_glink_request_intent(struct qcom_glink *glink,
 		goto unlock;
 
 	ret = wait_event_timeout(channel->intent_req_wq,
+				READ_ONCE(channel->intent_req_result) == 0 ||
 				 (READ_ONCE(channel->intent_req_result) >= 0 &&
 				 READ_ONCE(channel->intent_received)) ||
 				 glink->abort_tx,
@@ -1994,8 +1995,10 @@ static int qcom_glink_request_intent(struct qcom_glink *glink,
 			GLINK_BUG(glink->ilc,
 				"remoteproc:%s channel:%s unresponsive\n",
 				glink->name, channel->name);
+	} else if (glink->abort_tx) {
+		ret = -ECANCELED;
 	} else {
-		ret = READ_ONCE(channel->intent_req_result) ? 0 : -ECANCELED;
+		ret = READ_ONCE(channel->intent_req_result) ? 0 : -EAGAIN;
 	}
 
 unlock:

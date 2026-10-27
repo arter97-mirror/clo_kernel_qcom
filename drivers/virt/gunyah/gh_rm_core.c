@@ -985,13 +985,16 @@ static int gh_rm_status_nb_handler(struct notifier_block *this,
 	struct gh_rm_notif_vm_status_payload *vm_status_payload = data;
 	struct gh_vminfo vm_info = {0};
 	enum gh_vm_names vm_name;
-	u8 vm_status = vm_status_payload->vm_status;
-	u8 os_status = vm_status_payload->os_status;
+	u8 vm_status, os_status;
 	int ret;
 
-	if (cmd != GH_RM_NOTIF_VM_STATUS || vm_status_payload->vmid > QCOM_SCM_MAX_MANAGED_VMID ||
+	if (cmd != GH_RM_NOTIF_VM_STATUS || !vm_status_payload ||
+	    vm_status_payload->vmid > QCOM_SCM_MAX_MANAGED_VMID ||
 	    vm_status_payload->vmid == GH_SELF_VMID)
 		return NOTIFY_DONE;
+
+	vm_status = vm_status_payload->vm_status;
+	os_status = vm_status_payload->os_status;
 
 	switch (vm_status) {
 	case GH_RM_VM_STATUS_READY:

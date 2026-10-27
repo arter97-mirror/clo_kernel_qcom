@@ -349,8 +349,9 @@ static void shared_hyp_mapping(int index)
 	}
 	ret = qcom_scm_assign_mem(mb->phy_addr, mb->size, source_vmlist,
 			      newvm, dest->num_vmids);
+	kfree(newvm);
 	if (ret != 0) {
-		dev_err(memsh_drv->dev, "memshare: qcom_scm_assign_mem failed size=%u err=%d\n",
+		dev_err(memsh_drv->dev, "memshare: qcom_scm_assign_mem failed size: %u, err: %d\n",
 				mb->size, ret);
 		return;
 	}
@@ -1051,7 +1052,7 @@ static int memshare_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	qcom_register_ssr_notifier("modem", &nb);
+	qcom_register_ssr_notifier("mpss", &nb);
 	dev_dbg(memsh_drv->dev, "memshare: Memshare inited\n");
 
 	return 0;

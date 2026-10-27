@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -13,11 +14,14 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/notifier.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/soc/qcom/irq.h>
 #include <linux/spinlock.h>
+#include <linux/suspend.h>
+#include <linux/syscore_ops.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 
@@ -46,6 +50,13 @@
 
 /* Notable PDC versions */
 #define PDC_VERSION_3_2		0x30200
+
+struct pdc_irq_info {
+	u32 type;
+	bool set;
+	u32 enabled;
+};
+static struct pdc_irq_info pdc_irq_config[PDC_MAX_GPIO_IRQS];
 
 struct pdc_pin_region {
 	u32 pin_base;
@@ -197,6 +208,8 @@ static void __pdc_enable_intr(int pin_out, bool on)
 		__assign_bit(IRQ_i_CFG_IRQ_ENABLE, &enable, on);
 		pdc_reg_write(IRQ_i_CFG, pin_out, enable);
 	}
+
+	pdc_irq_config[pin_out].enabled = on;
 }
 
 static void pdc_enable_intr(struct irq_data *d, bool on)
@@ -296,6 +309,9 @@ static int qcom_pdc_gic_set_type(struct irq_data *d, unsigned int type)
 		       d->hwirq, pdc_type, type);
 #endif
 
+	pdc_irq_config[d->hwirq].type = pdc_type;
+	pdc_irq_config[d->hwirq].set = true;
+
 	/* Additionally, configure (only) the GPIO in the f/w */
 	ret = spi_configure_type(parent_hwirq, type);
 	if (ret)
@@ -338,6 +354,71 @@ static struct irq_chip qcom_pdc_gic_chip = {
 	.irq_set_vcpu_affinity	= irq_chip_set_vcpu_affinity_parent,
 	.irq_set_affinity	= irq_chip_set_affinity_parent,
 };
+
+#if IS_ENABLED(CONFIG_HIBERNATION) || IS_ENABLED(CONFIG_DEEPSLEEP)
+static bool pdc_save_restore;
+
+static int pdc_suspend_notifier(struct notifier_block *nb,
+				unsigned long event, void *dummy)
+{
+	if (event == PM_HIBERNATION_PREPARE)
+		pdc_save_restore = true;
+	else if (event == PM_POST_HIBERNATION)
+		pdc_save_restore = false;
+	else if (event == PM_SUSPEND_PREPARE && (pm_suspend_target_state == PM_SUSPEND_MEM))
+		pdc_save_restore = true;
+	else if (event == PM_POST_SUSPEND && (pm_suspend_target_state == PM_SUSPEND_MEM))
+		pdc_save_restore = false;
+
+	return NOTIFY_OK;
+}
+
+static void pdc_resume(void)
+{
+	int i;
+	u32 config;
+
+	if (!pdc_save_restore)
+		return;
+
+	for (i = 0; i < PDC_MAX_GPIO_IRQS; i++) {
+		if (pdc_irq_config[i].set) {
+			pdc_reg_write(IRQ_i_CFG, i, pdc_irq_config[i].type);
+
+			do {
+				config = pdc_reg_read(IRQ_i_CFG, i);
+				if (config == pdc_irq_config[i].type)
+					break;
+				udelay(5);
+			} while (1);
+
+			if (pdc_irq_config[i].enabled)
+				__pdc_enable_intr(i, true);
+		}
+	}
+}
+
+static struct notifier_block pdc_notifier_block = {
+	.notifier_call = pdc_suspend_notifier,
+};
+
+static struct syscore_ops pdc_syscore_ops = {
+	.resume = pdc_resume,
+};
+
+static int pdc_init_save_restore_config(void)
+{
+	u32 ret;
+
+	register_syscore_ops(&pdc_syscore_ops);
+
+	ret = register_pm_notifier(&pdc_notifier_block);
+	if (ret)
+		unregister_syscore_ops(&pdc_syscore_ops);
+
+	return ret;
+}
+#endif
 
 static struct pdc_pin_region *get_pin_region(int pin)
 {
@@ -534,6 +615,10 @@ static int qcom_pdc_init(struct device_node *node, struct device_node *parent)
 	}
 
 	irq_domain_update_bus_token(pdc_domain, DOMAIN_BUS_WAKEUP);
+
+#if IS_ENABLED(CONFIG_HIBERNATION) || IS_ENABLED(CONFIG_DEEPSLEEP)
+	pdc_init_save_restore_config();
+#endif
 
 #if IS_ENABLED(CONFIG_IPC_LOGGING)
 	pdc_ipc_log = ipc_log_context_create(PDC_IPC_LOG_SZ, "pdc", 0);

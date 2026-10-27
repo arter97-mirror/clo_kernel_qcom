@@ -78,3 +78,18 @@ def register_modules(registry):
             "drivers/powercap/qcom/qpt_rpmsg_powercap.c",
         ],
     )
+
+    registry.register(
+        name = "drivers/powercap/qcom/spel",
+        out = "spel.ko",
+        config = "CONFIG_QCOM_SPEL",
+        srcs = [
+            # do not sort
+            "drivers/powercap/qcom/spel.c",
+            "drivers/powercap/qcom/spel_internal.h",
+        ],
+        deps = [
+            # do not sort
+            "kernel/trace/qcom_ipc_logging",
+        ],
+    )

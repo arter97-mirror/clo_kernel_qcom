@@ -97,7 +97,7 @@ void panel_event_notifier_unregister(void *cookie)
 {
 	struct panel_event_notifier_entry *entry = cookie;
 
-	if (!cookie)
+	if (!cookie || IS_ERR(cookie))
 		return;
 
 	mutex_lock(&panel_event_notifier_entries_lock);

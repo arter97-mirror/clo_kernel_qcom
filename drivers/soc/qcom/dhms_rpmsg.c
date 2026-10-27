@@ -560,6 +560,14 @@ static void dhms_release_dmabuf_multi(struct dhms_device *ctx,
 
 	send_count = dhms_send_release_to_all(ctx, buf);
 
+	/*
+	 * WORKAROUND: Add a 1ms delay before tearing down the IOMMU mapping.
+	 * TODO: Remove once LMCU firmware  add fix.
+	 *
+	 */
+	if (send_count > 0)
+		usleep_range(1000, 1500);
+
 	dhms_buf_free_resources(buf);
 
 	if (send_count > 0) {

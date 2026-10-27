@@ -46,9 +46,9 @@ static const struct pll_vco taycan_eko_t_vco[] = {
 	{ 249600000, 2500000000, 0 },
 };
 
-/* 840.0 MHz Configuration */
+/* 360.0 MHz Configuration */
 static struct alpha_pll_config eva_cc_pll0_config = {
-	.l = 0x2b,
+	.l = 0x12,
 	.cal_l = 0x48,
 	.alpha = 0xc000,
 	.config_ctl_val = 0x25c400e7,
@@ -135,11 +135,12 @@ static struct clk_rcg2 eva_cc_ahb_clk_src = {
 		.vdd_class = &vdd_mm,
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 19200000},
+			[VDD_LOWER_D1_1] = 19200000},
 	},
 };
 
 static const struct freq_tbl ftbl_eva_cc_mvs0_clk_src[] = {
+	F(360000000, P_EVA_CC_PLL0_OUT_MAIN, 1, 0, 0),
 	F(840000000, P_EVA_CC_PLL0_OUT_MAIN, 1, 0, 0),
 	F(1050000000, P_EVA_CC_PLL0_OUT_MAIN, 1, 0, 0),
 	F(1350000000, P_EVA_CC_PLL0_OUT_MAIN, 1, 0, 0),
@@ -168,6 +169,7 @@ static struct clk_rcg2 eva_cc_mvs0_clk_src = {
 		.num_vdd_classes = ARRAY_SIZE(eva_cc_pikachu_regulators),
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
+			[VDD_LOWER_D1_1] = 360000000,
 			[VDD_LOWER_D1] = 840000000,
 			[VDD_LOWER] = 1050000000,
 			[VDD_LOW] = 1350000000,
@@ -200,7 +202,7 @@ static struct clk_rcg2 eva_cc_sleep_clk_src = {
 		.vdd_class = &vdd_mm,
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 32000},
+			[VDD_LOWER_D1_1] = 32000},
 	},
 };
 
@@ -223,7 +225,7 @@ static struct clk_rcg2 eva_cc_xo_clk_src = {
 		.vdd_class = &vdd_mm,
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_LOWER_D1] = 19200000},
+			[VDD_LOWER_D1_1] = 19200000},
 	},
 };
 

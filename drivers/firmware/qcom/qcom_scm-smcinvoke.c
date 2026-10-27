@@ -132,8 +132,10 @@ int qcom_scm_pas_shutdown(u32 peripheral)
 	if (ret)
 		return ret;
 
-	/* Release the smo */
-	qcom_smci_release_smo(SMCI_PILOBJECT_UID, peripheral);
+	/* Release the SMO and PIL sessions in TZ to free the allocated memory only
+	 * when unlockArea succeeds, as the device will panic if unlockArea fails.
+	 */
+	qcom_smci_release_image_service(SMCI_PILOBJECT_UID, peripheral);
 
 	return ret;
 }
@@ -243,7 +245,8 @@ int qcom_scm_pas_auth_and_reset(u32 peripheral)
 	/*
 	 * The memory area will be unlocked during PIL shutdown; store the SMO
 	 * to be released at that time.
-	 * qcom_smci_release_smo will be called in PIL shutdown to release SMO.
+	 * qcom_smci_release_image_service will be called in PIL shutdown to
+	 * release SMO.
 	 */
 	qcom_smci_store_smo(SMCI_PILOBJECT_UID, peripheral, smo);
 

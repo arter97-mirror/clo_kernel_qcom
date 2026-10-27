@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 /*******************************************************************************
   Copyright (C) 2013  Vayavya Labs Pvt Ltd
 
@@ -186,18 +187,23 @@ static int adjust_systime(void __iomem *ioaddr, u32 sec, u32 nsec,
 	return 0;
 }
 
-static void get_systime(void __iomem *ioaddr, u64 *systime)
+static void get_systime(struct stmmac_priv *priv, void __iomem *ioaddr, u64 *systime)
 {
 	u64 ns, sec0, sec1;
+	void __iomem *systimeaddr = ioaddr;
+
+	/* Qualcomm HW Errata resolution*/
+	if (priv->plat->dwxgmac_addrs && priv->plat->dwxgmac_addrs->systime_base)
+		systimeaddr = priv->ioaddr + priv->plat->dwxgmac_addrs->systime_base;
 
 	/* Get the TSS value */
-	sec1 = readl_relaxed(ioaddr + PTP_STSR);
+	sec1 = readl_relaxed(systimeaddr + PTP_STSR);
 	do {
 		sec0 = sec1;
 		/* Get the TSSS value */
-		ns = readl_relaxed(ioaddr + PTP_STNSR);
+		ns = readl_relaxed(systimeaddr + PTP_STNSR);
 		/* Get the TSS value */
-		sec1 = readl_relaxed(ioaddr + PTP_STSR);
+		sec1 = readl_relaxed(systimeaddr + PTP_STSR);
 	} while (sec0 != sec1);
 
 	if (systime)

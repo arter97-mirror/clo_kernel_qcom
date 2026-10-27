@@ -954,7 +954,7 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 	struct battery_chg_dev *bcdev = container_of(work,
 					struct battery_chg_dev, usb_type_work);
 	struct power_supply_desc *desc;
-	struct psy_state *pst;
+	struct psy_state *pst = NULL;
 	int rc, i;
 
 	for (i = 0; i < NUM_USB_PORTS; i++) {
@@ -976,6 +976,11 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 		}
 
 		desc = &usb_psy_desc[i];
+
+		if (!pst) {
+			pr_err("USB power supply is NULL\n");
+			return;
+		}
 
 		rc = read_property_id(bcdev, pst, USB_ADAP_TYPE);
 		if (rc < 0) {
