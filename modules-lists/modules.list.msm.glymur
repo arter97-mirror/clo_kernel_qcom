@@ -16,6 +16,7 @@ qcom-pdc.ko
 pinctrl-msm.ko
 pinctrl-glymur.ko
 debug_symbol.ko
+minidump.ko
 qcom-dcvs.ko
 memory_dump_v2.ko
 dcc_v2.ko
