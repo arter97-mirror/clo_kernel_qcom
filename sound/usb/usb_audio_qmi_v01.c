@@ -83,7 +83,7 @@ static struct qmi_elem_info apps_mem_info_v01_ei[] = {
 		.elem_size	= sizeof(struct mem_info_v01),
 		.array_type	= NO_ARRAY,
 		.tlv_type	= 0,
-		.offset		= offsetof(struct apps_mem_info_v01, dcba),
+		.offset		= offsetof(struct apps_mem_info_v01, pseudo_evt_ring),
 		.ei_array	= mem_info_v01_ei,
 	},
 	{

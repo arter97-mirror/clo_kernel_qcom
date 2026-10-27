@@ -27,6 +27,7 @@ struct apps_mem_info_v01 {
 	struct mem_info_v01 tr_sync;
 	struct mem_info_v01 xfer_buff;
 	struct mem_info_v01 dcba;
+	struct mem_info_v01 pseudo_evt_ring;
 };
 
 struct usb_endpoint_descriptor_v01 {

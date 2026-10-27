@@ -591,6 +591,15 @@ struct dwc3_msm {
 	bool			in_host_mode;
 	bool			in_device_mode;
 	enum usb_device_speed	max_rh_port_speed;
+	/* Number of direct-attach USB devices currently connected.
+	 * Incremented on USB_DEVICE_ADD, decremented on USB_DEVICE_REMOVE
+	 * by dwc3_msm_host_notifier().  dwc3_otg_start_host(0) waits for
+	 * this to reach zero before tearing down the controller, ensuring
+	 * all usb_disconnect() paths (including xhci_sideband_remove_endpoint
+	 * -> xhci_stop_endpoint_sync) complete before the PHY/clocks are cut.
+	 */
+	atomic_t		connected_device_count;
+	wait_queue_head_t	device_disconnect_wq;
 	bool			perf_mode;
 	bool			check_eud_state;
 	bool			vbus_active;
@@ -3699,6 +3708,16 @@ void dwc3_msm_notify_event(struct dwc3 *dwc,
 	case DWC3_IMEM_UPDATE_PID:
 		dwc3_msm_update_imem_pid(dwc);
 		break;
+	case DWC3_QSRAM_WRITE:
+		if (atomic_read(&mdwc->in_lpm) || !mdwc->in_host_mode || !mdwc->qsram)
+			dev_err(mdwc->dev, "qsram not available\n");
+			break;
+		if (mdwc->in_host_mode) {
+			u32 offset = (void __iomem *)&mdwc->qsram->data[4] - mdwc->base;
+
+			dwc3_msm_write_reg(mdwc->base, offset, value);
+		}
+		break;
 	default:
 		dev_dbg(mdwc->dev, "unknown dwc3 event\n");
 		break;
@@ -4114,7 +4133,7 @@ static void configure_usb_wakeup_interrupts(struct dwc3_msm *mdwc, bool enable)
 		} else {
 			configure_usb_wakeup_interrupt(mdwc,
 				&mdwc->wakeup_irq[DM_HS_PHY_IRQ],
-				IRQ_TYPE_EDGE_FALLING, enable);
+				IRQ_TYPE_LEVEL_LOW, enable);
 		}
 
 	} else if (mdwc->phy_flags & PHY_HSFS_MODE) {
@@ -4135,7 +4154,7 @@ static void configure_usb_wakeup_interrupts(struct dwc3_msm *mdwc, bool enable)
 		} else {
 			configure_usb_wakeup_interrupt(mdwc,
 				&mdwc->wakeup_irq[DP_HS_PHY_IRQ],
-				IRQ_TYPE_EDGE_FALLING, enable);
+				IRQ_TYPE_LEVEL_LOW, enable);
 		}
 
 	} else {
@@ -4147,13 +4166,11 @@ static void configure_usb_wakeup_interrupts(struct dwc3_msm *mdwc, bool enable)
 		configure_usb_wakeup_interrupt(mdwc,
 			&mdwc->wakeup_irq[DP_HS_PHY_IRQ],
 			mdwc->in_host_mode ?
-			(IRQF_TRIGGER_HIGH | IRQ_TYPE_LEVEL_HIGH) :
-			IRQ_TYPE_EDGE_RISING, true);
+			IRQ_TYPE_LEVEL_HIGH : IRQ_TYPE_EDGE_RISING, true);
 		configure_usb_wakeup_interrupt(mdwc,
 			&mdwc->wakeup_irq[DM_HS_PHY_IRQ],
 			mdwc->in_host_mode ?
-			(IRQF_TRIGGER_HIGH | IRQ_TYPE_LEVEL_HIGH) :
-			IRQ_TYPE_EDGE_RISING, true);
+			IRQ_TYPE_LEVEL_HIGH : IRQ_TYPE_EDGE_RISING, true);
 	}
 
 	configure_usb_wakeup_interrupt(mdwc,
@@ -5616,6 +5633,7 @@ static int dwc3_msm_set_role(struct dwc3_msm *mdwc, enum usb_role role)
 {
 	enum usb_role cur_role;
 
+
 	if (mdwc->dis_role_switch)
 		return -EPERM;
 
@@ -6253,20 +6271,22 @@ static int dwc3_msm_restart_usb_host(struct dwc3_msm *mdwc)
 		return 0;
 
 	mutex_lock(&mdwc->role_switch_mutex);
+	if (mdwc->id_state == DWC3_ID_FLOAT) {
+		mutex_unlock(&mdwc->role_switch_mutex);
+		return 0;
+	}
+	mutex_unlock(&mdwc->role_switch_mutex);
 
-	/* Check if USB cable disconnected */
-	if (mdwc->id_state == DWC3_ID_FLOAT)
-		goto exit;
-
-	/* stop USB host mode */
+	/*
+	 * dwc3_start_stop_host(false) flushes sm_usb_wq, whose queued
+	 * sm_work re-enters role_switch_mutex via dwc3_otg_start_host();
+	 * must not hold the mutex here or that flush deadlocks.
+	 */
 	ret = dwc3_start_stop_host(mdwc, false);
 	if (ret)
-		goto exit;
+		return ret;
 
 	dwc3_start_stop_host(mdwc, true);
-
-exit:
-	mutex_unlock(&mdwc->role_switch_mutex);
 
 	return ret;
 }
@@ -7096,6 +7116,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	INIT_WORK(&mdwc->restart_usb_work, dwc3_restart_usb_work);
 	INIT_WORK(&mdwc->sm_work, dwc3_otg_sm_work);
 	INIT_DELAYED_WORK(&mdwc->perf_vote_work, msm_dwc3_perf_vote_work);
+	atomic_set(&mdwc->connected_device_count, 0);
+	init_waitqueue_head(&mdwc->device_disconnect_wq);
 
 	dwc3_msm_debug_init(mdwc);
 
@@ -7551,6 +7573,9 @@ static int dwc3_msm_host_notifier(struct notifier_block *nb,
 	if (udev->parent && !udev->parent->parent &&
 			udev->dev.parent->parent == &dwc->xhci->dev) {
 		if (event == USB_DEVICE_ADD) {
+			atomic_inc(&mdwc->connected_device_count);
+			dev_dbg(mdwc->dev, "device connected, count=%d\n",
+				atomic_read(&mdwc->connected_device_count));
 			if (!dwc3_msm_is_ss_rhport_connected(mdwc)) {
 				if (!mdwc->fw_managed_pwr) {
 					/*
@@ -7594,6 +7619,17 @@ static int dwc3_msm_host_notifier(struct notifier_block *nb,
 
 			if (hcd && test_bit(HCD_FLAG_DEAD, &hcd->flags))
 				schedule_work(&mdwc->restart_usb_work);
+
+			/*
+			 * Decrement the connected device count and wake up
+			 * dwc3_otg_start_host(0) if it is waiting for all
+			 * devices to disconnect before tearing down the
+			 * controller.
+			 */
+			if (atomic_dec_and_test(&mdwc->connected_device_count)) {
+				dev_dbg(mdwc->dev, "last device disconnected\n");
+				wake_up(&mdwc->device_disconnect_wq);
+			}
 		}
 	} else if (!udev->parent) {
 		/* USB root hub device */
@@ -7855,19 +7891,65 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		pm_runtime_put_sync_autosuspend(mdwc->dev);
 	} else {
 		dev_dbg(mdwc->dev, "%s: turn off host\n", __func__);
-
+		mutex_lock(&mdwc->role_switch_mutex);
 		ret = dwc3_msm_altmode_safe(mdwc);
 		if (ret) {
 			dev_err(mdwc->dev, "failed to setup retimer to safe mode: %d\n", ret);
+			mutex_unlock(&mdwc->role_switch_mutex);
 			return ret;
 		}
 
 		vbus_regulator_toggle(mdwc, false);
+		/*
+		 * Wait for all directly-attached USB devices to complete their
+		 * disconnect sequence before tearing down the controller and
+		 * PHYs.  usb_role_switch_set_role(DEVICE) below triggers
+		 * xhci_remove() -> usb_disconnect() asynchronously through the
+		 * USB hub workqueue.  If a QMI offload stream-disable is in
+		 * progress at the same time, xhci_sideband_remove_endpoint()
+		 * -> xhci_stop_endpoint_sync() will time out because the
+		 * controller is already gone.
+		 *
+		 * Timeout of 2 s is generous; a normal USB disconnect completes
+		 * in well under 500 ms.
+		 */
+		if (atomic_read(&mdwc->connected_device_count) > 0) {
+			static char *envp[] = {
+					"USB_DISCONNECT_TIMEOUT=1",
+					NULL,
+			};
+			int wret, uret;
+
+			dev_dbg(mdwc->dev,
+				"%s: waiting for %d device(s) to disconnect\n",
+				__func__,
+				atomic_read(&mdwc->connected_device_count));
+			wret = wait_event_timeout(mdwc->device_disconnect_wq,
+				atomic_read(&mdwc->connected_device_count) == 0,
+				msecs_to_jiffies(3000));
+			if (!wret) {
+				dev_warn(mdwc->dev,
+					"%s: timed out waiting for device disconnect (count=%d)\n",
+					__func__,
+					atomic_read(&mdwc->connected_device_count));
+				uret = kobject_uevent_env(&mdwc->dev->kobj,
+					KOBJ_CHANGE, envp);
+				if (uret)
+					dev_dbg(mdwc->dev,
+						"%s: uevent send failed: %d\n",
+						__func__, uret);
+			} else
+				dev_dbg(mdwc->dev,
+					"%s: all devices disconnected\n",
+					__func__);
+		}
+
 		ret = pm_runtime_resume_and_get(&mdwc->dwc3->dev);
 		if (ret < 0) {
 			dev_err(mdwc->dev, "%s: pm_runtime_resume_and_get failed\n", __func__);
 			pm_runtime_set_suspended(&mdwc->dwc3->dev);
 			pm_runtime_set_suspended(mdwc->dev);
+			mutex_unlock(&mdwc->role_switch_mutex);
 			return ret;
 		}
 		dbg_event(0xFF, "StopHost gsync",
@@ -7885,7 +7967,6 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 			dwc3_msm_host_ss_powerup(mdwc);
 			dwc3_msm_clear_dp_only_params(mdwc);
 		}
-
 		/*
 		 * Performing phy disconnect before flush work to
 		 * address TypeC certification--TD 4.7.4 failure.
@@ -7904,25 +7985,57 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		usb_phy_notify_disconnect(mdwc->hs_phy, USB_SPEED_HIGH);
 
 		usb_role_switch_set_role(mdwc->dwc3_drd_sw, USB_ROLE_DEVICE);
+
 		if (dwc->dr_mode == USB_DR_MODE_OTG)
 			flush_work(&dwc->drd_work);
 
+		pr_err("UGMI: softconnect=%d\n", dwc->softconnect);
+
 		dwc3_msm_switch_utmi(mdwc, false);
 		dwc3_msm_clear_usbphy_flags(mdwc->hs_phy, PHY_HOST_MODE);
-		usb_unregister_notify(&mdwc->host_nb);
 
 		dwc3_msm_write_reg_field(mdwc->base, DWC3_GUSB3PIPECTL(0),
 				DWC3_GUSB3PIPECTL_SUSPHY, 0);
 
 		/* wait for LPM, to ensure h/w is reset after stop_host */
 		set_bit(WAIT_FOR_LPM, &mdwc->inputs);
-
-		pm_runtime_put_sync_suspend(&mdwc->dwc3->dev);
-		dbg_event(0xFF, "StopHost psync",
+		/*
+		 * Use pm_runtime_put() (async) instead of pm_runtime_put_sync_suspend()
+		 * to defer the dwc3 device suspend to after dwc3_otg_start_host(0)
+		 * returns to dwc3_otg_sm_work().
+		 *
+		 * The problem with pm_runtime_put_sync_suspend() here:
+		 * usb_role_switch_set_role(DEVICE) above already set
+		 * dwc->current_dr_role = DWC3_GCTL_PRTCAP_DEVICE inside the dwc3
+		 * core.  pm_runtime_put_sync_suspend() then immediately calls
+		 * dwc3_runtime_suspend() -> dwc3_suspend_common() which, seeing
+		 * current_dr_role == DEVICE, calls dwc3_gadget_suspend() ->
+		 * dwc3_gadget_run_stop(false).  That polls DSTS.DEVCTRLHLT for up
+		 * to 2 s, but the hardware is still completing host teardown and
+		 * never asserts DEVCTRLHLT -> -ETIMEDOUT.
+		 *
+		 * With pm_runtime_put() the suspend is scheduled asynchronously
+		 * and will only run after the current sm_work item returns,
+		 * by which time the dwc3 core has fully exited host mode and the
+		 * hardware is ready to accept the gadget stop sequence.
+		 */
+		//pm_runtime_put_sync_suspend(&mdwc->dwc3->dev);
+		pm_runtime_put(&mdwc->dwc3->dev);
+		dbg_event(0xFF, "StopHost put sync",
 			atomic_read(&mdwc->dev->power.usage_count));
 
+		usb_unregister_notify(&mdwc->host_nb);
 		if (mdwc->wcd_usbss)
 			wcd_usbss_switch_update(WCD_USBSS_USB, WCD_USBSS_CABLE_DISCONNECT);
+
+		/*
+		 * Reset the counter so a subsequent host-mode start sees a clean
+		 * slate.  Any devices that disconnected during teardown will have
+		 * already decremented it via dwc3_msm_host_notifier(); this
+		 * handles the timeout path where the counter may still be non-zero.
+		 */
+		atomic_set(&mdwc->connected_device_count, 0);
+		mutex_unlock(&mdwc->role_switch_mutex);
 	}
 
 	return 0;
