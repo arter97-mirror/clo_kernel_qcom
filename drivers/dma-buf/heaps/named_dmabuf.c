@@ -6,6 +6,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/fdtable.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
@@ -14,6 +15,7 @@
 #include <linux/rwsem.h>
 #include <linux/ctype.h>
 #include <linux/dma-buf.h>
+#include <linux/dma-mapping.h>
 #include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/cdev.h>
@@ -49,6 +51,13 @@ struct named_dmabuf_inst {
 	/* Instance name (from DT "instance-name" or device name fallback) */
 	char inst_name[NAMED_DMABUF_INST_NAME_LEN];
 
+	/* Platform device; needed for dma_buf_attach in carveout validation */
+	struct device *dev;
+
+	/* Carveout backing this instance; 0 = no carveout (phase 1 behavior) */
+	phys_addr_t carveout_base;
+	size_t      carveout_size;
+
 	/* Per-instance buffer registry */
 	struct mutex registry_lock;
 	struct list_head registry;
@@ -71,6 +80,8 @@ struct named_dmabuf {
 	bool rdonly;
 	bool ready;
 	bool dying;		/* set under registry_lock before list_del in destroy */
+	bool carveout_validated; /* true = carveout_offset below is meaningful */
+	u64  carveout_offset; /* bytes from inst->carveout_base */
 	kuid_t creator_uid;
 	struct dma_buf *dmabuf;
 	struct cdev cdev;
@@ -274,24 +285,21 @@ static const struct file_operations named_cdev_fops = {
 /* Core create / destroy */
 
 /*
- * Register @dmabuf_fd under @name for this instance.  The registry duplicate
- * check and list_add happen before cdev_add so that no open() can race against
- * the check.  The entry is inserted with ready=false and only becomes visible
- * to consumers after device_create succeeds.  The driver holds one dmabuf ref
- * for the lifetime of the registry entry; it is released only when
- * named_dmabuf_destroy() is called.
+ * Register @dmabuf under @name for this instance.  Takes a dma_buf * directly;
+ * the caller is responsible for calling dma_buf_get() or constructing the buf.
+ * The registry duplicate check and list_add happen before cdev_add so that no
+ * open() can race against the check.  The entry is inserted with ready=false
+ * and only becomes visible to consumers after device_create succeeds.  The
+ * driver holds one dmabuf ref for the lifetime of the registry entry.
  */
-static int named_dmabuf_create(struct named_dmabuf_inst *inst,
-				const char *name, int dmabuf_fd, bool rdonly)
+static int __named_dmabuf_register(struct named_dmabuf_inst *inst,
+				   const char *name, struct dma_buf *dmabuf,
+				   bool rdonly, bool carveout_validated,
+				   u64 carveout_offset)
 {
 	struct named_dmabuf *b;
-	struct dma_buf *dmabuf;
 	struct device *dev;
 	int ret;
-
-	dmabuf = dma_buf_get(dmabuf_fd);
-	if (IS_ERR(dmabuf))
-		return PTR_ERR(dmabuf);
 
 	b = kzalloc(sizeof(*b), GFP_KERNEL);
 	if (!b) {
@@ -304,6 +312,8 @@ static int named_dmabuf_create(struct named_dmabuf_inst *inst,
 	strscpy(b->name, name, sizeof(b->name));
 	WRITE_ONCE(b->dmabuf, dmabuf);
 	WRITE_ONCE(b->rdonly, rdonly);
+	b->carveout_validated = carveout_validated;
+	b->carveout_offset    = carveout_offset;
 	b->creator_uid = current_uid();
 	b->inst = inst;
 
@@ -374,6 +384,93 @@ err_free_no_ida:
 }
 
 /*
+ * Validate that @dmabuf is physically contiguous and falls within @inst's
+ * carveout.  On success writes the byte offset from carveout_base into
+ * @offset.  The attach/map/unmap/detach sequence is validation-only; the
+ * registry entry holds a normal dmabuf ref, not a persistent attachment.
+ */
+static int named_dmabuf_validate_carveout(struct named_dmabuf_inst *inst,
+					  struct dma_buf *dmabuf, u64 *offset)
+{
+	struct dma_buf_attachment *attach;
+	struct sg_table *sgt;
+	phys_addr_t pa;
+	size_t size;
+	int ret = 0;
+
+	attach = dma_buf_attach(dmabuf, inst->dev);
+	if (IS_ERR(attach))
+		return PTR_ERR(attach);
+
+	/*
+	 * The carveout is no-map: it has no kernel VA in the linear map, so
+	 * any SWIOTLB bounce attempt will fault.  Tell the DMA layer we can
+	 * consume the physical address directly (peer2peer) and skip the CPU
+	 * cache-sync that would also dereference the unmapped VA.
+	 */
+	attach->peer2peer      = true;
+	attach->dma_map_attrs |= DMA_ATTR_SKIP_CPU_SYNC;
+
+	sgt = dma_buf_map_attachment_unlocked(attach, DMA_BIDIRECTIONAL);
+	if (IS_ERR(sgt)) {
+		ret = PTR_ERR(sgt);
+		goto err_detach;
+	}
+
+	if (sgt->orig_nents != 1) {
+		ret = -EINVAL;
+		goto err_unmap;
+	}
+
+	pa   = sg_dma_address(sgt->sgl);
+	size = sg_dma_len(sgt->sgl);
+
+	if (pa < inst->carveout_base ||
+	    size > inst->carveout_size ||
+	    pa - inst->carveout_base > inst->carveout_size - size) {
+		ret = -ERANGE;
+		goto err_unmap;
+	}
+
+	*offset = pa - inst->carveout_base;
+
+err_unmap:
+	dma_buf_unmap_attachment_unlocked(attach, sgt, DMA_BIDIRECTIONAL);
+err_detach:
+	dma_buf_detach(dmabuf, attach);
+	return ret;
+}
+
+/*
+ * IOC_CREATE path: get the dmabuf from userspace fd, optionally validate
+ * against the carveout, then register via __named_dmabuf_register.
+ */
+static int named_dmabuf_create(struct named_dmabuf_inst *inst,
+				const char *name, int dmabuf_fd, bool rdonly)
+{
+	struct dma_buf *dmabuf;
+	bool validated = false;
+	u64 offset = 0;
+	int ret;
+
+	dmabuf = dma_buf_get(dmabuf_fd);
+	if (IS_ERR(dmabuf))
+		return PTR_ERR(dmabuf);
+
+	if (inst->carveout_size) {
+		ret = named_dmabuf_validate_carveout(inst, dmabuf, &offset);
+		if (ret) {
+			dma_buf_put(dmabuf);
+			return ret;
+		}
+		validated = true;
+	}
+
+	return __named_dmabuf_register(inst, name, dmabuf, rdonly,
+				       validated, offset);
+}
+
+/*
  * Unregister @name from the instance registry.  Requires the caller to be the
  * creator (matched by UID) or hold CAP_SYS_ADMIN.  Drops the driver's dmabuf
  * ref and the registry kref; existing consumer fds remain valid because each
@@ -411,6 +508,101 @@ static int named_dmabuf_destroy(struct named_dmabuf_inst *inst, const char *name
 	kref_put(&b->refcount, named_dmabuf_release);
 	trace_named_dmabuf_destroy(name);
 	return 0;
+}
+
+/* In-driver raw dmabuf exporter — used only for IOC_IMPORT_REMOTE */
+
+struct ndmabuf_raw_buf {
+	phys_addr_t paddr;
+	size_t      size;
+};
+
+static struct sg_table *ndmabuf_raw_map(struct dma_buf_attachment *attach,
+					enum dma_data_direction dir)
+{
+	struct ndmabuf_raw_buf *raw = attach->dmabuf->priv;
+	struct sg_table *sgt;
+	int ret;
+
+	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt)
+		return ERR_PTR(-ENOMEM);
+
+	ret = sg_alloc_table(sgt, 1, GFP_KERNEL);
+	if (ret) {
+		kfree(sgt);
+		return ERR_PTR(ret);
+	}
+
+	/*
+	 * No-map carveout: the hypervisor has already established the mapping.
+	 * Set dma address and length directly; there is no valid struct page for
+	 * this memory so we skip sg_set_page to avoid pfn_to_page on an unmapped
+	 * PFN, which would produce a garbage page pointer on platforms where the
+	 * carveout lies outside the kernel memmap.
+	 */
+	sg_dma_address(sgt->sgl) = raw->paddr;
+	sg_dma_len(sgt->sgl)     = raw->size;
+
+	return sgt;
+}
+
+static void ndmabuf_raw_unmap(struct dma_buf_attachment *attach,
+			      struct sg_table *sgt,
+			      enum dma_data_direction dir)
+{
+	sg_free_table(sgt);
+	kfree(sgt);
+}
+
+static int ndmabuf_raw_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
+{
+	struct ndmabuf_raw_buf *raw = dmabuf->priv;
+	unsigned long size = vma->vm_end - vma->vm_start;
+
+	if (size > raw->size)
+		return -EINVAL;
+
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	return remap_pfn_range(vma, vma->vm_start,
+			       PHYS_PFN(raw->paddr), size,
+			       vma->vm_page_prot);
+}
+
+static void ndmabuf_raw_release(struct dma_buf *dmabuf)
+{
+	kfree(dmabuf->priv);
+}
+
+static const struct dma_buf_ops ndmabuf_raw_ops = {
+	.map_dma_buf   = ndmabuf_raw_map,
+	.unmap_dma_buf = ndmabuf_raw_unmap,
+	.mmap          = ndmabuf_raw_mmap,
+	.release       = ndmabuf_raw_release,
+};
+
+static struct dma_buf *ndmabuf_raw_create(phys_addr_t paddr, size_t size)
+{
+	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+	struct ndmabuf_raw_buf *raw;
+	struct dma_buf *dmabuf;
+
+	raw = kzalloc(sizeof(*raw), GFP_KERNEL);
+	if (!raw)
+		return ERR_PTR(-ENOMEM);
+
+	raw->paddr = paddr;
+	raw->size  = size;
+
+	exp_info.ops   = &ndmabuf_raw_ops;
+	exp_info.size  = size;
+	exp_info.flags = O_RDWR;
+	exp_info.priv  = raw;
+
+	dmabuf = dma_buf_export(&exp_info);
+	if (IS_ERR(dmabuf))
+		kfree(raw);
+	return dmabuf;
 }
 
 /* Control device ioctl handlers */
@@ -519,6 +711,103 @@ static int named_dmabuf_ioctl_destroy(struct named_dmabuf_inst *inst,
 	return named_dmabuf_destroy(inst, d.name);
 }
 
+/*
+ * IOC_GET_EXPORT_INFO: return the carveout export tuple for a named buffer.
+ */
+static int named_dmabuf_ioctl_get_export_info(struct named_dmabuf_inst *inst,
+					      unsigned long arg)
+{
+	struct named_dmabuf_export_info info;
+	struct named_dmabuf *b;
+	struct dma_buf *dmabuf;
+	int err = 0;
+
+	if (copy_from_user(&info, (void __user *)arg, sizeof(info)))
+		return -EFAULT;
+
+	info.name[NAMED_DMABUF_NAME_LEN - 1] = '\0';
+	if (!named_dmabuf_name_valid(info.name,
+				     strnlen(info.name, NAMED_DMABUF_NAME_LEN)))
+		return -EINVAL;
+
+	b = __registry_acquire(inst, info.name);
+	if (!b)
+		return -ENOENT;
+
+	if (!b->carveout_validated) {
+		kref_put(&b->refcount, named_dmabuf_release);
+		return -EOPNOTSUPP;
+	}
+
+	if (!uid_eq(current_uid(), b->creator_uid) &&
+	    !ns_capable(&init_user_ns, CAP_SYS_ADMIN)) {
+		kref_put(&b->refcount, named_dmabuf_release);
+		return -EPERM;
+	}
+
+	dmabuf = READ_ONCE(b->dmabuf);
+	memcpy(info.inst_name, inst->inst_name, sizeof(info.inst_name));
+	info.offset = b->carveout_offset;
+	info.size   = dmabuf->size;
+
+	if (copy_to_user((void __user *)arg, &info, sizeof(info)))
+		err = -EFAULT;
+	kref_put(&b->refcount, named_dmabuf_release);
+	return err;
+}
+
+/*
+ * IOC_IMPORT_REMOTE: validate an export tuple, construct a raw dmabuf from
+ * the carveout PA, and register it under the given name.
+ */
+static int named_dmabuf_ioctl_import_remote(struct named_dmabuf_inst *inst,
+					    unsigned long arg)
+{
+	struct named_dmabuf_import imp;
+	struct dma_buf *dmabuf;
+	int ret;
+
+	if (copy_from_user(&imp, (void __user *)arg, sizeof(imp)))
+		return -EFAULT;
+
+	imp.name[NAMED_DMABUF_NAME_LEN - 1]      = '\0';
+	imp.inst_name[NAMED_DMABUF_NAME_LEN - 1] = '\0';
+
+	if (!named_dmabuf_name_valid(imp.name,
+				     strnlen(imp.name, NAMED_DMABUF_NAME_LEN)))
+		return -EINVAL;
+
+	if (!inst->carveout_size)
+		return -ENODEV;
+
+	if (memcmp(imp.inst_name, inst->inst_name, NAMED_DMABUF_NAME_LEN))
+		return -EINVAL;
+
+	if (imp.size == 0 ||
+	    imp.offset >= inst->carveout_size ||
+	    imp.size   > inst->carveout_size - imp.offset)
+		return -ERANGE;
+
+	if (!PAGE_ALIGNED(imp.offset) || !PAGE_ALIGNED(imp.size))
+		return -EINVAL;
+
+	if (imp.flags & ~NAMED_DMABUF_F_MASK)
+		return -EINVAL;
+
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+
+	dmabuf = ndmabuf_raw_create(inst->carveout_base + imp.offset, imp.size);
+	if (IS_ERR(dmabuf))
+		return PTR_ERR(dmabuf);
+
+	ret = __named_dmabuf_register(inst, imp.name, dmabuf,
+				      !!(imp.flags & NAMED_DMABUF_F_RDONLY),
+				      true, imp.offset);
+
+	return ret;
+}
+
 /* Control device ioctl dispatch */
 
 static long named_dmabuf_ioctl(struct file *filp, unsigned int cmd,
@@ -539,6 +828,12 @@ static long named_dmabuf_ioctl(struct file *filp, unsigned int cmd,
 		break;
 	case NAMED_DMABUF_IOC_DESTROY:
 		ret = named_dmabuf_ioctl_destroy(inst, arg);
+		break;
+	case NAMED_DMABUF_IOC_GET_EXPORT_INFO:
+		ret = named_dmabuf_ioctl_get_export_info(inst, arg);
+		break;
+	case NAMED_DMABUF_IOC_IMPORT_REMOTE:
+		ret = named_dmabuf_ioctl_import_remote(inst, arg);
 		break;
 	default:
 		ret = -ENOTTY;
@@ -579,12 +874,16 @@ static int named_dmabuf_probe(struct platform_device *pdev)
 {
 	struct named_dmabuf_inst *inst;
 	const char *inst_name = NULL;
+	struct device_node *np;
+	struct reserved_mem *rmem;
 	struct device *dev;
 	int ret;
 
 	inst = devm_kzalloc(&pdev->dev, sizeof(*inst), GFP_KERNEL);
 	if (!inst)
 		return -ENOMEM;
+
+	inst->dev = &pdev->dev;
 
 	mutex_init(&inst->registry_lock);
 	INIT_LIST_HEAD(&inst->registry);
@@ -596,6 +895,33 @@ static int named_dmabuf_probe(struct platform_device *pdev)
 		strscpy(inst->inst_name, inst_name, sizeof(inst->inst_name));
 	else
 		strscpy(inst->inst_name, pdev->name, sizeof(inst->inst_name));
+
+	np = of_parse_phandle(pdev->dev.of_node, "memory-region", 0);
+	if (np) {
+		rmem = of_reserved_mem_lookup(np);
+		of_node_put(np);
+		if (!rmem) {
+			dev_err(&pdev->dev, "memory-region not found\n");
+			ida_destroy(&inst->minor_ida);
+			return -EINVAL;
+		}
+		inst->carveout_base = rmem->base;
+		inst->carveout_size = rmem->size;
+		dev_info(&pdev->dev, "carveout %pa size %zu\n",
+			 &inst->carveout_base, inst->carveout_size);
+
+		/*
+		 * The carveout can sit above 4 GB.  Set a 64-bit DMA mask so
+		 * dma_capable() returns true for the carveout PA and the DMA
+		 * layer never routes it through SWIOTLB.
+		 */
+		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+		if (ret) {
+			dev_err(&pdev->dev, "failed to set 64-bit DMA mask: %d\n", ret);
+			ida_destroy(&inst->minor_ida);
+			return ret;
+		}
+	}
 
 	ret = alloc_chrdev_region(&inst->devt, 0, NAMED_DMABUF_MAX_MINORS, inst->inst_name);
 	if (ret) {
