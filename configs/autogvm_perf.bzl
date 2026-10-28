@@ -18,6 +18,7 @@ autogvm_perf_config = {
     "CONFIG_CFG80211_CRDA_SUPPORT": "n",
     "CONFIG_COMMON_CLK_QCOM": "m",
     "CONFIG_CRYPTO_DEV_QCOM_RNG": "m",
+    "CONFIG_DMABUF_HEAPS_SYSTEM": "m",
     "CONFIG_DRM_VIRTIO_GPU": "m",
     "CONFIG_DWMAC_QCOM_ETHQOS": "m",
     "CONFIG_EMAC_MDIO_FE": "m",
