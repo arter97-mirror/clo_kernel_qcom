@@ -152,8 +152,13 @@ static void m31eusb2_phy_update_eud_detect(struct m31eusb2_phy *phy, bool set)
 	if (!phy->eud_detect_reg)
 		return;
 
+	/*
+	 * eud_detect_reg is shared across ports (one EUD_DETECT bit per port),
+	 * so read-modify-write to avoid clearing the other ports' bits.
+	 */
 	if (set)
-		writel_relaxed(EUD_DETECT, phy->eud_detect_reg);
+		writel_relaxed(readl_relaxed(phy->eud_detect_reg) | EUD_DETECT,
+			       phy->eud_detect_reg);
 	else
 		writel_relaxed(readl_relaxed(phy->eud_detect_reg) & ~EUD_DETECT,
 			       phy->eud_detect_reg);
