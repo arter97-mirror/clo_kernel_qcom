@@ -139,15 +139,18 @@ void panel_event_notification_trigger(enum panel_event_notifier_tag tag,
 	for (i = 0; i < PANEL_EVENT_NOTIFIER_CLIENT_MAX; i++) {
 		mutex_lock(&panel_event_notifier_entries_lock);
 		entry = &panel_event_notifier_entries[i];
-		if (notification->panel != entry->panel) {
-			pr_debug("invalid panel found notification_panel\n");
+
+		/* skip if the notification panel and the registered panel are different */
+		if (entry->panel && notification->panel != entry->panel) {
+			pr_warn("invalid panel found notification_panel:%p entry_panel:%p\n",
+					notification->panel, entry->panel);
 			mutex_unlock(&panel_event_notifier_entries_lock);
 			continue;
 		}
 
 		/* skip client entries not subscribed to tag */
 		if (entry->tag != tag) {
-			pr_err("tag mismatch entry->tag:%d tag:%d\n", entry->tag, tag);
+			pr_warn("tag mismatch entry->tag:%d tag:%d\n", entry->tag, tag);
 			mutex_unlock(&panel_event_notifier_entries_lock);
 			continue;
 		}
