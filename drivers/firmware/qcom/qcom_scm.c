@@ -630,7 +630,7 @@ int qcom_scm_disable_sdi(void)
 	ret = qcom_scm_clk_enable();
 	if (ret)
 		return ret;
-	ret = qcom_scm_call(__scm->dev, &desc, &res);
+	ret = qcom_scm_call_atomic(__scm ? __scm->dev : NULL, &desc, &res);
 
 	qcom_scm_clk_disable();
 
