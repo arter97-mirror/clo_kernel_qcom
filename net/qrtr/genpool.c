@@ -408,7 +408,7 @@ static void qrtr_genpool_read(struct qrtr_genpool_dev *qdev)
 	wake_up_all(&qdev->tx_avail_notify);
 
 	while (qrtr_genpool_rx_avail(&qdev->rx_pipe)) {
-		if (qdev->ring.offset)
+		if (qdev->ring.len)
 			qrtr_genpool_read_frag(qdev);
 		else
 			qrtr_genpool_read_new(qdev);
