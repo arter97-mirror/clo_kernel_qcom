@@ -25,6 +25,8 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 
+#include "pci-host-common.h"
+
 #define PCIE_ECAM_LOG_PAGES (50)
 #define PCIE_ECAM_LOG_NAME_LEN (32)
 

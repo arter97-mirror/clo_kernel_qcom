@@ -1019,12 +1019,28 @@ static void msm_gpio_update_dual_edge_pos(struct msm_pinctrl *pctrl,
 		val, val2);
 }
 
+static bool msm_gpio_is_dirconn(struct msm_pinctrl *pctrl, unsigned long gpio)
+{
+	struct msm_dir_conn *dc;
+	int i;
+
+	for (i = pctrl->n_dir_conns; i > 0; i--) {
+		dc = &pctrl->soc->dir_conn[i];
+
+		if (dc->gpio == gpio)
+			return true;
+	}
+
+	return false;
+}
+
 static void msm_gpio_irq_mask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
+	bool is_dirconn;
 	u32 val;
 
 	if (d->parent_data)
@@ -1034,6 +1050,7 @@ static void msm_gpio_irq_mask(struct irq_data *d)
 		return;
 
 	g = &pctrl->soc->groups[d->hwirq];
+	is_dirconn = msm_gpio_is_dirconn(pctrl, d->hwirq);
 
 	raw_spin_lock_irqsave(&pctrl->lock, flags);
 
@@ -1057,12 +1074,20 @@ static void msm_gpio_irq_mask(struct irq_data *d)
 	 * we ack it. We clear the raw status enable bit during mask here and
 	 * set the bit on unmask so the interrupt can't latch into the hardware
 	 * while it's masked.
+	 *
+	 * Direct-connect GPIOs are delivered through their dedicated parent IRQ.
+	 * Dont clear RAW_STATUS_EN so TLMM can continue latching the GPIO status
+	 * for direct-connect path, but keep INTR_ENABLE cleared to prevent duplicate
+	 * forwarding through the TLMM summary IRQ.
 	 */
-	if (irqd_get_trigger_type(d) & IRQ_TYPE_LEVEL_MASK)
+	if (!is_dirconn && irqd_get_trigger_type(d) & IRQ_TYPE_LEVEL_MASK)
 		val &= ~BIT(g->intr_raw_status_bit);
 
 	val &= ~BIT(g->intr_enable_bit);
 	msm_writel_intr_cfg(val, pctrl, g);
+
+	if (is_dirconn)
+		msm_ack_intr_status(pctrl, g);
 
 	clear_bit(d->hwirq, pctrl->enabled_irqs);
 
@@ -1075,6 +1100,7 @@ static void msm_gpio_irq_unmask(struct irq_data *d)
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
+	bool is_dirconn;
 	u32 val;
 
 	if (d->parent_data)
@@ -1084,15 +1110,32 @@ static void msm_gpio_irq_unmask(struct irq_data *d)
 		return;
 
 	g = &pctrl->soc->groups[d->hwirq];
+	is_dirconn = msm_gpio_is_dirconn(pctrl, d->hwirq);
 
 	raw_spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = msm_readl_intr_cfg(pctrl, g);
+
+	/*
+	 * RAW_STATUS_EN must be enabled for both normal and
+	 * direct-connect GPIOs so the hardware can latch the IRQ.
+	 */
 	val |= BIT(g->intr_raw_status_bit);
-	val |= BIT(g->intr_enable_bit);
+
+	if (is_dirconn)
+		val &= ~BIT(g->intr_enable_bit);
+	else
+		val |= BIT(g->intr_enable_bit);
+
 	msm_writel_intr_cfg(val, pctrl, g);
 
-	set_bit(d->hwirq, pctrl->enabled_irqs);
+	if (is_dirconn) {
+		clear_bit(d->hwirq, pctrl->enabled_irqs);
+		msm_ack_intr_status(pctrl, g);
+	} else {
+		set_bit(d->hwirq, pctrl->enabled_irqs);
+	}
+
 
 	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
 }
@@ -1799,7 +1842,7 @@ static void msm_gpio_setup_dir_connects(struct msm_pinctrl *pctrl)
 	for (i = n_dir_conns; i > 0; i--) {
 		dc = &pctrl->soc->dir_conn[i];
 		dirconn_irq = dc->irq;
-		offset = n_dir_conns - i;
+		offset = i - 1;
 
 		if (dc->gpio == -1)
 			continue;
@@ -1860,17 +1903,21 @@ static int pinctrl_hibernation_notifier(struct notifier_block *nb,
 	struct msm_pinctrl *pctrl = msm_pinctrl_data;
 
 	/*
-	 * Save/restore GPIO registers for any suspend-to-RAM style
-	 * transition, not just true hibernation. pm_suspend_target_state
-	 * cannot be used here to narrow this down to PM_SUSPEND_MEM: it is
-	 * only assigned in suspend_devices_and_enter(), which runs after
-	 * this PM_SUSPEND_PREPARE/PM_POST_SUSPEND notifier chain has
-	 * already been dispatched from suspend_prepare(), so it would
+	 * pm_suspend_target_state cannot be used here to narrow this down
+	 * to PM_SUSPEND_MEM: it is only assigned in
+	 * suspend_devices_and_enter(), which runs after this notifier chain
+	 * has already been dispatched from suspend_prepare(), so it would
 	 * always read a stale value here.
+	 *
+	 * Arming for PM_SUSPEND_PREPARE fires for every suspend type
+	 * including LPM, causing a NULL-deref on chip->valid_mask. Only
+	 * arm for hibernation and image restore; deep sleep is gated in
+	 * the syscore callback where pm_suspend_target_state is valid.
+	 * PM_POST_RESTORE clears the flag after image restore overwrites it.
 	 */
-	if (event == PM_HIBERNATION_PREPARE || event == PM_SUSPEND_PREPARE)
+	if (event == PM_HIBERNATION_PREPARE || event == PM_RESTORE_PREPARE)
 		pctrl->hibernation = true;
-	else if (event == PM_POST_HIBERNATION || event == PM_POST_SUSPEND)
+	else if (event == PM_POST_HIBERNATION || event == PM_POST_RESTORE)
 		pctrl->hibernation = false;
 	return NOTIFY_OK;
 }
@@ -1921,7 +1968,7 @@ static int msm_pinctrl_hibernation_suspend(void)
 
 	/* All normal gpios will have common registers, first save them */
 	for (i = 0; i < soc->ngpios; i++) {
-		if (!test_bit(i, chip->valid_mask))
+		if (!gpiochip_line_is_valid(chip, i))
 			continue;
 
 		pgroup = &soc->groups[i];
@@ -1938,10 +1985,12 @@ static int msm_pinctrl_hibernation_suspend(void)
 				msm_readl_intr_status(pctrl, pgroup);
 	}
 
+	/* Non-GPIO groups: special function pins (SDC, UFS, etc.) at indices
+	 * soc->ngpios to soc->ngroups-1. These are beyond the GPIO chip's
+	 * domain (i >= chip->ngpio) and not tracked by the valid_mask bitmap.
+	 * Always save unconditionally.
+	 */
 	for ( ; i < soc->ngroups; i++) {
-		if (!test_bit(i, chip->valid_mask))
-			continue;
-
 		pgroup = &soc->groups[i];
 		if (pgroup->ctl_reg)
 			pctrl->gpio_regs[i].ctl_reg =
@@ -1980,7 +2029,7 @@ static void msm_pinctrl_hibernation_resume(void)
 
     /* Restore normal gpios */
 	for (i = 0; i < soc->ngpios; i++) {
-		if (!test_bit(i, chip->valid_mask))
+		if (!gpiochip_line_is_valid(chip, i))
 			continue;
 
 		pgroup = &soc->groups[i];
@@ -1994,10 +2043,12 @@ static void msm_pinctrl_hibernation_resume(void)
 					pctrl, pgroup);
 	}
 
+	/* Non-GPIO groups: special function pins (SDC, UFS, etc.) at indices
+	 * soc->ngpios to soc->ngroups-1. These are beyond the GPIO chip's
+	 * domain (i >= chip->ngpio) and not tracked by the valid_mask bitmap.
+	 * Always restore unconditionally.
+	 */
 	for ( ; i < soc->ngroups; i++) {
-		if (!test_bit(i, chip->valid_mask))
-			continue;
-
 		pgroup = &soc->groups[i];
 		if (pgroup->ctl_reg)
 			msm_writel_ctl(pctrl->gpio_regs[i].ctl_reg,

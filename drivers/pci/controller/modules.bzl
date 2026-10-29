@@ -44,6 +44,7 @@ def register_modules(registry):
         srcs = [
             # do not sort
             "drivers/pci/controller/pcie-qcom-ecam.c",
+            "drivers/pci/controller/pci-host-common.h",
         ],
         deps = [
             # do not sort

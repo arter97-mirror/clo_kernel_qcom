@@ -1,9 +1,11 @@
+load(":drivers/misc/fl7112/modules.bzl", register_fl7112 = "register_modules")
 load(":drivers/misc/isl97900_led/modules.bzl", register_isl97900_led = "register_modules")
 load(":drivers/misc/lkdtm/modules.bzl", register_lkdtm = "register_modules")
 
 def register_modules(registry):
-    register_lkdtm(registry)
+    register_fl7112(registry)
     register_isl97900_led(registry)
+    register_lkdtm(registry)
 
     registry.register(
         name = "drivers/misc/qseecom_proxy",
