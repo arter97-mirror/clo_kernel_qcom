@@ -102,4 +102,7 @@ config SLG4DC_SIGNAL_IC
 	  power device using I2C.
 
 	  Say Y if you want to enable SLG4DC driver.
+
+source "$(KCONFIG_EXT_PREFIX)drivers/misc/fl7112/Kconfig"
+
 endmenu

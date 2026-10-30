@@ -178,6 +178,7 @@ int aw21104_bys_led_probe(struct i2c_client *client)
 	ret = regmap_read(chip->regmap, AW21104_REG_CHIP_ID, &chipid);
 	if (ret) {
 		dev_err(&client->dev, "Failed to read chip ID: %d\n", ret);
+		ret = -EPROBE_DEFER;
 		goto error2;
 	}
 	dev_dbg(&client->dev, "expected: 0x40 ChipId read is :%x\n", chipid);

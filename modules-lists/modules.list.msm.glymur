@@ -17,11 +17,14 @@ pinctrl-msm.ko
 pinctrl-glymur.ko
 debug_symbol.ko
 qcom-dcvs.ko
+memory_dump_v2.ko
+dcc_v2.ko
 qcom-dload-mode.ko
 qcom_cpu_vendor_hooks.ko
 icc-bcm-voter.ko
 icc-debug.ko
 icc-rpmh.ko
+crm-v2.ko
 qnoc-qos.ko
 qnoc-glymur.ko
 debug-regulator.ko
@@ -108,9 +111,6 @@ qcom_logbuf_vendor_hooks.ko
 qcom_logbuf_boot_log.ko
 qcom_tsens.ko
 thermal_pause.ko
-qcom-cpufreq-thermal.ko
-msm_kgsl.ko
-qti_qmi_cdev.ko
 slim-qcom-ngd-ctrl.ko
 slimbus.ko
 bam_dma.ko

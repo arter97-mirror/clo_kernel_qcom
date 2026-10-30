@@ -52,7 +52,9 @@ struct pm8xxx_rtc_regs {
  * @rtc:		RTC device
  * @regmap:		regmap used to access registers
  * @allow_set_time:	whether the time can be set
- * @alarm_irq:		alarm irq number
+ * @no_alarm:		whether the alarm irq is owned by this device
+ * @alarm_irq:		alarm irq number, -1 if @no_alarm is set
+ * @alarm_irq_requested: whether @alarm_irq is currently requested
  * @regs:		register description
  * @dev:		device structure
  * @nvmem_cell:		nvmem cell for offset
@@ -64,6 +66,7 @@ struct pm8xxx_rtc {
 	bool allow_set_time;
 	bool no_alarm;
 	int alarm_irq;
+	bool alarm_irq_requested;
 	const struct pm8xxx_rtc_regs *regs;
 	struct device *dev;
 	struct nvmem_cell *nvmem_cell;
@@ -486,6 +489,7 @@ static int pm8xxx_rtc_probe(struct platform_device *pdev)
 	if (rtc_dd == NULL)
 		return -ENOMEM;
 
+	rtc_dd->alarm_irq = -1;
 	rtc_dd->regmap = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!rtc_dd->regmap)
 		return -ENXIO;
@@ -541,6 +545,7 @@ static int pm8xxx_rtc_probe(struct platform_device *pdev)
 						  "pm8xxx_rtc_alarm", rtc_dd);
 		if (rc < 0)
 			return rc;
+		rtc_dd->alarm_irq_requested = true;
 	}
 
 	rc = devm_rtc_register_device(rtc_dd->rtc);
@@ -563,15 +568,16 @@ static int pm8xxx_rtc_restore(struct device *dev)
 	struct pm8xxx_rtc *rtc_dd = dev_get_drvdata(dev);
 	int rc;
 
-	/* Request the alarm IRQ */
-	rc = devm_request_any_context_irq(rtc_dd->dev,
-					  rtc_dd->alarm_irq,
-					  pm8xxx_alarm_trigger,
-					  IRQF_TRIGGER_RISING,
-					  "pm8xxx_rtc_alarm", rtc_dd);
-	if (rc < 0) {
-		dev_err(rtc_dd->dev, "Request IRQ failed (%d)\n", rc);
-		return rc;
+	if (!rtc_dd->no_alarm && !rtc_dd->alarm_irq_requested) {
+		rc = devm_request_any_context_irq(rtc_dd->dev, rtc_dd->alarm_irq,
+						  pm8xxx_alarm_trigger,
+						  IRQF_TRIGGER_RISING,
+						  "pm8xxx_rtc_alarm", rtc_dd);
+		if (rc < 0) {
+			dev_err(rtc_dd->dev, "Request IRQ failed (%d)\n", rc);
+			return rc;
+		}
+		rtc_dd->alarm_irq_requested = true;
 	}
 
 	return pm8xxx_rtc_enable(rtc_dd);
@@ -581,7 +587,10 @@ static int pm8xxx_rtc_freeze(struct device *dev)
 {
 	struct pm8xxx_rtc *rtc_dd = dev_get_drvdata(dev);
 
-	devm_free_irq(rtc_dd->dev, rtc_dd->alarm_irq, rtc_dd);
+	if (!rtc_dd->no_alarm && rtc_dd->alarm_irq_requested) {
+		devm_free_irq(rtc_dd->dev, rtc_dd->alarm_irq, rtc_dd);
+		rtc_dd->alarm_irq_requested = false;
+	}
 
 	return 0;
 }
@@ -593,7 +602,7 @@ static int pm8xxx_rtc_resume(struct device *dev)
 	if (pm_suspend_target_state == PM_SUSPEND_MEM)
 		return pm8xxx_rtc_restore(dev);
 
-	if (device_may_wakeup(dev))
+	if (!rtc_dd->no_alarm && device_may_wakeup(dev))
 		disable_irq_wake(rtc_dd->alarm_irq);
 
 	return 0;
@@ -606,7 +615,7 @@ static int pm8xxx_rtc_suspend(struct device *dev)
 	if (pm_suspend_target_state == PM_SUSPEND_MEM)
 		return pm8xxx_rtc_freeze(dev);
 
-	if (device_may_wakeup(dev))
+	if (!rtc_dd->no_alarm && device_may_wakeup(dev))
 		enable_irq_wake(rtc_dd->alarm_irq);
 
 	return 0;
@@ -631,7 +640,10 @@ static void pm8xxx_rtc_shutdown(struct platform_device *pdev)
 {
 	struct pm8xxx_rtc *rtc_dd = platform_get_drvdata(pdev);
 
-	devm_free_irq(rtc_dd->dev, rtc_dd->alarm_irq, rtc_dd);
+	if (!rtc_dd->no_alarm && rtc_dd->alarm_irq_requested) {
+		devm_free_irq(rtc_dd->dev, rtc_dd->alarm_irq, rtc_dd);
+		rtc_dd->alarm_irq_requested = false;
+	}
 }
 
 static struct platform_driver pm8xxx_rtc_driver = {

@@ -1094,6 +1094,17 @@ int si_object_do_invoke(struct si_object_invoke_ctx *oic,
 			}
 			trace_qseecom_process_listener_from_smcinvoke_ret(response_type, *result,
 				ret);
+
+			/* Dispatch it the same way as the direct-dispatch case above. */
+			if (response_type == QTEE_RESULT_INBOUND_REQ_NEEDED) {
+				oic->flags |= OIC_FLAG_BUSY;
+
+				__fetch__async_reqs(oic);
+
+				si_object_invoke(oic, cb_msg);
+
+				continue;
+			}
 #endif
 
 			if (!*result) {

@@ -305,6 +305,7 @@ int dwc3_msm_set_dp_mode(struct device *dev, bool dp_connected, int lanes, int o
 					u16 svid, int pin_assign, int hpd_state, int hpd_irq);
 int dwc3_msm_release_ss_lane(struct device *dev, bool dp_connected, int lanes, int orientation,
 					u16 svid, int pin_assign, int hpd_state, int hpd_irq);
+int dwc3_msm_set_ss_mode(struct device *dev, bool mode);
 int msm_ep_update_ops(struct usb_ep *ep);
 int msm_ep_clear_ops(struct usb_ep *ep);
 int msm_ep_set_mode(struct usb_ep *ep, enum usb_hw_ep_mode mode);

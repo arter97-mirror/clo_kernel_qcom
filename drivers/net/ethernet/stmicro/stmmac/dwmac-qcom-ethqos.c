@@ -797,6 +797,7 @@ static const struct ethqos_emac_driver_data emac_v6_6_1_data = {
 		.mtl_chan_base = 0x00008000,
 		.mtl_chan_offset =  0x00001000,
 		.timestamp_base = 0x00007000,
+		.systime_base = 0x00006000,
 		.pps_base = 0x00007080,
 		.pps_offset = 0x10,
 	},

@@ -28,6 +28,8 @@ COPY_FILES = [
     "drivers/i2c/muxes/i2c-mux-gpio.c",
     "drivers/i2c/busses/i2c-qcom-geni.c",
     "drivers/i2c/busses/i2c-virtio.c",
+    "drivers/iio/buffer/kfifo_buf.c",
+    "drivers/iio/common/scmi_sensors/scmi_iio.c",
     "drivers/spi/spi-geni-qcom.c",
     "drivers/virtio/virtio_dma_buf.c",
     "drivers/virtio/virtio_input.c",

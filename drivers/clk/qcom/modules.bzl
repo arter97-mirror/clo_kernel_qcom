@@ -2331,6 +2331,36 @@ def register_modules(registry):
     )
 
     registry.register(
+        name = "drivers/clk/qcom/gcc-fillmore",
+        out = "gcc-fillmore.ko",
+        config = "CONFIG_SM_GCC_FILLMORE",
+        srcs = [
+            # do not sort
+            "drivers/clk/qcom/clk-alpha-pll.h",
+            "drivers/clk/qcom/clk-branch.h",
+            "drivers/clk/qcom/clk-rcg.h",
+            "drivers/clk/qcom/clk-regmap-divider.h",
+            "drivers/clk/qcom/clk-regmap-mux.h",
+            "drivers/clk/qcom/clk-regmap.h",
+            "drivers/clk/qcom/common.h",
+            "drivers/clk/qcom/gcc-fillmore.c",
+            "drivers/clk/qcom/reset.h",
+            "drivers/clk/qcom/vdd-class.h",
+            "drivers/clk/qcom/vdd-level.h",
+            "drivers/clk/qcom/gdsc.h",
+        ],
+        deps = [
+            # do not sort
+            "drivers/clk/qcom/clk-qcom",
+            "drivers/clk/qcom/gdsc-regulator",
+            "drivers/regulator/debug-regulator",
+            "drivers/regulator/proxy-consumer",
+            "drivers/soc/qcom/crm-v2",
+            "kernel/trace/qcom_ipc_logging",
+        ],
+    )
+
+    registry.register(
         name = "drivers/clk/qcom/gcc-glymur",
         out = "gcc-glymur.ko",
         config = "CONFIG_CLK_GLYMUR_GCC",

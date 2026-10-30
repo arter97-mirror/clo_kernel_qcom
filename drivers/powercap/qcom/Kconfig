@@ -35,3 +35,13 @@ config QCOM_QPT_RPMSG_POWERCAP
 	  driver. It provides power capping and power telemetry support
 	  for Qualcomm SoCs using the QPT (Qualcomm Power Telemetry)
 	  interface over the RPMSG transport mechanism.
+
+config QCOM_SPEL
+	tristate "Qualcomm Technologies, Inc. SPEL Power Telemetry Interface module"
+	depends on POWERCAP
+	help
+	  This enables Qualcomm Technologies, Inc. SPEL power telemetry
+	  interface module. It provides powercap framework-based interface
+	  to the SPEL hardware. The SPEL hardware provides reports detailing
+	  consumed energy and enforces operating power limits on the various
+	  subsystems.
