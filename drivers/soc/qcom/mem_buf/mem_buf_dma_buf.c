@@ -1059,12 +1059,14 @@ static int mem_buf_vmperm_gh_notifier_register(void)
 		return PTR_ERR(gh_rm_mem_notifier_cookie);
 	}
 
-	ret = gh_register_vm_notifier(&mem_buf_vmperm_vm_status_nb);
-	if (ret) {
-		pr_err("Failed: gh_register_vm_notifier\n");
-		gh_mem_notifier_unregister(gh_rm_mem_notifier_cookie);
-		gh_rm_mem_notifier_cookie = NULL;
-		return ret;
+	if (mem_buf_capability & MEM_BUF_CAP_SUPPLIER) {
+		ret = gh_register_vm_notifier(&mem_buf_vmperm_vm_status_nb);
+		if (ret) {
+			pr_err("Failed: gh_register_vm_notifier\n");
+			gh_mem_notifier_unregister(gh_rm_mem_notifier_cookie);
+			gh_rm_mem_notifier_cookie = NULL;
+			return ret;
+		}
 	}
 
 	return 0;
