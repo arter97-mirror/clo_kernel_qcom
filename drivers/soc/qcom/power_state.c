@@ -290,6 +290,7 @@ static long ps_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case POWER_STATE_EXIT_DEEPSLEEP_STATE:
 		pr_debug("Exit Deep Sleep\n");
 		ret = subsystem_resume(drv, SUBSYS_DEEPSLEEP);
+		__pm_relax(drv->ps_ws);
 		break;
 
 	case EXIT_HIBERNATE_STATE:
