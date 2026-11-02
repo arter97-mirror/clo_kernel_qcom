@@ -150,13 +150,11 @@ static int wear_config_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int wear_config_remove(struct platform_device *pdev)
+static void wear_config_remove(struct platform_device *pdev)
 {
 	mutex_lock(&wear_config_lock);
 	wear_config_dev = NULL;
 	mutex_unlock(&wear_config_lock);
-
-	return 0;
 }
 
 static const struct of_device_id wear_config_of_match[] = {

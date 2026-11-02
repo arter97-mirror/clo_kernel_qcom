@@ -1,5 +1,6 @@
 glymur_consolidate_config = {
     # keep sorted
+    "CONFIG_CORESIGHT_SOURCE_ETM4X": "m",
     "CONFIG_HOTPLUG_CPU": "y",
     "CONFIG_MHI_BUS_DEBUG": "y",
     "CONFIG_MSM_GPI_DMA_DEBUG": "y",
