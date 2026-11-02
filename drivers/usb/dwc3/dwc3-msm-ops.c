@@ -183,7 +183,6 @@ static int entry_dwc3_gadget_run_stop(struct kretprobe_instance *ri,
 	int is_on = (int)regs->regs[1];
 
 	if (is_on) {
-		pr_err("UGMI: run stop 1\n");
 		/*
 		 * DWC3 gadget IRQ uses a threaded handler which normally runs
 		 * at SCHED_FIFO priority.  If it gets busy processing a high
@@ -234,7 +233,6 @@ static int entry_dwc3_gadget_run_stop(struct kretprobe_instance *ri,
 			}
 		}
 	} else {
-		pr_err("UGMI: run stop 0\n");
 		dwc3_core_stop_hw_active_transfers(dwc);
 		dwc3_msm_notify_event(dwc, DWC3_GSI_EVT_BUF_CLEAR, 0);
 		dwc3_msm_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_CLEAR_DB, 0);
@@ -472,7 +470,7 @@ static int entry_inc_deq(struct kretprobe_instance *ri,
 	if (!xhci) {
 		data->xi0 = -EINVAL;
 		data->dwc = NULL;
-		pr_err("UGMI: inc_deq xhci NULL\n");
+		pr_err("inc_deq xhci NULL\n");
 		return 0;
 	}
 
