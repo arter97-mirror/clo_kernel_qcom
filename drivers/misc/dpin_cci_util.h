@@ -101,8 +101,8 @@ struct dpin_cci_util_sensor_client {
 	u16 cci_device;
 };
 
-/*
- * Minimal read config - keeps the union in dpin_cci_util_ctrl the same size
+/* -------------------------------------------------------------------------
+ * Minimal read config - keeps the union in cam_cci_ctrl the same size
  * as the corresponding union in cam_cci_ctrl
  * (mirrors cam_cci_read_cfg)
  */
@@ -179,7 +179,7 @@ struct cam_cci_trigger_data {
  * (mirrors cam_cci_ctrl)
  */
 
-struct dpin_cci_util_ctrl {
+struct cam_cci_ctrl {
 	s32 status;
 	struct dpin_cci_util_sensor_client *cci_info;
 	enum dpin_cci_util_cmd_type cmd;
@@ -199,12 +199,12 @@ struct dpin_cci_util_ctrl {
  * Defined as: _IOWR('V', BASE_VIDIOC_PRIVATE + 23, struct cam_cci_ctrl)
  * BASE_VIDIOC_PRIVATE = 192  (linux/videodev2.h)
  *
- * dpin_cci_util_ctrl must be layout-compatible with cam_cci_ctrl because the
+ * This must be layout-compatible with cam_cci_ctrl because the
  * ioctl number encodes the struct size.
  */
 
 #define DPIN_CCI_UTIL_VIDIOC_MSM_CCI_CFG \
-		_IOWR('V', 192 + 23, struct dpin_cci_util_ctrl)
+		_IOWR('V', 192 + 23, struct cam_cci_ctrl)
 
 /*
  * LT7911 firmware upgrade public API

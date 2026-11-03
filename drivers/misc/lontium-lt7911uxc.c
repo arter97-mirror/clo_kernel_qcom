@@ -54,6 +54,11 @@
 
 #define LT7911_DP_STATE_MS        1000
 #define LT7911_POWER_DOWN_GRACE_MS 1500
+#define LT7911_ATTENTION_DELAY_DEFAULT_MS 400
+#define LT7911_ATTENTION_DELAY_MAX_MS 10000
+#define LT7911_DP_TRAINING_CHECK_DELAY_MS       5000
+#define LT7911_DP_TRAINING_CHECK_INTERVAL_MS     500
+#define LT7911_DP_TRAINING_CHECK_MAX_RETRIES       6
 
 /*
  * Bits in the LT7911 interrupt-type / ready-state value (reg 0x84).  The chip
@@ -69,6 +74,8 @@ struct lt7911uxc_data {
 	struct mutex device_lock;
 	struct delayed_work info_work;
 	struct delayed_work delayed_power_down_work;
+	struct delayed_work dp_training_check_work;
+	unsigned int attention_delay_ms;
 	struct work_struct dpalt_work;
 	struct work_struct fw_upgrade_work;
 	atomic_t fw_upgrade_in_progress;
@@ -93,6 +100,7 @@ struct lt7911uxc_data {
 	bool usb_mux_only;        /* USB-only connect: just switch PS8822, no LT7911 ops */
 	int lanes;
 	int orientation;
+	u8 dp_training_check_retries;
 	u8 pan_ack_port_index;    /* port_index to use when sending PAN ACKs from dpalt_work */
 	struct cci_util_handle *cci_handle;   /* handle to dpin_cci_util device, set at probe */
 	struct usbmux_handle *usbmux_handle; /* handle to usbmux_ps8822 device, set at probe */
@@ -131,6 +139,21 @@ static int  lt7911_firmware_debug_flag;
 static bool lt7911_sysfs_registered;
 
 static int lt7911_mipi_enable(struct lt7911uxc_data *lt7911, int enable);
+
+static bool android_boot_mode_charger(void)
+{
+	const char *cmdline = NULL;
+	struct device_node *np = of_find_node_by_path("/chosen");
+
+	if (np) {
+		cmdline = of_get_property(np, "bootargs", NULL);
+		of_node_put(np);
+		if (cmdline && strstr(cmdline, "androidboot.mode=charger"))
+			return true;
+	}
+
+	return false;
+}
 
 static int lt7911_power_up(struct lt7911uxc_data *lt7911)
 {
@@ -279,6 +302,10 @@ static void lt7911_notify_event(struct lt7911uxc_data *lt7911, int irq, int w, i
 		snprintf(state, sizeof(state), "STATE=HDR_STR_READY");
 	else if (irq == -2)
 		snprintf(state, sizeof(state), "STATE=DISCONNECT");
+	else if (irq == -3)
+		snprintf(state, sizeof(state), "STATE=DP_TRAINING_SUCCESS");
+	else if (irq == -4)
+		snprintf(state, sizeof(state), "STATE=DP_TRAINING_FAILED");
 	else
 		snprintf(state, sizeof(state), "STATE=UNKNOWN");
 	snprintf(width, sizeof(width), "WIDTH=%d", w);
@@ -346,6 +373,7 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 	bool connected;
 	bool usb_mux;
 	int lanes, orientation;
+	unsigned int delay_ms;
 	u8 port_index;
 
 	mutex_lock(&lt7911->device_lock);
@@ -371,11 +399,13 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 
 	if (!connected) {
 		/* Cable detach */
+		cancel_delayed_work_sync(&lt7911->dp_training_check_work);
 		dev_info(lt7911->dev, "dpalt_work: cable detached, scheduling delayed power down\n");
 		usbmux_setmode(lt7911->usbmux_handle, lanes, orientation);
 		usbmux_sethpd(lt7911->usbmux_handle, false);
 
 		mutex_lock(&lt7911->device_lock);
+		lt7911->dp_training_check_retries = 0;
 		lt7911->have_video_info = false;
 		lt7911->have_audio_info = false;
 		/*
@@ -396,9 +426,11 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 		dev_dbg(lt7911->dev, "dpalt_work: cable attached, lanes=%d orientation=%d\n",
 			    lanes, orientation);
 
-		mutex_lock(&lt7911->device_lock);
 		/* Cancel pending delayed power-down if cable is reconnected */
 		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
+		mutex_lock(&lt7911->device_lock);
+		if (!lt7911->lt7911_poweron)
+			atomic_set(&lt7911->int_event_cnt, 0);
 		rc = lt7911_power_up(lt7911);
 		if (rc) {
 			dev_err(lt7911->dev,
@@ -408,16 +440,35 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 			mutex_unlock(&lt7911->device_lock);
 			return;
 		}
+		lt7911->dp_training_check_retries = 0;
 		mutex_unlock(&lt7911->device_lock);
 
 		dev_dbg(lt7911->dev, "dpalt_work: powered up LT7911, switching usbmux to %d+%d\n",
 			    lanes, orientation);
 		usbmux_setmode(lt7911->usbmux_handle, lanes, orientation);
-		usbmux_sethpd(lt7911->usbmux_handle, true);
 		lt7911uxc_send_pan_ack(lt7911, DPIN_PAN_ACK, port_index);
+		mutex_lock(&lt7911->device_lock);
+		delay_ms = lt7911->attention_delay_ms;
+		mutex_unlock(&lt7911->device_lock);
+		if (delay_ms)
+			msleep(delay_ms);
+
+		mutex_lock(&lt7911->device_lock);
+		connected = lt7911->connected && lt7911->lt7911_poweron &&
+			lt7911->lanes == lanes && lt7911->orientation == orientation &&
+			lt7911->pan_ack_port_index == port_index &&
+			!atomic_read(&lt7911->fw_upgrade_in_progress);
+		mutex_unlock(&lt7911->device_lock);
+		if (!connected)
+			return;
+
+		usbmux_sethpd(lt7911->usbmux_handle, true);
 		dev_dbg(lt7911->dev, "sending the Attention Message ack to ADSP PD\n");
 		trace_lt7911_attention_ack(port_index, DPIN_SEND_ATTENTION);
 		lt7911uxc_send_pan_ack(lt7911, DPIN_SEND_ATTENTION, port_index);
+		mod_delayed_work(system_freezable_wq,
+				 &lt7911->dp_training_check_work,
+				 msecs_to_jiffies(LT7911_DP_TRAINING_CHECK_DELAY_MS));
 	}
 }
 
@@ -454,6 +505,11 @@ static void lt7911_info_work_fn(struct work_struct *work)
 		mutex_lock(&lt7911->device_lock);
 		if (!lt7911->lt7911_poweron) {
 			mutex_unlock(&lt7911->device_lock);
+			if (android_boot_mode_charger()) {
+				dev_err(lt7911->dev,
+					"device powered off in charge mode, skip setting DP state\n");
+				return;
+			}
 			dev_dbg(lt7911->dev, "device powered off, set DP state\n");
 			if (usbmux_setdpstate(lt7911->usbmux_handle, true))
 				dev_warn(lt7911->dev,
@@ -776,7 +832,6 @@ static int lt7911uxc_parse_dts(struct lt7911uxc_data *lt7911)
 static irqreturn_t lt7911_gpio0_irq_handler(int irq, void *dev_id)
 {
 	struct lt7911uxc_data *lt7911 = dev_id;
-	int event_cnt;
 
 	dev_dbg(lt7911->dev, "GPIO0 IRQ fired (irq=%d)\n", irq);
 
@@ -793,13 +848,16 @@ static irqreturn_t lt7911_gpio0_irq_handler(int irq, void *dev_id)
 	}
 
 	/*
-	 * Atomically record that an interrupt has arrived.  The drain-loop in
-	 * lt7911_info_work_fn() reads this counter before and after the I2C
-	 * transaction; if it changed, at least one interrupt was coalesced and
-	 * the loop re-reads the hardware state.
+	 * Atomically count IRQs so info_work can detect new events during reads.
+	 * DP attach resets the counter before powering up the chip. Skip the
+	 * first IRQ, observed to carry no valid stream information at startup,
+	 * to avoid I2C register accesses interfering with DP link training.
 	 */
-	event_cnt = atomic_inc_return(&lt7911->int_event_cnt);
-	trace_lt7911_gpio0_irq(irq, event_cnt);
+	if (atomic_inc_return(&lt7911->int_event_cnt) == 1) {
+		dev_info(lt7911->dev, "Ignore first GPIO0 IRQ after power up\n");
+		return IRQ_HANDLED;
+	}
+	trace_lt7911_gpio0_irq(irq, atomic_read(&lt7911->int_event_cnt));
 	cancel_delayed_work(&lt7911->info_work);
 	queue_delayed_work(system_freezable_wq, &lt7911->info_work,
 			msecs_to_jiffies(LT7911_DRAIN_SETTLE_MS));
@@ -1310,6 +1368,445 @@ static ssize_t lt7911_dp_traning_show(struct device *dev,
 	return snprintf(buf, PAGE_SIZE, "0x%x\n", val);
 }
 
+#define LT7911_BANK_ADDRESS		0xff
+#define LT7911_DPCD_BANK		0xf1
+#define LT7911_DPCD_READ_REG		0x54
+#define LT7911_DPCD_LINK_BW_SET		0x100
+#define LT7911_DPCD_LANE_COUNT_SET	0x101
+#define LT7911_DPCD_LANE0_1_STATUS	0x202
+#define LT7911_DPCD_LANE2_3_STATUS	0x203
+#define LT7911_DPCD_LANE_ALIGN_STATUS	0x204
+#define LT7911_DP_LANE_COUNT_MASK	0x0f
+#define LT7911_DP_ENHANCED_FRAME_EN	BIT(7)
+#define LT7911_DP_CHANNEL_EQ_BITS	0x07
+#define LT7911_DP_INTERLANE_ALIGN_DONE	BIT(0)
+#define LT7911_PCR_PLL_BANK		0xe2
+#define LT7911_PCR_PLL_REG		0x28
+#define LT7911_PCR_STABLE_BANK		0xf3
+#define LT7911_PCR_STABLE_REG		0xdf
+#define LT7911_LANE_ERR_BANK		0xf1
+#define LT7911_LANE_ERR_REG		0xcc
+#define LT7911_LANE_ERR_CLEAR_REG	0xa5
+
+static const u16 lt7911_dpcd_dump_addrs[] = {
+	0x100, 0x101, 0x103, 0x104, 0x105, 0x106, 0x107,
+	0x202, 0x203, 0x204,
+	0x240, 0x241, 0x242, 0x243, 0x244, 0x245,
+};
+
+static const char * const lt7911_dpcd_dump_names[] = {
+	"LINK_BW_SET",
+	"LANE_COUNT_SET",
+	"TRAINING_LANE0_SET",
+	"TRAINING_LANE1_SET",
+	"TRAINING_LANE2_SET",
+	"TRAINING_LANE3_SET",
+	"DOWNSPREAD_CTRL",
+	"LANE0_1_STATUS",
+	"LANE2_3_STATUS",
+	"LANE_ALIGN_STATUS_UPDATED",
+	"TEST_SINK_MISC[0x240]",
+	"TEST_SINK_MISC[0x241]",
+	"TEST_SINK_MISC[0x242]",
+	"TEST_SINK_MISC[0x243]",
+	"TEST_SINK_MISC[0x244]",
+	"TEST_SINK_MISC[0x245]",
+};
+
+static int lt7911_set_bank(struct lt7911uxc_data *lt7911, u8 bank)
+{
+	struct dpin_cci_util_i2c_reg_array bank_sel = {
+		.reg_addr = LT7911_BANK_ADDRESS,
+		.reg_data = bank,
+	};
+
+	return cci_util_lt7911_reg_write(lt7911->cci_handle, &bank_sel, 1);
+}
+
+static int lt7911_dpcd_indirect_read(struct lt7911uxc_data *lt7911,
+				     u32 dpcd_addr, int *val)
+{
+	int rc;
+	struct dpin_cci_util_i2c_reg_array set_addr[] = {
+		{ .reg_addr = 0x03, .reg_data = (dpcd_addr >> 16) & 0xff },
+		{ .reg_addr = 0x04, .reg_data = (dpcd_addr >> 8) & 0xff },
+		{ .reg_addr = 0x05, .reg_data = dpcd_addr & 0xff },
+	};
+
+	rc = cci_util_lt7911_reg_write(lt7911->cci_handle,
+				       set_addr, ARRAY_SIZE(set_addr));
+	if (rc < 0)
+		return rc;
+
+	return cci_util_lt7911_reg_read(lt7911->cci_handle,
+					LT7911_DPCD_READ_REG, val);
+}
+
+static bool lt7911_dp_training_ok(u8 lane_count, u8 lane01,
+				  u8 lane23, u8 align)
+{
+	int lane;
+
+	if (lane_count != 1 && lane_count != 2 && lane_count != 4)
+		return false;
+
+	if (!(align & LT7911_DP_INTERLANE_ALIGN_DONE))
+		return false;
+
+	for (lane = 0; lane < lane_count; lane++) {
+		u8 status = lane < 2 ? lane01 : lane23;
+
+		status >>= (lane % 2) * 4;
+		if ((status & LT7911_DP_CHANNEL_EQ_BITS) !=
+				LT7911_DP_CHANNEL_EQ_BITS)
+			return false;
+	}
+
+	return true;
+}
+
+static const char *lt7911_dp_link_rate_name(u8 link_bw)
+{
+	switch (link_bw) {
+	case 0x06:
+		return "RBR(1.62Gbps/lane)";
+	case 0x0a:
+		return "HBR(2.7Gbps/lane)";
+	case 0x14:
+		return "HBR2(5.4Gbps/lane)";
+	case 0x1e:
+		return "HBR3(8.1Gbps/lane)";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+static void lt7911_dump_dp_training_failure(struct lt7911uxc_data *lt7911)
+{
+	u8 lane_error[8] = { 0 };
+	size_t i;
+	int lane;
+	int val;
+	int rc;
+
+	dev_err(lt7911->dev, "DP training failed: DPCD and lane error raw dump\n");
+	cci_util_lt7911_enable_i2c(lt7911->cci_handle);
+
+	rc = lt7911_set_bank(lt7911, LT7911_DPCD_BANK);
+	if (rc < 0) {
+		dev_err(lt7911->dev, "DPCD dump: set bank F1 failed rc=%d\n", rc);
+		goto disable_i2c;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(lt7911_dpcd_dump_addrs); i++) {
+		val = 0;
+		rc = lt7911_dpcd_indirect_read(lt7911,
+					       lt7911_dpcd_dump_addrs[i], &val);
+		if (rc < 0)
+			dev_err(lt7911->dev,
+				"DPCD[0x%03x] %-30s = READ_ERR(%d)\n",
+				lt7911_dpcd_dump_addrs[i],
+				lt7911_dpcd_dump_names[i], rc);
+		else
+			dev_err(lt7911->dev,
+				"DPCD[0x%03x] %-30s = 0x%02x\n",
+				lt7911_dpcd_dump_addrs[i],
+				lt7911_dpcd_dump_names[i], val);
+	}
+
+	rc = lt7911_set_bank(lt7911, LT7911_LANE_ERR_BANK);
+	if (rc < 0) {
+		dev_err(lt7911->dev,
+			"lane error raw dump: set bank F1 failed rc=%d\n", rc);
+		goto disable_i2c;
+	}
+
+	rc = cci_util_lt7911_reg_read_seq(lt7911->cci_handle,
+					  LT7911_LANE_ERR_REG, lane_error,
+					  ARRAY_SIZE(lane_error));
+	if (rc < 0) {
+		dev_err(lt7911->dev, "lane error raw dump failed rc=%d\n", rc);
+		goto disable_i2c;
+	}
+
+	for (lane = 0; lane < 4; lane++)
+		dev_err(lt7911->dev, "Lane%d = 0x%02x 0x%02x\n", lane,
+			lane_error[lane * 2], lane_error[lane * 2 + 1]);
+
+disable_i2c:
+	cci_util_lt7911_disable_i2c(lt7911->cci_handle);
+}
+
+static void lt7911_dp_training_check_work_fn(struct work_struct *work)
+{
+	struct lt7911uxc_data *lt7911 =
+		container_of(to_delayed_work(work), struct lt7911uxc_data,
+			     dp_training_check_work);
+	int link_bw = 0;
+	int lane_set = 0;
+	int lane01 = 0;
+	int lane23 = 0;
+	int align = 0;
+	u8 lane_count;
+	bool retry = false;
+	int rc;
+
+	mutex_lock(&lt7911->device_lock);
+	if (!lt7911->connected || !lt7911->lt7911_poweron ||
+	    !lt7911->cci_handle)
+		goto unlock;
+
+	cci_util_lt7911_enable_i2c(lt7911->cci_handle);
+	rc = lt7911_set_bank(lt7911, LT7911_DPCD_BANK);
+	if (rc < 0)
+		goto disable_i2c;
+
+	rc = lt7911_dpcd_indirect_read(lt7911,
+				       LT7911_DPCD_LINK_BW_SET, &link_bw);
+	if (rc < 0)
+		goto disable_i2c;
+
+	rc = lt7911_dpcd_indirect_read(lt7911,
+				       LT7911_DPCD_LANE_COUNT_SET, &lane_set);
+	if (rc < 0)
+		goto disable_i2c;
+
+	rc = lt7911_dpcd_indirect_read(lt7911,
+				       LT7911_DPCD_LANE0_1_STATUS, &lane01);
+	if (rc < 0)
+		goto disable_i2c;
+
+	rc = lt7911_dpcd_indirect_read(lt7911,
+				       LT7911_DPCD_LANE2_3_STATUS, &lane23);
+	if (rc < 0)
+		goto disable_i2c;
+
+	rc = lt7911_dpcd_indirect_read(lt7911,
+				       LT7911_DPCD_LANE_ALIGN_STATUS, &align);
+
+disable_i2c:
+	cci_util_lt7911_disable_i2c(lt7911->cci_handle);
+
+	lane_count = lane_set & LT7911_DP_LANE_COUNT_MASK;
+	if (!rc && lt7911_dp_training_ok(lane_count, lane01, lane23, align)) {
+		lt7911->dp_training_check_retries = 0;
+		dev_info(lt7911->dev,
+			 "DP training success: link_rate=%s raw=0x%02x lanes=%u enhanced=%u lane01=0x%02x lane23=0x%02x align=0x%02x\n",
+			 lt7911_dp_link_rate_name(link_bw), link_bw, lane_count,
+			 !!(lane_set & LT7911_DP_ENHANCED_FRAME_EN),
+			 lane01, lane23, align);
+		lt7911_notify_event(lt7911, -3, 0, 0, 0, 0, 0, 0);
+		goto unlock;
+	}
+
+	if (lt7911->dp_training_check_retries <
+			LT7911_DP_TRAINING_CHECK_MAX_RETRIES) {
+		lt7911->dp_training_check_retries++;
+		retry = true;
+	} else {
+		lt7911->dp_training_check_retries = 0;
+		lt7911_dump_dp_training_failure(lt7911);
+		lt7911_notify_event(lt7911, -4, 0, 0, 0, 0, 0, 0);
+	}
+
+unlock:
+	mutex_unlock(&lt7911->device_lock);
+
+	if (retry)
+		mod_delayed_work(system_freezable_wq,
+				 &lt7911->dp_training_check_work,
+				 msecs_to_jiffies(LT7911_DP_TRAINING_CHECK_INTERVAL_MS));
+}
+
+static ssize_t lt7911_dpcd_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	ssize_t len = 0;
+	size_t i;
+	int rc;
+	int val;
+
+	if (!lt7911)
+		return -ENODEV;
+
+	mutex_lock(&lt7911->device_lock);
+	if (!lt7911->lt7911_poweron || !lt7911->cci_handle) {
+		rc = -ENODEV;
+		goto unlock;
+	}
+
+	cci_util_lt7911_enable_i2c(lt7911->cci_handle);
+	len += scnprintf(buf + len, PAGE_SIZE - len,
+			 "=== DP Training DPCD ===\n");
+	len += scnprintf(buf + len, PAGE_SIZE - len,
+			 "=== training result depends on lane count and align status ===\n");
+
+	rc = lt7911_set_bank(lt7911, LT7911_DPCD_BANK);
+	if (rc < 0) {
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "ERROR: set bank F1 failed (%d)\n", rc);
+		goto disable_i2c;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(lt7911_dpcd_dump_addrs); i++) {
+		val = 0;
+		rc = lt7911_dpcd_indirect_read(lt7911,
+					       lt7911_dpcd_dump_addrs[i], &val);
+		if (rc < 0)
+			len += scnprintf(buf + len, PAGE_SIZE - len,
+					 "DPCD[0x%03X] %-30s = READ_ERR(%d)\n",
+					 lt7911_dpcd_dump_addrs[i],
+					 lt7911_dpcd_dump_names[i], rc);
+		else
+			len += scnprintf(buf + len, PAGE_SIZE - len,
+					 "DPCD[0x%03X] %-30s = 0x%02X\n",
+					 lt7911_dpcd_dump_addrs[i],
+					 lt7911_dpcd_dump_names[i], val);
+	}
+
+disable_i2c:
+	cci_util_lt7911_disable_i2c(lt7911->cci_handle);
+	mutex_unlock(&lt7911->device_lock);
+	return len;
+
+unlock:
+	mutex_unlock(&lt7911->device_lock);
+	return rc;
+}
+
+static ssize_t lt7911_pcr_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	ssize_t len = 0;
+	int pcr_pll = 0;
+	int pcr_stable = 0;
+	int rc;
+
+	if (!lt7911)
+		return -ENODEV;
+
+	mutex_lock(&lt7911->device_lock);
+	if (!lt7911->lt7911_poweron || !lt7911->cci_handle) {
+		rc = -ENODEV;
+		goto unlock;
+	}
+
+	cci_util_lt7911_enable_i2c(lt7911->cci_handle);
+	len += scnprintf(buf + len, PAGE_SIZE - len, "=== PCR Status ===\n");
+
+	rc = lt7911_set_bank(lt7911, LT7911_PCR_PLL_BANK);
+	if (rc < 0) {
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "ERROR: set bank E2 failed (%d)\n", rc);
+		goto disable_i2c;
+	}
+
+	rc = cci_util_lt7911_reg_read(lt7911->cci_handle,
+				      LT7911_PCR_PLL_REG, &pcr_pll);
+	if (rc < 0)
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "PCR_PLL (E2h:28h) = READ_ERR(%d)\n", rc);
+	else
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "PCR_PLL (E2h:28h) = 0x%02X\n", pcr_pll);
+
+	rc = lt7911_set_bank(lt7911, LT7911_PCR_STABLE_BANK);
+	if (rc < 0) {
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "ERROR: set bank F3 failed (%d)\n", rc);
+		goto disable_i2c;
+	}
+
+	rc = cci_util_lt7911_reg_read(lt7911->cci_handle,
+				      LT7911_PCR_STABLE_REG, &pcr_stable);
+	if (rc < 0)
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "PCR_STABLE (F3h:DFh) = READ_ERR(%d)\n", rc);
+	else
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "PCR_STABLE (F3h:DFh) = 0x%02X\n", pcr_stable);
+
+disable_i2c:
+	cci_util_lt7911_disable_i2c(lt7911->cci_handle);
+	mutex_unlock(&lt7911->device_lock);
+	return len;
+
+unlock:
+	mutex_unlock(&lt7911->device_lock);
+	return rc;
+}
+
+static ssize_t lt7911_dp_lane_error_raw_show(struct device *dev,
+					     struct device_attribute *attr,
+					     char *buf)
+{
+	struct dpin_cci_util_i2c_reg_array clear_error[] = {
+		{ .reg_addr = LT7911_LANE_ERR_CLEAR_REG, .reg_data = 0x0f },
+		{ .reg_addr = LT7911_LANE_ERR_CLEAR_REG, .reg_data = 0x00 },
+	};
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	u8 err_bytes[8] = { 0 };
+	ssize_t len = 0;
+	int rc;
+	int i;
+
+	if (!lt7911)
+		return -ENODEV;
+
+	mutex_lock(&lt7911->device_lock);
+	if (!lt7911->lt7911_poweron || !lt7911->cci_handle) {
+		rc = -ENODEV;
+		goto unlock;
+	}
+
+	cci_util_lt7911_enable_i2c(lt7911->cci_handle);
+	len += scnprintf(buf + len, PAGE_SIZE - len,
+			 "=== DP Lane Error Raw ===\n");
+	len += scnprintf(buf + len, PAGE_SIZE - len,
+			 "=== 0x80 0x00 means DP Signal ok ===\n");
+
+	rc = lt7911_set_bank(lt7911, LT7911_LANE_ERR_BANK);
+	if (rc < 0) {
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "ERROR: set bank F1 failed (%d)\n", rc);
+		goto disable_i2c;
+	}
+
+	msleep(100);
+	rc = cci_util_lt7911_reg_write(lt7911->cci_handle,
+				       clear_error, ARRAY_SIZE(clear_error));
+	if (rc < 0) {
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "ERROR: clear lane errors failed (%d)\n", rc);
+		goto disable_i2c;
+	}
+
+	rc = cci_util_lt7911_reg_read_seq(lt7911->cci_handle,
+					  LT7911_LANE_ERR_REG, err_bytes,
+					  ARRAY_SIZE(err_bytes));
+	if (rc < 0) {
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "ERROR: read lane errors failed (%d)\n", rc);
+		goto disable_i2c;
+	}
+
+	for (i = 0; i < 4; i++)
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+				 "Lane%d = 0x%02X 0x%02X\n",
+				 i, err_bytes[i * 2], err_bytes[i * 2 + 1]);
+
+disable_i2c:
+	cci_util_lt7911_disable_i2c(lt7911->cci_handle);
+	mutex_unlock(&lt7911->device_lock);
+	return len;
+
+unlock:
+	mutex_unlock(&lt7911->device_lock);
+	return rc;
+}
+
 /**
  * lt7911_hdcp_version_show - read the HDCP version register (0x95).
  * @dev:  device the sysfs attribute belongs to
@@ -1793,11 +2290,47 @@ static ssize_t lt7911_replay_uevent_store(struct device *dev,
 	return count;
 }
 
+static ssize_t attention_delay_ms_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	unsigned int delay_ms;
+
+	mutex_lock(&lt7911->device_lock);
+	delay_ms = lt7911->attention_delay_ms;
+	mutex_unlock(&lt7911->device_lock);
+	return sysfs_emit(buf, "%u\n", delay_ms);
+}
+
+static ssize_t attention_delay_ms_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct lt7911uxc_data *lt7911 = dev_get_drvdata(dev);
+	unsigned int delay_ms;
+	int rc;
+
+	rc = kstrtouint(buf, 0, &delay_ms);
+	if (rc)
+		return rc;
+	if (delay_ms > LT7911_ATTENTION_DELAY_MAX_MS)
+		return -ERANGE;
+
+	mutex_lock(&lt7911->device_lock);
+	/* Applies to the next HPD/Attention wait. */
+	lt7911->attention_delay_ms = delay_ms;
+	mutex_unlock(&lt7911->device_lock);
+	return count;
+}
+
+static DEVICE_ATTR_RW(attention_delay_ms);
 static DEVICE_ATTR_RW(firmware_upgrade);
 static DEVICE_ATTR_RW(firmware_debug_flag);
 static DEVICE_ATTR_RW(lt7911_cc_switch);
 static DEVICE_ATTR_RW(lt7911_swap_apply);
 static DEVICE_ATTR_RO(lt7911_dp_traning);
+static DEVICE_ATTR_RO(lt7911_dpcd);
+static DEVICE_ATTR_RO(lt7911_pcr);
+static DEVICE_ATTR_RO(lt7911_dp_lane_error_raw);
 static DEVICE_ATTR_RO(lt7911_hdcp_version);
 static DEVICE_ATTR_RW(lt7911_mipi_status);
 static DEVICE_ATTR_RO(lt7911_stream_info);
@@ -1805,11 +2338,15 @@ static DEVICE_ATTR_RW(lt7911_reg_access);
 static DEVICE_ATTR_WO(lt7911_replay_uevent);
 
 static struct attribute *lt7911_sysfs_attrs[] = {
+	&dev_attr_attention_delay_ms.attr,
 	&dev_attr_firmware_upgrade.attr,
 	&dev_attr_firmware_debug_flag.attr,
 	&dev_attr_lt7911_cc_switch.attr,
 	&dev_attr_lt7911_swap_apply.attr,
 	&dev_attr_lt7911_dp_traning.attr,
+	&dev_attr_lt7911_dpcd.attr,
+	&dev_attr_lt7911_pcr.attr,
+	&dev_attr_lt7911_dp_lane_error_raw.attr,
 	&dev_attr_lt7911_hdcp_version.attr,
 	&dev_attr_lt7911_mipi_status.attr,
 	&dev_attr_lt7911_stream_info.attr,
@@ -1950,8 +2487,11 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mutex_init(&lt7911->device_lock);
+	lt7911->attention_delay_ms = LT7911_ATTENTION_DELAY_DEFAULT_MS;
 	INIT_DELAYED_WORK(&lt7911->info_work, lt7911_info_work_fn);
 	INIT_DELAYED_WORK(&lt7911->delayed_power_down_work, lt7911_delayed_power_down_work_fn);
+	INIT_DELAYED_WORK(&lt7911->dp_training_check_work,
+			  lt7911_dp_training_check_work_fn);
 	INIT_WORK(&lt7911->dpalt_work, lt7911uxc_dpalt_work_fn);
 	INIT_WORK(&lt7911->fw_upgrade_work, lt7911_fw_upgrade_work_fn);
 	atomic_set(&lt7911->fw_upgrade_in_progress, 0);
@@ -1985,6 +2525,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
 		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
+		cancel_delayed_work_sync(&lt7911->dp_training_check_work);
 		altmode_deregister_client(lt7911->amclient);
 		return rc;
 	}
@@ -2005,6 +2546,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
 		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
+		cancel_delayed_work_sync(&lt7911->dp_training_check_work);
 		altmode_deregister_client(lt7911->amclient);
 		return -EPROBE_DEFER;
 	}
@@ -2026,6 +2568,7 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 			disable_irq(lt7911->lt7911_gpio0_irq);
 		cancel_delayed_work_sync(&lt7911->info_work);
 		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
+		cancel_delayed_work_sync(&lt7911->dp_training_check_work);
 		altmode_deregister_client(lt7911->amclient);
 		return -EPROBE_DEFER;
 	}
@@ -2056,6 +2599,7 @@ static int lt7911uxc_remove(struct platform_device *pdev)
 		cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 		cancel_work_sync(&lt7911->fw_upgrade_work);
 		cancel_work_sync(&lt7911->dpalt_work);
+		cancel_delayed_work_sync(&lt7911->dp_training_check_work);
 		atomic_set(&lt7911->int_event_cnt, 0);
 		if (lt7911_sysfs_registered) {
 			sysfs_remove_group(&lt7911->dev->kobj, &lt7911_attr_group);
