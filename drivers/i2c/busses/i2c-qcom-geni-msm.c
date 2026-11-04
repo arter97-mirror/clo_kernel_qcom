@@ -10,8 +10,10 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/soc/qcom/geni-se.h>
@@ -131,6 +133,7 @@ struct geni_i2c_dev {
 	const struct geni_i2c_desc *dev_data;
 	enum geni_se_xfer_mode xfer_mode;
 	bool addr_nack;
+	struct notifier_block panic_nb;
 };
 
 struct geni_i2c_err_log {
@@ -1026,6 +1029,92 @@ err:
 
 }
 
+/*
+ * qcom_geni_i2c_gvm_stop_xfer() - Quiesce an in-flight GENI I2C transfer.
+ * @gi2c: pointer to the geni i2c device
+ *
+ * Brings the serial engine to idle from the shutdown callback and the panic
+ * notifier. On a guest VM (GVM) reboot or crash the SE is not reset by an
+ * SoC-wide reset, so a dangling command or DMA descriptor can raise SMMU
+ * context faults (affecting other VMs on the same SMMU) once the IOVAs are
+ * torn down, or leave stale FIFO data that breaks the next boot.
+ *
+ * GPI/GSI DMA is terminated asynchronously so the teardown is safe from the
+ * panic notifier's atomic context and never blocks on a stuck transfer.
+ * FIFO/SE-DMA cancels (or aborts) the command and resets the SE DMA engine.
+ *
+ * gi2c->lock is not taken: on the panic path it may already be held by the
+ * interrupted context. pm_runtime_active() gates register access to when the
+ * SE clocks are on, and the FIFO/SE-DMA path busy-waits with
+ * readl_poll_timeout_atomic() instead of the sleeping completion.
+ */
+static void qcom_geni_i2c_gvm_stop_xfer(struct geni_i2c_dev *gi2c)
+{
+	void __iomem *base = gi2c->se.base;
+	u32 val, dma;
+
+	/* Only touch the hardware while its clocks and resources are active. */
+	if (!pm_runtime_active(gi2c->se.dev))
+		return;
+
+	if (gi2c->xfer_mode == GENI_GPI_DMA) {
+		dmaengine_terminate_async(gi2c->tx_c);
+		dmaengine_terminate_async(gi2c->rx_c);
+		return;
+	}
+
+	/* Nothing to do if the primary sequencer has no active command. */
+	if (!(readl_relaxed(base + SE_GENI_STATUS) & M_GENI_CMD_ACTIVE))
+		return;
+
+	dma = readl_relaxed(base + SE_GENI_DMA_MODE_EN);
+
+	/*
+	 * Cancel the command, falling back to a forced abort if the cancel does
+	 * not complete. Poll for at most 20 ms, which comfortably covers the
+	 * cancel/abort of a single transfer in this teardown path.
+	 */
+	geni_se_cancel_m_cmd(&gi2c->se);
+	if (readl_poll_timeout_atomic(base + SE_GENI_M_IRQ_STATUS, val,
+				      val & M_CMD_CANCEL_EN, 10, 20000)) {
+		geni_se_abort_m_cmd(&gi2c->se);
+		if (readl_poll_timeout_atomic(base + SE_GENI_M_IRQ_STATUS, val,
+					      val & M_CMD_ABORT_EN, 10, 20000))
+			dev_err(gi2c->se.dev, "%s: abort timed out\n", __func__);
+		writel_relaxed(M_CMD_ABORT_EN, base + SE_GENI_M_IRQ_CLEAR);
+	}
+	writel_relaxed(M_CMD_CANCEL_EN, base + SE_GENI_M_IRQ_CLEAR);
+
+	/*
+	 * Reset the SE DMA engine and wait for it to acknowledge, so no
+	 * descriptor is left mapped/in flight before the IOVAs are torn down.
+	 */
+	if (dma & GENI_DMA_MODE_EN) {
+		writel_relaxed(1, base + SE_DMA_TX_FSM_RST);
+		if (readl_poll_timeout_atomic(base + SE_DMA_TX_IRQ_STAT, val,
+					      val & TX_RESET_DONE, 10, 20000))
+			dev_err(gi2c->se.dev, "%s: TX FSM reset timed out\n", __func__);
+		writel_relaxed(TX_RESET_DONE, base + SE_DMA_TX_IRQ_CLR);
+
+		writel_relaxed(1, base + SE_DMA_RX_FSM_RST);
+		if (readl_poll_timeout_atomic(base + SE_DMA_RX_IRQ_STAT, val,
+					      val & RX_RESET_DONE, 10, 20000))
+			dev_err(gi2c->se.dev, "%s: RX FSM reset timed out\n", __func__);
+		writel_relaxed(RX_RESET_DONE, base + SE_DMA_RX_IRQ_CLR);
+	}
+}
+
+static int qcom_geni_i2c_gvm_panic_cb(struct notifier_block *nb,
+				      unsigned long event, void *ptr)
+{
+	struct geni_i2c_dev *gi2c = container_of(nb, struct geni_i2c_dev,
+						 panic_nb);
+
+	qcom_geni_i2c_gvm_stop_xfer(gi2c);
+
+	return NOTIFY_OK;
+}
+
 static int geni_i2c_probe(struct platform_device *pdev)
 {
 	struct geni_i2c_dev *gi2c;
@@ -1114,6 +1203,10 @@ static int geni_i2c_probe(struct platform_device *pdev)
 		goto err_dma;
 	}
 
+	/* Register panic notifier to quiesce the SE on a VM crash */
+	gi2c->panic_nb.notifier_call = qcom_geni_i2c_gvm_panic_cb;
+	atomic_notifier_chain_register(&panic_notifier_list, &gi2c->panic_nb);
+
 	dev_dbg(dev, "Geni-I2C adaptor successfully added\n");
 
 	return 0;
@@ -1127,6 +1220,9 @@ static void geni_i2c_remove(struct platform_device *pdev)
 {
 	struct geni_i2c_dev *gi2c = platform_get_drvdata(pdev);
 
+	/* Unregister panic notifier */
+	atomic_notifier_chain_unregister(&panic_notifier_list, &gi2c->panic_nb);
+
 	i2c_del_adapter(&gi2c->adap);
 	release_gpi_dma(gi2c);
 	pm_runtime_disable(gi2c->se.dev);
@@ -1138,6 +1234,9 @@ static void geni_i2c_shutdown(struct platform_device *pdev)
 
 	/* Make client i2c transfers start failing */
 	i2c_mark_adapter_suspended(&gi2c->adap);
+
+	/* Quiesce any in-flight transfer so the SE is idle across reboot */
+	qcom_geni_i2c_gvm_stop_xfer(gi2c);
 }
 
 static int __maybe_unused geni_i2c_runtime_suspend(struct device *dev)
