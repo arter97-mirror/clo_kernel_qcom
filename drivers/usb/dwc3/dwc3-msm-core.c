@@ -3725,9 +3725,10 @@ void dwc3_msm_notify_event(struct dwc3 *dwc,
 		dwc3_msm_update_imem_pid(dwc);
 		break;
 	case DWC3_QSRAM_WRITE:
-		if (atomic_read(&mdwc->in_lpm) || !mdwc->in_host_mode || !mdwc->qsram)
+		if (atomic_read(&mdwc->in_lpm) || !mdwc->in_host_mode || !mdwc->qsram) {
 			dev_err(mdwc->dev, "qsram not available\n");
 			break;
+		}
 		if (mdwc->in_host_mode) {
 			u32 offset = (void __iomem *)&mdwc->qsram->data[4] - mdwc->base;
 
@@ -8149,7 +8150,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		if (dwc->dr_mode == USB_DR_MODE_OTG)
 			flush_work(&dwc->drd_work);
 
-		pr_err("UGMI: softconnect=%d\n", dwc->softconnect);
+		pr_err("softconnect=%d\n", dwc->softconnect);
 
 		dwc3_msm_switch_utmi(mdwc, false);
 		dwc3_msm_clear_usbphy_flags(mdwc->hs_phy, PHY_HOST_MODE);
