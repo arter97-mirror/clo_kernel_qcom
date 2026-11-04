@@ -118,6 +118,15 @@
   cdev_device_add
   cdev_device_del
   cdev_init
+  cec_allocate_adapter
+  cec_delete_adapter
+  cec_received_msg_ts
+  cec_register_adapter
+  cec_s_conn_info
+  cec_s_phys_addr
+  cec_s_phys_addr_from_edid
+  cec_transmit_attempt_done_ts
+  cec_unregister_adapter
   cgroup_path_ns
   cgroup_taskset_first
   cgroup_taskset_next
@@ -688,6 +697,7 @@
   extcon_set_property_capability
   extcon_set_state
   extcon_set_state_sync
+  extcon_sync
   fasync_helper
   __fdget
   fd_install
@@ -765,15 +775,18 @@
   genphy_c45_pma_setup_forced
   genphy_c45_pma_suspend
   __genphy_config_aneg
+  genphy_handle_interrupt_no_ack
   genphy_read_abilities
   genphy_read_lpa
   genphy_read_master_slave
+  genphy_read_mmd_unsupported
   genphy_read_status
   genphy_resume
   genphy_setup_forced
   genphy_soft_reset
   genphy_suspend
   genphy_update_link
+  genphy_write_mmd_unsupported
   gen_pool_add_owner
   gen_pool_alloc_algo_owner
   gen_pool_avail
@@ -924,6 +937,7 @@
   icc_set_tag
   icc_sync_state
   ida_alloc_range
+  ida_destroy
   ida_free
   idr_alloc
   idr_alloc_cyclic
@@ -1188,6 +1202,7 @@
   mdiobus_c45_modify_changed
   __mdiobus_read
   mdiobus_read
+  __mdiobus_write
   mdiobus_write
   mdio_device_reset
   media_device_cleanup
@@ -1489,6 +1504,7 @@
   perf_report_aux_output_id
   perf_trace_buf_alloc
   perf_trace_run_bpf_submit
+  phy_basic_t1_features
   phy_calibrate
   phy_check_valid
   phy_device_free
@@ -1507,13 +1523,18 @@
   __phy_modify_mmd
   phy_modify_mmd
   phy_modify_mmd_changed
+  phy_modify_paged
+  phy_modify_paged_changed
   phy_power_off
   phy_power_on
   __phy_read_mmd
   phy_read_mmd
+  phy_read_paged
   phy_resolve_aneg_linkmode
   phy_resolve_aneg_pause
   phy_restart_aneg
+  phy_restore_page
+  phy_select_page
   phy_set_mode_ext
   phy_sfp_attach
   phy_sfp_detach
@@ -1521,6 +1542,7 @@
   phy_trigger_machine
   __phy_write_mmd
   phy_write_mmd
+  phy_write_paged
   pick_highest_pushable_task
   pick_migrate_task
   pid_nr_ns
@@ -2217,6 +2239,7 @@
   __traceiter_android_vh_scheduler_tick
   __traceiter_android_vh_show_resume_epoch_val
   __traceiter_android_vh_show_suspend_epoch_val
+  __traceiter_android_vh_snd_get_play_cap
   __traceiter_android_vh_thermal_pm_notify_suspend
   __traceiter_android_vh_timer_calc_index
   __traceiter_android_vh_try_fixup_sea
@@ -2332,6 +2355,7 @@
   __tracepoint_android_vh_scheduler_tick
   __tracepoint_android_vh_show_resume_epoch_val
   __tracepoint_android_vh_show_suspend_epoch_val
+  __tracepoint_android_vh_snd_get_play_cap
   __tracepoint_android_vh_thermal_pm_notify_suspend
   __tracepoint_android_vh_timer_calc_index
   __tracepoint_android_vh_try_fixup_sea
