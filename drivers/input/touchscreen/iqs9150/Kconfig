@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+
+config IQS9150
+	tristate "IQS9150 Driver"
+	depends on I2C
+	help
+		Enable support for the IQS9150 capacitive touchscreen controller
+		from Azoteq. The driver communicates over I2C and reports
+		multi-touch events via the Linux input subsystem.
+
+		To compile this driver as a loadable module, choose M here;
+		the module will be called iqs9150.
