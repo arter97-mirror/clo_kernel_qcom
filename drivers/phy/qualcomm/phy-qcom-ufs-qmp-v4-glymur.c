@@ -99,6 +99,9 @@ static int ufs_qcom_phy_qmp_v4_init(struct phy *generic_phy)
 	/* Optional */
 	ufs_qcom_phy_get_reset(phy_common);
 
+	if (!phy_common->vdd_phy_gdsc.reg)
+		pm_runtime_enable(phy_common->dev);
+
 out:
 	return err;
 }
@@ -183,9 +186,13 @@ void ufs_qcom_phy_qmp_v4_power_control(struct ufs_qcom_phy *phy,
 			if (err)
 				dev_err(dev, "%s disable phy_gdsc err = %d\n",
 				__func__, err);
+		} else {
+			pm_runtime_put_sync(dev);
 		}
-
 	} else {
+		if (!phy->vdd_phy_gdsc.reg)
+			pm_runtime_get_sync(dev);
+
 		ufs_qcom_phy_qmp_v4_tx_pull_down_ctrl(phy, false);
 		/* bring PHY out of analog power collapse */
 		writel_relaxed(0x1, phy->mmio + UFS_PHY_POWER_DOWN_CONTROL);
