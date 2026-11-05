@@ -46,6 +46,7 @@ obj-y				+= dwc/
 obj-y				+= mobiveil/
 
 
+obj-$(CONFIG_PCI_PRSNT_HP) += pci-prsnt-hp.o
 obj-$(CONFIG_PCI_MSM) += pci-msm-drv.o
 pci-msm-drv-y := pci-msm.o pci-msm-msi.o
 

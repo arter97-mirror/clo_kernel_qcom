@@ -276,7 +276,6 @@ static int qcom_ddump_rm_cb(struct notifier_block *nb, unsigned long cmd,
 	dma_addr_t dma_handle;
 	gh_vmid_t peer_vmid;
 	gh_vmid_t self_vmid;
-	int ret;
 
 	qdd = container_of(nb, struct qcom_dmesg_dumper, rm_nb);
 
@@ -304,14 +303,6 @@ static int qcom_ddump_rm_cb(struct notifier_block *nb, unsigned long cmd,
 			qdd->res.start = dma_to_phys(qdd->dev, dma_handle);
 			qdd->res.end = qdd->res.start + qdd->size - 1;
 		}
-
-		strscpy(qdd->md_entry.name, "VM_LOG", sizeof(qdd->md_entry.name));
-		qdd->md_entry.virt_addr = (uintptr_t)qdd->base;
-		qdd->md_entry.phys_addr = qdd->res.start;
-		qdd->md_entry.size = qdd->size;
-		ret = msm_minidump_add_region(&qdd->md_entry);
-		if (ret < 0)
-			dev_err(qdd->dev, "Failed to add vm log entry in minidump table %d\n", ret);
 
 		if (qcom_ddump_share_mem(qdd, self_vmid, peer_vmid)) {
 			dev_err(qdd->dev, "Failed to share memory\n");

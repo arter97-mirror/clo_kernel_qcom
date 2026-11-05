@@ -34,3 +34,9 @@ local_repository(
     name = "rules_pkg",
     path = "external/bazelbuild-rules_pkg",
 )
+
+new_local_repository(
+    name = "rules_devicetree",
+    path = "external/bazel-contrib-rules_devicetree",
+    build_file = "external/bazel-contrib-rules_devicetree/BUILD.bazel",
+)

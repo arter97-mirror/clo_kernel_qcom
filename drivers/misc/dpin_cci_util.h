@@ -101,8 +101,8 @@ struct dpin_cci_util_sensor_client {
 	u16 cci_device;
 };
 
-/*
- * Minimal read config - keeps the union in dpin_cci_util_ctrl the same size
+/* -------------------------------------------------------------------------
+ * Minimal read config - keeps the union in cam_cci_ctrl the same size
  * as the corresponding union in cam_cci_ctrl
  * (mirrors cam_cci_read_cfg)
  */
@@ -179,7 +179,7 @@ struct cam_cci_trigger_data {
  * (mirrors cam_cci_ctrl)
  */
 
-struct dpin_cci_util_ctrl {
+struct cam_cci_ctrl {
 	s32 status;
 	struct dpin_cci_util_sensor_client *cci_info;
 	enum dpin_cci_util_cmd_type cmd;
@@ -199,12 +199,12 @@ struct dpin_cci_util_ctrl {
  * Defined as: _IOWR('V', BASE_VIDIOC_PRIVATE + 23, struct cam_cci_ctrl)
  * BASE_VIDIOC_PRIVATE = 192  (linux/videodev2.h)
  *
- * dpin_cci_util_ctrl must be layout-compatible with cam_cci_ctrl because the
+ * This must be layout-compatible with cam_cci_ctrl because the
  * ioctl number encodes the struct size.
  */
 
 #define DPIN_CCI_UTIL_VIDIOC_MSM_CCI_CFG \
-		_IOWR('V', 192 + 23, struct dpin_cci_util_ctrl)
+		_IOWR('V', 192 + 23, struct cam_cci_ctrl)
 
 /*
  * LT7911 firmware upgrade public API
@@ -263,6 +263,8 @@ int      cci_util_lt7911_reg_read_seq(struct cci_util_handle *handle,
 void     cci_util_lt7911_enable_i2c(struct cci_util_handle *handle);
 void     cci_util_lt7911_disable_i2c(struct cci_util_handle *handle);
 void     cci_util_lt7911_release_cci(struct cci_util_handle *handle);
+void     cci_util_lt7911_set_power_state(struct cci_util_handle *handle, bool power_on);
+bool     cci_util_lt7911_is_power_on(struct cci_util_handle *handle);
 int      cci_util_lt7911_get_information(struct cci_util_handle *handle,
 					 int *irq, int *width, int *height,
 					 int *fps, int *format, int *afreq, int *ach);

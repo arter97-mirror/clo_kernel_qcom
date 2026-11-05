@@ -8268,10 +8268,14 @@ static void msm_pcie_handle_linkdown(struct msm_pcie_dev_t *dev)
 
 	dev->link_status = MSM_PCIE_LINK_DOWN;
 
-	/* Linkdown is expected. As it must be due to card removal action. So return */
-	if ((dev->gpio[MSM_PCIE_GPIO_CARD_PRESENCE_PIN].num) &&
-		(gpio_get_value(dev->gpio[MSM_PCIE_GPIO_CARD_PRESENCE_PIN].num))) {
-		PCIE_DUMP(dev, "Linkdown due to card removal\n");
+	/*
+	 * On platforms that define a card-presence GPIO, a linkdown interrupt
+	 * can be asserted before the card-presence pin transitions to high.
+	 * Linkdown is expected. As it must be due to card removal action. So return.
+	 */
+	if (dev->gpio[MSM_PCIE_GPIO_CARD_PRESENCE_PIN].num) {
+		PCIE_DUMP(dev, "Linkdown ignored: card-presence GPIO defined %d\n",
+			  gpio_get_value(dev->gpio[MSM_PCIE_GPIO_CARD_PRESENCE_PIN].num));
 		return;
 	}
 

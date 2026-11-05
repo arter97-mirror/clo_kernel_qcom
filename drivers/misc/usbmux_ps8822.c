@@ -12,6 +12,9 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/kobject.h>
+#include <linux/platform_device.h>
+#include <linux/of_platform.h>
+#include <linux/usb/dwc3-msm.h>
 #include "usbmux_ps8822.h"
 
 static const char * const mode_names[] = {
@@ -146,10 +149,64 @@ static int usbmux_read_reg(struct usbmux_ps8822_data *data, u8 page_addr, u8 reg
 	return 0;
 }
 
+static void usbmux_put_dwc3_device(void *data)
+{
+	put_device(data);
+}
+
+static int usbmux_get_dwc3_msm(struct usbmux_ps8822_data *data)
+{
+	struct device_node *np;
+	struct platform_device *pdev;
+	int ret;
+
+	np = of_parse_phandle(data->dev->of_node, "usbmux,dwc3-controller", 0);
+	if (!np)
+		return dev_err_probe(data->dev, -EINVAL,
+				     "missing usbmux,dwc3-controller phandle\n");
+
+	pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!pdev || !dev_get_drvdata(&pdev->dev)) {
+		if (pdev)
+			put_device(&pdev->dev);
+		return dev_err_probe(data->dev, -EPROBE_DEFER,
+				     "DWC3 MSM driver not ready\n");
+	}
+
+	data->dwc3_msm_dev = &pdev->dev;
+	ret = devm_add_action_or_reset(data->dev, usbmux_put_dwc3_device,
+				       data->dwc3_msm_dev);
+	if (ret)
+		data->dwc3_msm_dev = NULL;
+
+	return ret;
+}
+
+static int usbmux_set_dwc3_dp_mode(struct usbmux_ps8822_data *data,
+				    bool enable)
+{
+	int ret;
+
+	if (data->dwc3_dp_mode == enable)
+		return 0;
+
+	ret = dwc3_msm_set_dp_mode(data->dwc3_msm_dev, enable, 4);
+	if (ret) {
+		dev_err(data->dev, "failed to set DWC3 DP mode to %d: %d\n",
+			enable, ret);
+		return ret;
+	}
+
+	data->dwc3_dp_mode = enable;
+	return 0;
+}
+
 static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mode,
 			   int orientation)
 {
-	int ret = 0;
+	bool enable_dwc3_dp;
+	int ret = 0, dwc3_ret = 0;
 	u8 mode_reg = 0;
 
 	if (!data)
@@ -161,6 +218,7 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 	}
 
 	mutex_lock(&data->lock);
+	enable_dwc3_dp = mode == USBMUX_MODE_DP4_LANE;
 
 	/*
 	 * Update orientation under data->lock so it is always consistent
@@ -210,6 +268,13 @@ static int usbmux_set_mode(struct usbmux_ps8822_data *data, enum usbmux_mode mod
 	data->current_mode = mode;
 	dev_dbg(data->dev, "Mode changed to: %s (reg=0x%02x)\n", mode_names[mode], mode_reg);
 
+	if (enable_dwc3_dp && !data->dwc3_dp_mode)
+		dwc3_ret = usbmux_set_dwc3_dp_mode(data, true);
+	else if (!enable_dwc3_dp)
+		dwc3_ret = usbmux_set_dwc3_dp_mode(data, false);
+	if (!ret)
+		ret = dwc3_ret;
+
 unlock:
 	mutex_unlock(&data->lock);
 	return ret;
@@ -249,6 +314,13 @@ void usbmux_setmode(struct usbmux_handle *handle, int lanes, int orientation)
 }
 EXPORT_SYMBOL_GPL(usbmux_setmode);
 
+static int usbmux_send_dpin_enabled(struct device *dev, bool enable)
+{
+	dev_err(dev, "ucsi_glink not available - SET_DP_IN_ENABLED not sent (enable=%d)\n",
+			enable);
+	return -EOPNOTSUPP;
+}
+
 static int usbmux_send_sinkonly(struct device *dev, bool enable)
 {
 	dev_err(dev, "ucsi_glink not available - SET_SINKONLY not sent (enable=%d)\n",
@@ -263,12 +335,11 @@ static int usbmux_send_cc_reconnect(struct device *dev)
 }
 
 /**
- * usbmux_set_dp_state - Set DP state with sink-only mode control
+ * usbmux_set_dp_state - Set DP-IN enabled state
  * @data: Device data pointer
- * @enable: true to enable DP state (sink-only), false to disable
+ * @enable: true to enable DP-IN, false to disable
  *
- * Common routine to handle DP state changes by sending UCSI commands
- * to ADSP for sink-only mode control and CC reconnection.
+ * This does not change the Type-C port role.
  *
  * Return: 0 on success, negative error code on failure
  */
@@ -279,9 +350,9 @@ static int usbmux_set_dp_state(struct usbmux_ps8822_data *data, bool enable)
 	if (!data)
 		return -EINVAL;
 
-	ret = usbmux_send_sinkonly(data->dev, enable);
+	ret = usbmux_send_dpin_enabled(data->dev, enable);
 	if (ret < 0) {
-		dev_err(data->dev, "Failed to send sinkonly command: %d\n", ret);
+		dev_err(data->dev, "Failed to send DP-IN command: %d\n", ret);
 		return ret;
 	}
 
@@ -294,6 +365,29 @@ static int usbmux_set_dp_state(struct usbmux_ps8822_data *data, bool enable)
 			 ret, enable);
 		return ret;
 	}
+
+	return 0;
+}
+
+static int usbmux_set_sinkonly(struct usbmux_ps8822_data *data, bool enable)
+{
+	int ret = 0;
+
+	if (!data)
+		return -EINVAL;
+
+	ret = usbmux_send_sinkonly(data->dev, enable);
+	if (ret < 0)
+		return ret;
+
+	ret = usbmux_send_cc_reconnect(data->dev);
+	if (ret < 0) {
+		dev_err(data->dev, "CC_RECONNECT failed for sinkonly: %d\n", ret);
+		return ret;
+	}
+
+	data->is_sinkonly = enable;
+	dev_dbg(data->dev, "is_sinkonly changed to %d\n", enable);
 
 	return 0;
 }
@@ -336,8 +430,42 @@ static ssize_t dp_state_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(dp_state);
 
+static ssize_t sinkonly_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct usbmux_ps8822_data *data = dev_get_drvdata(dev);
+
+	if (!data)
+		return -EINVAL;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", data->is_sinkonly ? 1 : 0);
+}
+
+static ssize_t sinkonly_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct usbmux_ps8822_data *data = dev_get_drvdata(dev);
+	int val = 0;
+	int ret = 0;
+
+	if (!data)
+		return -EINVAL;
+
+	if (kstrtoint(buf, 10, &val))
+		return -EINVAL;
+
+	ret = usbmux_set_sinkonly(data, val != 0);
+	if (ret < 0)
+		return ret;
+
+	return count;
+}
+static DEVICE_ATTR_RW(sinkonly);
+
 static struct attribute *usbmux_ps8822_attrs[] = {
 	&dev_attr_dp_state.attr,
+	&dev_attr_sinkonly.attr,
 	NULL
 };
 
@@ -577,6 +705,10 @@ static int usbmux_probe(struct i2c_client *client, const struct i2c_device_id *i
 		return ret;
 	}
 
+	ret = usbmux_get_dwc3_msm(data);
+	if (ret)
+		return ret;
+
 	ret = usbmux_hw_init(data);
 	if (ret) {
 		dev_err(&client->dev, "Failed to initialize HW: %d\n", ret);
@@ -584,6 +716,7 @@ static int usbmux_probe(struct i2c_client *client, const struct i2c_device_id *i
 	}
 
 	data->dp_state = false;
+	data->is_sinkonly = false;
 
 	ret = devm_device_add_group(&client->dev, &usbmux_ps8822_attr_group);
 	if (ret) {
