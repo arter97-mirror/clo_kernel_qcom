@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -55,6 +56,18 @@ const static struct {
 
 static DEFINE_SPINLOCK(gh_sec_vm_lock);
 static LIST_HEAD(gh_sec_vm_list);
+
+/*
+ * gh_legacy_firmware is used to determine whether the kernel is running
+ * on latest or legacy gunyah. This variable can be accessed from other
+ * files using gh_firmware_is_legacy().
+ */
+static bool gh_legacy_firmware;
+
+bool gh_firmware_is_legacy(void)
+{
+	return gh_legacy_firmware;
+}
 
 static inline enum gh_vm_names get_gh_vm_name(const char *str)
 {
@@ -162,6 +175,39 @@ static u64 gh_sec_load_metadata(struct gh_sec_vm_dev *vm_dev,
 	return 0;
 }
 
+static int gh_vm_legacy_sec_load(struct gh_sec_vm_dev *vm_dev,
+				struct gh_vm *vm, const struct firmware *fw,
+				const char *fw_name)
+{
+	struct device *dev = vm_dev->dev;
+	int ret;
+
+	ret = qcom_mdt_load(dev, fw, fw_name, vm_dev->pas_id, vm_dev->fw_virt,
+				vm_dev->fw_phys, vm_dev->fw_size, NULL);
+	if (ret) {
+		dev_err(dev, "Failed to load fw \"%s\": %d\n", fw_name, ret);
+		goto release_fw;
+	}
+
+	ret = qcom_scm_pas_auth_and_reset(vm_dev->pas_id);
+	if (ret) {
+		dev_err(dev, "error %d authenticating \"%s\"\n", ret, fw_name);
+		goto release_fw;
+	}
+
+	vm->keep_running = vm_dev->keep_running;
+	vm->is_secure_vm = true;
+
+	ret = gh_vm_init(vm_dev->vm_name, vm);
+	if (ret)
+		dev_err(dev, "Init secure VM %s to memory failed %d\n",
+					vm_dev->vm_name, ret);
+
+release_fw:
+	release_firmware(fw);
+	return ret;
+}
+
 static int gh_vm_loader_sec_load(struct gh_sec_vm_dev *vm_dev,
 					struct gh_vm *vm)
 {
@@ -180,6 +226,9 @@ static int gh_vm_loader_sec_load(struct gh_sec_vm_dev *vm_dev,
 		dev_err(dev, "Error requesting fw \"%s\": %d\n", fw_name, ret);
 		return ret;
 	}
+
+	if (gh_firmware_is_legacy())
+		return gh_vm_legacy_sec_load(vm_dev, vm, fw, fw_name);
 
 	metadata = qcom_mdt_read_metadata(fw, &metadata_size, fw_name, dev);
 	if (IS_ERR(metadata)) {
@@ -618,6 +667,18 @@ err_of_node_put:
 	return ret;
 }
 
+static void gh_detect_legacy_firmware(void)
+{
+	int ret;
+
+	ret = gh_rm_vm_auth_image(VMID_HLOS, 0, NULL);
+	pr_err("Ignore previous errors about failed auth call\n");
+	gh_legacy_firmware = (ret == -EOPNOTSUPP);
+
+	if (gh_firmware_is_legacy())
+		pr_info("Detected legacy gunyah\n");
+}
+
 static int gh_secure_vm_loader_probe(struct platform_device *pdev)
 {
 	struct gh_sec_vm_dev *sec_vm_dev;
@@ -654,6 +715,8 @@ static int gh_secure_vm_loader_probe(struct platform_device *pdev)
 		dev_err(dev, "DT error getting \"qcom,vmid\": %d\n", ret);
 		return ret;
 	}
+
+	gh_detect_legacy_firmware();
 
 	ret = gh_vm_loader_mem_probe(sec_vm_dev);
 	if (ret)
