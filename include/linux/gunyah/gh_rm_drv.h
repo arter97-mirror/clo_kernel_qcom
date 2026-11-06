@@ -424,6 +424,7 @@ int gh_rm_vm_config_image(gh_vmid_t vmid, u16 auth_mech, u32 mem_handle,
 	u64 image_offset, u64 image_size, u64 dtb_offset, u64 dtb_size);
 int gh_rm_vm_auth_image(gh_vmid_t vmid, ssize_t n_entries,
 				struct gh_vm_auth_param_entry *entry);
+bool gh_firmware_is_legacy(void);
 int ghd_rm_vm_init(gh_vmid_t vmid);
 int ghd_rm_get_vmid(enum gh_vm_names vm_name, gh_vmid_t *vmid);
 int gh_rm_get_vm_id_info(gh_vmid_t vmid);
@@ -597,6 +598,11 @@ static inline int gh_rm_vm_auth_image(gh_vmid_t vmid, ssize_t n_entries,
 				struct gh_vm_auth_param_entry *entry)
 {
 	return -EINVAL;
+}
+
+static inline bool gh_firmware_is_legacy(void)
+{
+	return false;
 }
 
 static inline int ghd_rm_vm_init(gh_vmid_t vmid)
