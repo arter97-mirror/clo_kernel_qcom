@@ -140,6 +140,7 @@ def define_single_vm_build(
 def define_vm_build(
         name,
         configs,
+        base_kernel = "kernel_aarch64_qtvm",
         **kwargs):
     for (variant, options) in configs.items():
         define_single_vm_build(
@@ -159,9 +160,9 @@ def define_vm_build(
         elif "oemvm" in name:
             seg_dtb_list = [dtb for dtb in dtb_list if "-oemvm-" in dtb]
         define_make_vm_dtb_img(name + "_" + variant, seg_dtb_list, vm_opts.dummy_img_size)
-        k_config = "kernel_aarch64_qtvm"
+        k_config = base_kernel
         if "debug" in variant:
-            k_config = "kernel_aarch64_qtvm_debug"
+            k_config = base_kernel + "_debug"
 
         define_extras(name + "_" + variant, kbuild_config = k_config, flavor = "vm")
 
@@ -171,6 +172,7 @@ def define_typical_vm_build(
         debug_config,
         config_kwargs = None,
         debug_kwargs = None,
+        base_kernel = "kernel_aarch64_qtvm",
         **kwargs):
     if config_kwargs == None:
         config_kwargs = dict()
@@ -187,16 +189,17 @@ def define_typical_vm_build(
 
     define_vm_build(
         name = name,
+        base_kernel = base_kernel,
         configs = {
             "debug-defconfig": {
                 "config_fragment": debug_config,
-                "base_kernel": "//soc-repo:kernel_aarch64_qtvm_debug",
+                "base_kernel": "//soc-repo:{}_debug".format(base_kernel),
                 "ddk_config_deps": [common_info],
                 "implicit_config_fragment": config,
             } | debug_kwargs,
             "defconfig": {
                 "config_fragment": config,
-                "base_kernel": "//soc-repo:kernel_aarch64_qtvm",
+                "base_kernel": "//soc-repo:{}".format(base_kernel),
                 "ddk_config_deps": [common_info],
             } | config_kwargs,
         },
