@@ -52,12 +52,13 @@ vm_target_bases = [
     "malabar",
     "seraph",
     "shikra",
+    "waipio",
 ]
 
 vm_targets = [
     "{}-{}".format(t, vt)
     for t in vm_target_bases
-    for vt in (["tuivm"] if "seraph" in t else vm_types)
+    for vt in (["tuivm"] if "seraph" in t or "waipio" in t else vm_types)
 ]
 
 vm_variants = [

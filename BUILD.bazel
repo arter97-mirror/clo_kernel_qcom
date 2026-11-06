@@ -57,7 +57,12 @@ load(
 load(":kleaf-scripts/targets/sun_vms.bzl", "define_sun_vms")
 load(":kleaf-scripts/targets/vienna.bzl", "define_vienna")
 load(":kleaf-scripts/targets/vienna_le.bzl", "define_vienna_le")
-load(":kleaf-scripts/targets/waipio.bzl", "define_waipio")
+load(
+    ":kleaf-scripts/targets/waipio.bzl",
+    "define_waipio",
+    "define_waipio_tuivm",
+)
+load(":kleaf-scripts/targets/waipio_vms.bzl", "define_waipio_vms")
 
 exports_files(["android/abi_gki_aarch64_qcom"])
 
@@ -333,6 +338,10 @@ label_flag(
 define_canoe()
 
 define_waipio()
+
+define_waipio_tuivm()
+
+define_waipio_vms()
 
 define_alor_le()
 
