@@ -18,6 +18,7 @@ COPY_FILES = [
     "drivers/char/hw_random/virtio-rng.c",
     "drivers/char/virtio_console.c",
     "drivers/dma/qcom/gpi.c",
+    "drivers/dma-buf/heaps/system_heap.c",
     "drivers/dma/dmaengine.h",
     "drivers/dma/virt-dma.h",
     "drivers/extcon/extcon-usb-gpio.c",
