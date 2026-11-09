@@ -247,6 +247,7 @@ glymur_perf_config = {
     "CONFIG_SERIAL_PKVM_GENI": "m",
     "CONFIG_SLIMBUS": "m",
     "CONFIG_SLIM_QCOM_NGD_CTRL": "m",
+    "CONFIG_SND_USB_AUDIO_QMI": "m",
     "CONFIG_SPI_MSM_GENI": "m",
     "CONFIG_SPMI_MSM_PMIC_ARB": "m",
     "CONFIG_SPMI_MSM_PMIC_ARB_DEBUG": "m",
