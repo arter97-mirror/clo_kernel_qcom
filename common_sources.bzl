@@ -221,6 +221,7 @@ COPY_FILES = [
     # mac80211.ko files end
     "drivers/soc/qcom/qcom-pbs.c",
     "drivers/pci/controller/pci-host-common.h",
+    "drivers/pci/pci.h",
 ]
 
 def define_common_upstream_files():

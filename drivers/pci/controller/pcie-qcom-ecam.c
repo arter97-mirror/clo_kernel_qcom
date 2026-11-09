@@ -26,6 +26,7 @@
 #include <linux/types.h>
 
 #include "pci-host-common.h"
+#include "drivers/pci/pci.h"
 
 #define PCIE_ECAM_LOG_PAGES (50)
 #define PCIE_ECAM_LOG_NAME_LEN (32)
@@ -108,6 +109,12 @@
 
 #define	MSI_DB_ADDR	0xa0000000
 #define MSI_IRQ_PER_GRP (32)
+
+#define PARF_INT_ALL_STATUS			0x224
+#define PARF_INT_ALL_CLEAR			0x228
+#define PARF_INT_ALL_MASK			0x22c
+#define PARF_INT_ALL_LINK_DOWN			BIT(1)
+#define PARF_INT_ALL_LINK_UP			BIT(13)
 
 /**
  * struct qcom_msi_irq - MSI IRQ information
@@ -198,6 +205,24 @@ struct qcom_msi_client {
 	struct device *dev;
 	unsigned int nr_irqs;
 	phys_addr_t msi_addr;
+};
+
+/**
+ * struct qcom_pcie - PCIe root port information
+ * @dev:	pointer to the device node
+ * @pdev:	pointer to the Root Port pci_dev
+ * @parf:	parf address in memory map
+ * @global_irq:	multiplexed irq for error interrupts
+ * @global_irq_enabled: true once @global_irq has been successfully requested
+ * @msi:	pointer to the qcom_msi structure
+ */
+struct qcom_pcie {
+	struct device *dev;
+	struct pci_dev *pdev;
+	void __iomem *parf;
+	int global_irq;
+	bool global_irq_enabled;
+	struct qcom_msi *msi;
 };
 
 static void qcom_msi_handler(struct irq_desc *desc)
@@ -609,6 +634,7 @@ static struct qcom_msi *qcom_msi_init(struct device *dev)
 	struct of_phandle_args irq;
 	int ret;
 	int nr = 0;
+	int global_idx;
 
 	dev_info(dev, "%s: RC %s: entry\n", __func__, dev_name(dev));
 
@@ -626,7 +652,21 @@ static struct qcom_msi *qcom_msi_init(struct device *dev)
 	msi->msi_db_addr = MSI_DB_ADDR;
 	while (of_irq_parse_one(dev->of_node, nr, &irq) == 0)
 		nr++;
+
+	/* global_int is optional and, if present, must be the last interrupt */
+	global_idx = of_property_match_string(dev->of_node, "interrupt-names",
+							"global_int");
+	if (global_idx >= 0) {
+		if (global_idx != nr - 1) {
+			PCIE_ERR(msi, "global_int must be the last interrupt (idx %d of %d)\n",
+							global_idx, nr);
+			ret = -EINVAL;
+			goto destroy_logs;
+		}
+		nr--;
+	}
 	msi->nr_hwirqs = nr;
+
 	if (!msi->nr_hwirqs) {
 		PCIE_ERR(msi, "no hwirqs found, exit ret %d\n", -ENODEV);
 		ret = -ENODEV;
@@ -688,9 +728,48 @@ destroy_logs:
 	return ERR_PTR(ret);
 }
 
+static void pcie_qcom_ecam_handle_link_down(struct pci_dev *port, struct qcom_msi *msi)
+{
+	PCIE_DBG(msi, "entry\n");
+#if IS_ENABLED(CONFIG_PCIEAER)
+	pcie_do_recovery(port, pci_channel_io_normal, NULL);
+#endif
+	PCIE_DBG(msi, "exit\n");
+}
+
+static irqreturn_t qcom_pcie_global_irq_thread(int irq, void *data)
+{
+	struct qcom_pcie *pcie = data;
+	u32 int_status;
+
+	if (!pcie->parf) {
+		PCIE_ERR(pcie->msi, "Global IRQ fired with no parf mapping, ignoring\n");
+		return IRQ_HANDLED;
+	}
+
+	int_status = readl_relaxed(pcie->parf + PARF_INT_ALL_STATUS);
+
+	PCIE_DBG(pcie->msi, "global_int triggered int_status:0x%x\n", int_status);
+
+	writel_relaxed(int_status, pcie->parf + PARF_INT_ALL_CLEAR);
+	if (PARF_INT_ALL_LINK_DOWN & int_status) {
+		PCIE_ERR(pcie->msi, "Received PCIe Linkdown IRQ\n");
+		if (pcie->pdev)
+			pcie_qcom_ecam_handle_link_down(pcie->pdev, pcie->msi);
+		else
+			PCIE_ERR(pcie->msi, "Root Port pci_dev unavailable, skipping recovery\n");
+	} else if (PARF_INT_ALL_LINK_UP & int_status) {
+		PCIE_DBG(pcie->msi, "Received PCIe Link up IRQ\n");
+	}
+
+	PCIE_DBG(pcie->msi, "exit\n");
+	return IRQ_HANDLED;
+}
+
 static int qcom_pcie_ecam_suspend(struct device *dev)
 {
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 	int ret;
 
 	PCIE_DBG(msi, "entry\n");
@@ -712,7 +791,8 @@ static int qcom_pcie_ecam_suspend(struct device *dev)
 
 static int qcom_pcie_ecam_resume(struct device *dev)
 {
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 	int ret;
 
 	PCIE_DBG(msi, "entry\n");
@@ -736,16 +816,27 @@ static int qcom_pcie_ecam_resume(struct device *dev)
 
 static int qcom_pci_ecam_runtime_suspend(struct device *dev)
 {
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 
 	PCIE_DBG(msi, "entry\n");
+
+	/*
+	 * Quiesce the global link IRQ before the PARF register block loses
+	 * power, so qcom_pcie_global_irq_thread() cannot race the power-down
+	 * transition and access a clock/power-collapsed pcie->parf.
+	 */
+	if (pcie && pcie->global_irq_enabled)
+		disable_irq(pcie->global_irq);
+
 	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
 static int qcom_pci_ecam_runtime_resume(struct device *dev)
 {
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 
 	PCIE_DBG(msi, "entry\n");
 
@@ -756,6 +847,21 @@ static int qcom_pci_ecam_runtime_resume(struct device *dev)
 	if (msi)
 		qcom_msi_config(msi->msi_domain);
 
+	/*
+	 * PARF_INT_ALL_MASK is cleared across power collapse; re-arm the link
+	 * interrupts before re-enabling the IRQ so qcom_pcie_global_irq_thread()
+	 * cannot observe a stale masked state once it fires again.
+	 */
+	if (pcie && pcie->global_irq_enabled) {
+		if (pcie->parf) {
+			u32 val = readl_relaxed(pcie->parf + PARF_INT_ALL_MASK);
+
+			val |= PARF_INT_ALL_LINK_DOWN | PARF_INT_ALL_LINK_UP;
+			writel_relaxed(val, pcie->parf + PARF_INT_ALL_MASK);
+		}
+		enable_irq(pcie->global_irq);
+	}
+
 	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
@@ -763,7 +869,8 @@ static int qcom_pci_ecam_runtime_resume(struct device *dev)
 static void qcom_pcie_ecam_shutdown(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 	int ret;
 	int initial_usage_count = atomic_read(&dev->power.usage_count);
 
@@ -804,13 +911,39 @@ static void qcom_pcie_ecam_shutdown(struct platform_device *pdev)
 	PCIE_DBG(msi, "exit\n");
 }
 
+static void qcom_pcie_put_pdev(void *data)
+{
+	pci_dev_put((struct pci_dev *)data);
+}
+
 static int qcom_pcie_ecam_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct qcom_msi *msi;
-	int ret;
+	int ret = 0;
+	struct qcom_pcie *pcie;
+	struct pci_host_bridge *bridge;
+	struct pci_dev *rp;
+	u32 val;
 
 	dev_info(dev, "%s: RC %s: entry\n", __func__, dev_name(dev));
+	pcie = devm_kzalloc(dev, sizeof(*pcie), GFP_KERNEL);
+	if (!pcie)
+		return -ENOMEM;
+
+	pcie->dev = dev;
+
+	/* parf register space is optional */
+	pcie->parf = devm_platform_ioremap_resource_byname(pdev, "parf");
+	if (IS_ERR(pcie->parf)) {
+		dev_err(dev, "Failed to get parf address\n");
+		pcie->parf = NULL;
+	}
+
+	/* Global INT is optional */
+	pcie->global_irq = platform_get_irq_byname(pdev, "global_int");
+	if (pcie->global_irq < 0)
+		dev_err(dev, "Failed to get Global IRQ: %d\n", pcie->global_irq);
 
 	ret = devm_pm_runtime_enable(dev);
 	if (ret) {
@@ -833,6 +966,26 @@ static int qcom_pcie_ecam_probe(struct platform_device *pdev)
 		pm_runtime_put_sync(dev);
 		return PTR_ERR(msi);
 	}
+	pcie->msi = msi;
+
+	if (pcie->parf && pcie->global_irq >= 0) {
+		/* Ensure link interrupts are masked before the IRQ goes live. */
+		val = readl_relaxed(pcie->parf + PARF_INT_ALL_MASK);
+		val &= ~(PARF_INT_ALL_LINK_DOWN | PARF_INT_ALL_LINK_UP);
+		writel_relaxed(val, pcie->parf + PARF_INT_ALL_MASK);
+
+		ret = devm_request_threaded_irq(dev, pcie->global_irq, NULL,
+						qcom_pcie_global_irq_thread,
+						IRQF_ONESHOT,
+						"global_irq", pcie);
+		if (ret) {
+			PCIE_ERR(msi, "Failed to request global IRQ: %d\n", ret);
+			qcom_msi_deinit(msi);
+			pm_runtime_put_sync(dev);
+			return ret;
+		}
+		pcie->global_irq_enabled = true;
+	}
 
 	ret = pci_host_common_probe(pdev);
 	if (ret) {
@@ -843,9 +996,34 @@ static int qcom_pcie_ecam_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	dev_set_drvdata(&pdev->dev, msi);
+	/*
+	 * pci_host_common_probe() sets platform drvdata to the host bridge.
+	 * Retrieve the Root Port pci_dev (bus 0, devfn 0) from it so we can
+	 * pass it to pcie_qcom_ecam_handle_link_down() on link-down events.
+	 */
+	bridge = platform_get_drvdata(pdev);
+	dev_set_drvdata(&pdev->dev, pcie);
+	rp = pci_get_slot(bridge->bus, PCI_DEVFN(0, 0));
+	if (rp) {
+		ret = devm_add_action_or_reset(dev, qcom_pcie_put_pdev, rp);
+		if (ret) {
+			dev_err(dev, "Failed to register pci_dev cleanup: %d\n",
+				ret);
+			rp = NULL;
+		}
+	} else
+		dev_warn(dev, "Failed to get Root Port pci_dev\n");
+
+	pcie->pdev = rp;
+
+	if (pcie->parf && pcie->global_irq_enabled) {
+		val = readl_relaxed(pcie->parf + PARF_INT_ALL_MASK);
+		val |= PARF_INT_ALL_LINK_DOWN | PARF_INT_ALL_LINK_UP;
+		writel(val, pcie->parf + PARF_INT_ALL_MASK);
+	}
+
 	PCIE_DBG(msi, "exit ret %d\n", ret);
-	return ret;
+	return 0;
 }
 
 static const struct dev_pm_ops qcom_pcie_ecam_pm_ops = {
