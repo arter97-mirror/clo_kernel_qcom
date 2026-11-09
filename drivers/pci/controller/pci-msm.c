@@ -4,6 +4,7 @@
 #include <dt-bindings/regulator/qcom,rpmh-regulator-levels.h>
 #include <dt-bindings/interconnect/qcom,icc.h>
 #include <linux/aer.h>
+#include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/clk.h>
 #include <linux/compiler.h>
@@ -78,10 +79,15 @@
 #define PCIE_GEN3_RELATED_RATE_SHADOW_SEL(x) ((x) - PCI_EXP_LNKCAP_SLS_8_0GB)
 
 #define PCIE_GEN3_EQ_CONTROL (0x08a8)
+#define PCIE_GEN3_EQ_FB_MODE_MASK (GENMASK(3, 0))
+#define PCIE_GEN3_EQ_PHASE23_EXIT_MODE_MASK BIT(4)
 #define PCIE_GEN3_EQ_PSET_REQ_VEC_MASK (GENMASK(23, 8))
 
 #define PCIE_GEN3_EQ_FB_MODE_DIR_CHANGE (0x08ac)
 #define PCIE_GEN3_EQ_FMDC_T_MIN_PHASE23_MASK (0x1f)
+#define PCIE_GEN3_EQ_FMDC_N_EVALS_MASK (GENMASK(9, 5))
+#define PCIE_GEN3_EQ_FMDC_MAX_PRE_CURSOR_DELTA_MASK (GENMASK(13, 10))
+#define PCIE_GEN3_EQ_FMDC_MAX_POST_CURSOR_DELTA_MASK (GENMASK(17, 14))
 
 #define PCIE_GEN3_MISC_CONTROL (0x08bc)
 
@@ -5576,18 +5582,41 @@ static void msm_pcie_config_controller_phy(struct msm_pcie_dev_t *pcie_dev)
 					PCIE_GEN3_RELATED_RATE_SHADOW_SEL_MASK,
 					PCIE_GEN3_RELATED_RATE_SHADOW_SEL(i));
 
-		msm_pcie_write_reg_field(pcie_dev->dm_core, PCIE_GEN3_EQ_CONTROL,
-					PCIE_GEN3_EQ_PSET_REQ_VEC_MASK,
-					pcie_dev->eq_pset_req_vec);
+		/*
+		 * Ensure EQ_FB_MODE_MASK, EQ_PHASE23_EXIT_MODE_MASK are set to 0
+		 * and program eq_pset_req_vec
+		 */
+		msm_pcie_write_mask(pcie_dev->dm_core + PCIE_GEN3_EQ_CONTROL,
+				PCIE_GEN3_EQ_PSET_REQ_VEC_MASK |
+				PCIE_GEN3_EQ_FB_MODE_MASK |
+				PCIE_GEN3_EQ_PHASE23_EXIT_MODE_MASK,
+				FIELD_PREP(PCIE_GEN3_EQ_PSET_REQ_VEC_MASK,
+					pcie_dev->eq_pset_req_vec));
 
 		/* GEN3_ZRXDC_NONCOMPL */
 		msm_pcie_write_mask(pcie_dev->dm_core +
 					PCIE_GEN3_RELATED, BIT(0), 0);
 
-		msm_pcie_write_reg_field(pcie_dev->dm_core,
+		/* program t_min_phase23, n_evals and cursor deltas */
+		msm_pcie_write_mask(pcie_dev->dm_core +
 				PCIE_GEN3_EQ_FB_MODE_DIR_CHANGE,
-				PCIE_GEN3_EQ_FMDC_T_MIN_PHASE23_MASK,
-				pcie_dev->eq_fmdc_t_min_phase23);
+				PCIE_GEN3_EQ_FMDC_T_MIN_PHASE23_MASK |
+				PCIE_GEN3_EQ_FMDC_N_EVALS_MASK |
+				PCIE_GEN3_EQ_FMDC_MAX_PRE_CURSOR_DELTA_MASK |
+				PCIE_GEN3_EQ_FMDC_MAX_POST_CURSOR_DELTA_MASK,
+				FIELD_PREP(PCIE_GEN3_EQ_FMDC_T_MIN_PHASE23_MASK,
+					pcie_dev->eq_fmdc_t_min_phase23) |
+				FIELD_PREP(PCIE_GEN3_EQ_FMDC_N_EVALS_MASK, 0xD) |
+				FIELD_PREP(PCIE_GEN3_EQ_FMDC_MAX_PRE_CURSOR_DELTA_MASK, 0x5) |
+				FIELD_PREP(PCIE_GEN3_EQ_FMDC_MAX_POST_CURSOR_DELTA_MASK, 0x5));
+
+		PCIE_DBG(pcie_dev,
+			"PCIe: RC%d: gen speed %d: PCIE_GEN3_RELATED: 0x%x PCIE_GEN3_EQ_CONTROL: 0x%x PCIE_GEN3_EQ_FB_MODE_DIR_CHANGE: 0x%x\n",
+			pcie_dev->rc_idx, i,
+			readl_relaxed(pcie_dev->dm_core + PCIE_GEN3_RELATED),
+			readl_relaxed(pcie_dev->dm_core + PCIE_GEN3_EQ_CONTROL),
+			readl_relaxed(pcie_dev->dm_core +
+				PCIE_GEN3_EQ_FB_MODE_DIR_CHANGE));
 	}
 }
 
