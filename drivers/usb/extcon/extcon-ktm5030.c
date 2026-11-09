@@ -104,18 +104,10 @@ static void ktm5000_detect_cable(struct work_struct *work)
 	id = pdata->irq_gpio ?
 		gpio_get_value_cansleep(pdata->irq_gpio) : 1;
 
-	dev_dbg(pdata->dev, "Cable detect work triggered: id=%d\n", id);
-
-	if (id) {
-		extcon_set_state_sync(pdata->edev, EXTCON_USB_HOST, false);
-		extcon_set_state_sync(pdata->edev, EXTCON_USB, true);
+	if (id)
 		extcon_set_dwc3_msm_mode(pdata, 1);
-	} else {
-		extcon_set_state_sync(pdata->edev, EXTCON_USB_HOST, true);
-		extcon_set_state_sync(pdata->edev, EXTCON_USB, false);
+	else
 		extcon_set_dwc3_msm_mode(pdata, 0);
-	}
-
 }
 
 static irqreturn_t usb_irq_handler(int irq, void *dev_id)
