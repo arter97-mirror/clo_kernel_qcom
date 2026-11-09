@@ -117,6 +117,9 @@ static int virtio_gpu_getparam_ioctl(struct drm_device *dev, void *data,
 	case VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME:
 		value = vgdev->has_context_init ? 1 : 0;
 		break;
+	case VIRTGPU_PARAM_GUEST_MEM_IMPORT:
+		value = vgdev->has_guest_mem_import ? 1 : 0;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -467,7 +470,7 @@ static int verify_blob(struct virtio_gpu_device *vgdev,
 		return -EINVAL;
 	}
 
-	if (*host3d_blob) {
+	if (*host3d_blob || vgdev->has_guest_mem_import) {
 		if (!vgdev->has_virgl_3d)
 			return -EINVAL;
 
