@@ -109,3 +109,6 @@ debug-regulator.ko
 qcom-pdc.ko
 gdsc-regulator.ko
 qcom_hib.ko
+qseecom_proxy.ko
+si_core_module.ko
+mem_object.ko
