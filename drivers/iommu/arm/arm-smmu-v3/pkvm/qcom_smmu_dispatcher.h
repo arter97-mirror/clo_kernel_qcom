@@ -21,12 +21,48 @@ struct smmu_nested_domain {
 	struct io_pgtable               *pgtable;
 };
 
+/*
+ * Common guest (pVM) domain container, version-agnostic.
+ * Allocated by the dispatcher at alloc_domain; domain->priv points here.
+ * The io_pgtable and the SMMU binding are version-specific and are filled
+ * in by the vendor attach_dev callback (which supplies the v2/v3 TLB ops
+ * when allocating the page table), so they are NULL/unset until a device
+ * is attached.
+ *
+ * v1 assumption: a guest domain spans a single SMMU instance (@iommu).
+ * Multi-SMMU domains would replace @iommu/@cb_idx with a per-domain SMMU
+ * list.
+ */
+/*
+ * smmu_nested_guest_domain:
+ * @domain: back-ptr; domain_id is the SMMUv3 VMID (S2) / ASID (S1)
+ * @iommu: owning SMMU, NULL until attach
+ * @cb_idx: SMMUv2 guest S2 CB, -1 until attach
+ * @pgt_lock: serializes map/unmap on @pgtable
+ * @pgtable: S2 page table, NULL until attach
+ */
+struct smmu_nested_guest_domain {
+	struct kvm_hyp_iommu_domain	*domain;
+	struct kvm_hyp_iommu		*iommu;
+	int				cb_idx;
+	hyp_spinlock_t			pgt_lock;
+	struct io_pgtable		*pgtable;
+};
+
 /* SMMU vendor driver callbacks - implemented by specific SMMU versions */
 struct smmu_vendor_callbacks {
 	const struct iommu_flush_ops *tlb_ops;
 	void (*get_cfg)(struct io_pgtable_cfg *ncfg);
 	int (*post_init)(void);
 	bool (*dabt_hdl)(struct user_pt_regs *regs, u64 esr, u64 addr);
+	struct kvm_hyp_iommu *(*get_iommu_by_id)(pkvm_handle_t smmu_id);
+	int (*get_iommu_token_by_id)(pkvm_handle_t smmu_id, u64 *out_token);
+	int (*attach_dev)(struct kvm_hyp_iommu *iommu,
+			  struct kvm_hyp_iommu_domain *domain,
+			  u32 sid, u32 pasid, u32 pasid_bits, unsigned long flags);
+	int (*detach_dev)(struct kvm_hyp_iommu *iommu,
+			  struct kvm_hyp_iommu_domain *domain,
+			  u32 sid, u32 pasid);
 };
 
 /* SMMU vendor driver structure */
