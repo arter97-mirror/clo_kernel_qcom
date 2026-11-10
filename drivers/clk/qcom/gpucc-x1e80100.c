@@ -604,7 +604,7 @@ static struct gdsc gpu_cc_cx_gdsc = {
 		.name = "gpu_cc_cx_gdsc",
 	},
 	.pwrsts = PWRSTS_OFF_ON,
-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
+	.flags = VOTABLE | RETAIN_FF_ENABLE,
 	.supply = "vdd_cx",
 };
 
@@ -656,7 +656,7 @@ static struct gdsc gpu_cc_gx_gdsc = {
 		.power_on = gdsc_gx_do_nothing_enable,
 	},
 	.pwrsts = PWRSTS_OFF_ON,
-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
+	.flags = CLAMP_IO | AON_RESET | SW_RESET | POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
 	.supply = "vdd_gmxc_gx_voter",
 };
 
@@ -741,6 +741,7 @@ static int gpu_cc_x1e80100_probe(struct platform_device *pdev)
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
+	clk_zonda_pll_configure(&gpu_cc_pll0, regmap, &gpu_cc_pll0_config);
 	clk_lucid_evo_pll_configure(&gpu_cc_pll1, regmap, &gpu_cc_pll1_config);
 
 	/* Keep clocks always enabled */
