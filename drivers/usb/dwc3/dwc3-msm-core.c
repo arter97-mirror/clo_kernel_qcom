@@ -58,6 +58,10 @@
 
 #define NUM_LOG_PAGES   12
 
+/* extcon specific suppot */
+#define EXTCON_MAX_RETRIES 50
+#define EXTCON_RETRY_DELAY_MS 5000
+
 /* dload specific suppot */
 #define PID_MAGIC_ID		0x71432909
 #define SERIAL_NUM_MAGIC_ID	0x61945374
@@ -673,6 +677,8 @@ struct dwc3_msm {
 	struct device		**pd_devs;
 
 	u32			cap_length;
+	struct delayed_work	extcon_work;
+	int extcon_retry_count;
 };
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
@@ -3163,7 +3169,7 @@ static int dwc3_msm_modeled_d0_to_d1(struct dwc3_msm *mdwc)
 }
 
 static void dwc3_resume_work(struct work_struct *w);
-
+static void dwc3_msm_check_extcon_prop(struct work_struct *w);
 /*
  * Config Global Distributed Switch Controller (GDSC)
  * to support controller power collapse
@@ -6638,16 +6644,31 @@ static int vbus_regulator_get(struct dwc3_msm *mdwc)
 	return 0;
 }
 
-static int dwc3_msm_check_extcon_prop(struct platform_device *pdev)
+static void dwc3_msm_check_extcon_prop(struct work_struct *w)
 {
-	struct dwc3_msm	*mdwc = platform_get_drvdata(pdev);
+	struct dwc3_msm	*mdwc = container_of(w, struct dwc3_msm, extcon_work.work);
 	struct device_node *node = mdwc->dev->of_node;
 	int ret = 0;
 
 	if (of_property_read_bool(node, "extcon")) {
 		ret = dwc3_msm_extcon_register(mdwc);
-		if (ret)
-			return ret;
+		if (ret) {
+			if (ret != -EPROBE_DEFER) {
+				dev_err(mdwc->dev, "extcon register failed %d\n",
+						ret);
+				return;
+			}
+
+			if (mdwc->extcon_retry_count < EXTCON_MAX_RETRIES) {
+				mdwc->extcon_retry_count++;
+				schedule_delayed_work(&mdwc->extcon_work,
+						msecs_to_jiffies(EXTCON_RETRY_DELAY_MS));
+			} else {
+				dev_err(mdwc->dev, "extcon register failed after %d retries\n",
+						EXTCON_MAX_RETRIES);
+			}
+			return;
+		}
 
 		/*
 		 * dpdm regulator will be turned on to perform apsd
@@ -6657,7 +6678,7 @@ static int dwc3_msm_check_extcon_prop(struct platform_device *pdev)
 		 * if dpdm is not present controller can be reset
 		 * as this controller may not be used for charger detection.
 		 */
-		mdwc->dpdm_reg = devm_regulator_get_optional(&pdev->dev,
+		mdwc->dpdm_reg = devm_regulator_get_optional(mdwc->dev,
 				"dpdm");
 		if (IS_ERR(mdwc->dpdm_reg)) {
 			dev_dbg(mdwc->dev, "assume cable is not connected\n");
@@ -6706,8 +6727,7 @@ static int dwc3_msm_check_extcon_prop(struct platform_device *pdev)
 
 		dwc3_ext_event_notify(mdwc);
 	}
-
-	return ret;
+	mdwc->extcon_retry_count = 0;
 }
 static int dwc3_msm_probe(struct platform_device *pdev)
 {
@@ -6723,6 +6743,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mdwc);
 	mdwc->dev = &pdev->dev;
+	mdwc->extcon_retry_count = 0;
 
 	if ((of_device_is_compatible(dev->of_node, "qcom,dwc3-msm-fw-managed"))) {
 		mdwc->fw_managed_pwr = true;
@@ -6737,6 +6758,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	INIT_WORK(&mdwc->resume_work, dwc3_resume_work);
 	INIT_WORK(&mdwc->restart_usb_work, dwc3_restart_usb_work);
 	INIT_WORK(&mdwc->sm_work, dwc3_otg_sm_work);
+	INIT_DELAYED_WORK(&mdwc->extcon_work, dwc3_msm_check_extcon_prop);
 	INIT_DELAYED_WORK(&mdwc->perf_vote_work, msm_dwc3_perf_vote_work);
 
 	dwc3_msm_debug_init(mdwc);
@@ -6831,11 +6853,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (dwc3_msm_check_extcon_prop(pdev))
-		goto put_dwc3;
 
 	mdwc->force_disconnect = false;
-
+	schedule_delayed_work(&mdwc->extcon_work, 0);
 	/* Add pm_qos with default mode intially */
 	if (mdwc->pm_qos_latency)
 		cpu_latency_qos_add_request(&mdwc->pm_qos_req_dma,
@@ -6847,6 +6867,7 @@ put_dwc3:
 	usb_role_switch_unregister(mdwc->role_switch);
 
 err:
+	cancel_delayed_work_sync(&mdwc->extcon_work);
 	msm_dwc3_perf_vote_enable(mdwc, false);
 	/*
 	 * destroy_workqueue() drains, so any pending dwc3_resume_work runs
