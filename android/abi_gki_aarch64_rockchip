@@ -536,6 +536,8 @@
   hdmi_audio_infoframe_pack
   hdmi_drm_infoframe_pack
   hdmi_infoframe_pack
+  hdmi_infoframe_log
+  hdmi_infoframe_unpack
   hdmi_vendor_infoframe_pack
   hid_debug
   hid_hw_close
@@ -1733,6 +1735,7 @@
   drm_display_mode_from_cea_vic
   drm_edid_duplicate
   drm_edid_get_monitor_name
+  drm_edid_get_panel_id
   drm_modeset_lock_single_interruptible
   drm_object_property_set_value
   __drm_printfn_debug
@@ -1765,6 +1768,7 @@
 # required by dw-hdmi.ko
   drm_connector_attach_hdr_output_metadata_property
   drm_connector_attach_max_bpc_property
+  drm_connector_attach_vrr_capable_property
   drm_default_rgb_quant_range
 
 # required by dw-mipi-dsi.ko
@@ -2088,6 +2092,7 @@
 # required by panel-simple.ko
   drm_bus_flags_from_videomode
   drm_connector_set_panel_orientation
+  drm_connector_set_vrr_capable_property
   drm_panel_of_backlight
   drm_panel_remove
   mipi_dsi_compression_mode
@@ -2293,6 +2298,7 @@
 
 # required by rk808.ko
   devm_register_sys_off_handler
+  driver_for_each_device
   platform_device_add
   platform_device_alloc
   register_syscore_ops
