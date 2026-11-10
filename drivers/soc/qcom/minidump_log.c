@@ -31,6 +31,8 @@
 #include "debug_symbol.h"
 #ifdef CONFIG_QCOM_MINIDUMP_PSTORE
 #include <linux/math64.h>
+#include <linux/log2.h>
+#include <linux/pstore_ram.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_reserved_mem.h>
@@ -1523,29 +1525,122 @@ static inline void register_cpufreq_log(void) {}
 #endif /* CONFIG_QCOM_MINIDUMP_PANIC_CPUFREQ_INFO */
 
 #ifdef CONFIG_QCOM_MINIDUMP_PSTORE
+/*
+ * Reduction of ramoops_init_przs(): compute the number of bytes that function
+ * consumes from the carve-out for a given memory budget. It splits the budget
+ * into full records, rounds each zone down to an even size and advances paddr
+ * by zone_sz * cnt, so the space consumed can be smaller than the budget.
+ *
+ * Returns 0 with *consumed == 0 when no zone is requested, and a negative
+ * error for the cases where ramoops_init_przs() takes its "fail" path and so
+ * aborts the whole ramoops probe.
+ */
+static int ramoops_przs_mem_size(unsigned long mem_sz, ssize_t record_size,
+				 unsigned int cnt, unsigned long *consumed)
+{
+	unsigned long zone_sz;
+
+	*consumed = 0;
+
+	if (!mem_sz || record_size == 0)
+		return 0;
+
+	if (record_size < 0) {
+		if (!cnt)
+			return 0;
+		record_size = mem_sz / cnt;
+		if (!record_size)
+			return -EINVAL;
+	} else {
+		/* A zero count means derive the count from the memory budget. */
+		cnt = mem_sz / record_size;
+		if (!cnt)
+			return -EINVAL;
+	}
+
+	zone_sz = ALIGN_DOWN(mem_sz / cnt, 2);
+	if (!zone_sz)
+		return -EINVAL;
+
+	*consumed = zone_sz * cnt;
+
+	return 0;
+}
+
+/*
+ * Read a ramoops u32 property the same way ramoops_parse_dt_u32() and
+ * qcom_ramoops_probe() do, so a DT those reject is not accepted here either.
+ */
+static int md_pstore_read_u32(struct device_node *node, const char *prop,
+			      unsigned long *value)
+{
+	u32 val32 = 0;
+	int ret;
+
+	ret = of_property_read_u32(node, prop, &val32);
+	if (ret == -EINVAL) {
+		/* Property is missing, ramoops defaults it to 0. */
+		*value = 0;
+		return 0;
+	} else if (ret < 0) {
+		pr_err("Failed to parse ramoops %s: %d\n", prop, ret);
+		return ret;
+	}
+
+	if (val32 > INT_MAX) {
+		pr_err("ramoops %s %u > INT_MAX\n", prop, val32);
+		return -EOVERFLOW;
+	}
+
+	*value = val32;
+
+	return 0;
+}
+
+static void md_add_pstore_region(const char *name, phys_addr_t *paddr,
+				 unsigned long size)
+{
+	struct md_region md_entry;
+
+	if (!size)
+		return;
+
+	strscpy(md_entry.name, name, sizeof(md_entry.name));
+	md_entry.virt_addr = (uintptr_t)phys_to_virt(*paddr);
+	md_entry.phys_addr = *paddr;
+	md_entry.size = size;
+
+	if (msm_minidump_add_region(&md_entry) < 0)
+		pr_err("Failed to add %s in Minidump\n", name);
+
+	*paddr += size;
+}
+
 static void register_pstore_info(void)
 {
 	int ret;
 	struct device_node *node, *tmp_node;
 	struct resource resource;
 	struct reserved_mem *rmem = NULL;
-	unsigned int size;
+	unsigned long record_size = 0, console_size = 0;
+	unsigned long ftrace_size = 0, pmsg_size = 0;
+	unsigned long dmesg_size = 0, flags = 0, total_size;
+	unsigned long fixed_size;
+	unsigned int ftrace_cnt;
 	phys_addr_t paddr;
-	unsigned long total_size;
-	struct md_region md_entry;
 
 	node = tmp_node = of_find_compatible_node(NULL, NULL, "ramoops");
 	if (IS_ERR_OR_NULL(tmp_node)) {
 		node = of_find_compatible_node(NULL, NULL, "qcom,ramoops");
 		if (IS_ERR_OR_NULL(node)) {
 			pr_err("Failed to get ramoops node\n");
-			return;
+			goto out;
 		}
 
 		tmp_node = of_parse_phandle(node, "memory-region", 0);
 		if (!tmp_node) {
 			pr_err("Failed to parse ramoops memory-region\n");
-			return;
+			goto out;
 		}
 	}
 
@@ -1557,66 +1652,84 @@ static void register_pstore_info(void)
 			total_size = rmem->size;
 		} else {
 			pr_err("Failed to get ramoops mem\n");
-			return;
+			goto out;
 		}
 	} else {
 		paddr = resource.start;
 		total_size = resource_size(&resource);
 	}
 
-	ret = of_property_read_u32(node, "record-size", &size);
-	if (!ret && size > 0) {
-		strscpy(md_entry.name, "KDMESG", sizeof(md_entry.name));
-		md_entry.virt_addr = (uintptr_t)phys_to_virt(paddr);
-		md_entry.phys_addr = paddr;
-		md_entry.size = size;
+	if (md_pstore_read_u32(node, "record-size", &record_size) ||
+	    md_pstore_read_u32(node, "console-size", &console_size) ||
+	    md_pstore_read_u32(node, "ftrace-size", &ftrace_size) ||
+	    md_pstore_read_u32(node, "pmsg-size", &pmsg_size) ||
+	    md_pstore_read_u32(node, "flags", &flags))
+		goto out;
 
-		if (msm_minidump_add_region(&md_entry) < 0)
-			pr_err("Failed to add dmesg in Minidump\n");
+	/*
+	 * Mirror the rounding that ramoops_probe() applies (ram.c:766-773):
+	 * every size is rounded down to the nearest power of two before use.
+	 */
+	if (record_size && !is_power_of_2(record_size))
+		record_size = rounddown_pow_of_two(record_size);
+	if (console_size && !is_power_of_2(console_size))
+		console_size = rounddown_pow_of_two(console_size);
+	if (ftrace_size && !is_power_of_2(ftrace_size))
+		ftrace_size = rounddown_pow_of_two(ftrace_size);
+	if (pmsg_size && !is_power_of_2(pmsg_size))
+		pmsg_size = rounddown_pow_of_two(pmsg_size);
 
-		paddr += size;
+	/*
+	 * The dmesg memory budget is the residual space after the other three
+	 * sections are carved out (ram.c:787-788), not the "record-size"
+	 * property.
+	 */
+	if (console_size > ULONG_MAX - ftrace_size ||
+	    console_size + ftrace_size > ULONG_MAX - pmsg_size) {
+		pr_err("ramoops sizes overflow unsigned long\n");
+		goto out;
+	}
+	fixed_size = console_size + ftrace_size + pmsg_size;
+
+	if (total_size > fixed_size &&
+	    ramoops_przs_mem_size(total_size - fixed_size, record_size, 0,
+				  &dmesg_size))
+		goto out;
+
+	/*
+	 * ftrace goes through ramoops_init_przs() as well (ram.c:808-812). In
+	 * per-CPU mode the budget is split across nr_cpu_ids zones and each
+	 * zone is rounded down, so account for the space actually consumed.
+	 */
+	ftrace_cnt = (flags & RAMOOPS_FLAG_FTRACE_PER_CPU) ? nr_cpu_ids : 1;
+	if (ramoops_przs_mem_size(ftrace_size, -1, ftrace_cnt, &ftrace_size))
+		goto out;
+
+	/*
+	 * ramoops_init_przs() and ramoops_init_prz() abort the entire ramoops
+	 * probe when a zone would spill past the carve-out, leaving no pstore
+	 * region at all. Validate the whole layout up front so an oversubscribed
+	 * DT cannot make minidump describe memory outside the reserved region.
+	 */
+	if (dmesg_size + console_size + pmsg_size + ftrace_size > total_size) {
+		pr_err("ramoops sections exceed reserved mem (0x%lx)\n",
+		       total_size);
+		goto out;
 	}
 
-	ret = of_property_read_u32(node, "console-size", &size);
-	if (!ret && size > 0) {
-		strscpy(md_entry.name, "KCONSOLE", sizeof(md_entry.name));
-		md_entry.virt_addr = (uintptr_t)phys_to_virt(paddr);
-		md_entry.phys_addr = paddr;
-		md_entry.size = size;
-
-		if (msm_minidump_add_region(&md_entry) < 0)
-			pr_err("Failed to add console in Minidump\n");
-
-		paddr += size;
-	}
-
+	/* Section order matches ramoops_probe() (ram.c:789-812). */
+	md_add_pstore_region("KDMESG", &paddr, dmesg_size);
+	md_add_pstore_region("KCONSOLE", &paddr, console_size);
+	md_add_pstore_region("KPMSG", &paddr, pmsg_size);
 #ifndef CONFIG_QCOM_MINIDUMP_FTRACE
-	ret = of_property_read_u32(node, "ftrace-size", &size);
-	if (!ret && size > 0) {
-		strscpy(md_entry.name, "KFTRACE", sizeof(md_entry.name));
-		md_entry.virt_addr = (uintptr_t)phys_to_virt(paddr);
-		md_entry.phys_addr = paddr;
-		md_entry.size = size;
-
-		if (msm_minidump_add_region(&md_entry) < 0)
-			pr_err("Failed to add ftrace in Minidump\n");
-
-		paddr += size;
-	}
+	md_add_pstore_region("KFTRACE", &paddr, ftrace_size);
 #endif /* CONFIG_QCOM_MINIDUMP_FTRACE */
 
-	ret = of_property_read_u32(node, "pmsg-size", &size);
-	if (!ret && size > 0) {
-		strscpy(md_entry.name, "KPMSG", sizeof(md_entry.name));
-		md_entry.virt_addr = (uintptr_t)phys_to_virt(paddr);
-		md_entry.phys_addr = paddr;
-		md_entry.size = size;
-
-		if (msm_minidump_add_region(&md_entry) < 0)
-			pr_err("Failed to add pmsg in Minidump\n");
-
-		paddr += size;
-	}
+out:
+	if (!IS_ERR_OR_NULL(tmp_node))
+		of_node_put(tmp_node);
+	if (node != tmp_node && !IS_ERR_OR_NULL(node))
+		of_node_put(node);
 }
 #endif
 
