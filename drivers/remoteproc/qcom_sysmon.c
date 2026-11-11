@@ -11,6 +11,7 @@
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
 #include <linux/rpmsg.h>
+#include <linux/suspend.h>
 
 #include <trace/events/rproc_qcom.h>
 
@@ -755,10 +756,13 @@ static void sysmon_stop(struct rproc_subdev *subdev, bool crashed)
 	}
 
 	mod_timer(&sysmon->timeout_data.timer, timeout);
-	if (sysmon->ssctl_version)
-		sysmon->shutdown_acked = ssctl_request_shutdown(sysmon);
-	else if (sysmon->ept)
-		sysmon->shutdown_acked = sysmon_request_shutdown(sysmon);
+	if (!IS_ENABLED(CONFIG_QCOM_DS_SKIP_Q6_STOP) ||
+		pm_suspend_default_s2idle()) {
+		if (sysmon->ssctl_version)
+			sysmon->shutdown_acked = ssctl_request_shutdown(sysmon);
+		else if (sysmon->ept)
+			sysmon->shutdown_acked = sysmon_request_shutdown(sysmon);
+	}
 
 	del_timer_sync(&sysmon->timeout_data.timer);
 }

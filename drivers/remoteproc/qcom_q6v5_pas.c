@@ -39,6 +39,7 @@
 #include <linux/timer.h>
 #include <trace/events/rproc_qcom.h>
 #include <linux/interconnect.h>
+#include <linux/suspend.h>
 
 #include "qcom_common.h"
 #include "qcom_pil_info.h"
@@ -1391,10 +1392,12 @@ static int adsp_stop(struct rproc *rproc)
 			}
 		}
 	}
-
-	ret = qcom_q6v5_request_stop(&adsp->q6v5, adsp->sysmon);
-	if (ret == -ETIMEDOUT)
-		dev_err(adsp->dev, "timed out on wait\n");
+	if (!IS_ENABLED(CONFIG_QCOM_DS_SKIP_Q6_STOP) ||
+		pm_suspend_default_s2idle()) {
+		ret = qcom_q6v5_request_stop(&adsp->q6v5, adsp->sysmon);
+		if (ret == -ETIMEDOUT)
+			dev_err(adsp->dev, "timed out on wait\n");
+	}
 
 	qcom_q6v5_pas_set_bw(&adsp->q6v5, UINT_MAX, UINT_MAX);
 	ret = qcom_scm_pas_shutdown(adsp->pas_id);
@@ -1414,27 +1417,30 @@ static int adsp_stop(struct rproc *rproc)
 	handover = qcom_q6v5_unprepare(&adsp->q6v5);
 	if (handover)
 		qcom_pas_handover(&adsp->q6v5);
+	if (!IS_ENABLED(CONFIG_QCOM_DS_SKIP_Q6_STOP) ||
+		 pm_suspend_default_s2idle()) {
 
-	if (adsp->smem_host_id)
-		ret = qcom_smem_bust_hwspin_lock_by_host(adsp->smem_host_id);
+		if (adsp->smem_host_id)
+			ret = qcom_smem_bust_hwspin_lock_by_host(adsp->smem_host_id);
 
-	add_mpss_dsm_mem_ssr_dump(adsp);
+		add_mpss_dsm_mem_ssr_dump(adsp);
 
-	/* collect subdev coredump */
-	if (adsp->q6_subdev && rproc->state == RPROC_CRASHED &&
-		!(rproc->dump_conf == RPROC_COREDUMP_DISABLED)) {
-		for (i = 0; i < adsp->q6_subdev_count; i++) {
-			ret = qcom_elf_dump(&adsp->q6_subdev[i].dump_segments,
-				adsp->q6_subdev[i].dev, rproc->elf_class);
-			if (ret)
-				dev_err(adsp->dev, "Failed to collect ramdump for device %s\n",
-					adsp->q6_subdev[i].firmware_name);
+		/* collect subdev coredump */
+		if (adsp->q6_subdev && rproc->state == RPROC_CRASHED &&
+			!(rproc->dump_conf == RPROC_COREDUMP_DISABLED)) {
+			for (i = 0; i < adsp->q6_subdev_count; i++) {
+				ret = qcom_elf_dump(&adsp->q6_subdev[i].dump_segments,
+					adsp->q6_subdev[i].dev, rproc->elf_class);
+				if (ret)
+					dev_err(adsp->dev, "Failed to collect ramdump for device %s\n",
+						adsp->q6_subdev[i].firmware_name);
+			}
 		}
+
+		adsp_unassign_memory_region(adsp);
+
+		adsp->q6v5.seq++;
 	}
-
-	adsp_unassign_memory_region(adsp);
-
-	adsp->q6v5.seq++;
 	trace_rproc_qcom_event(dev_name(adsp->dev), "adsp_stop", "exit");
 
 	return ret;
@@ -1872,6 +1878,7 @@ static int adsp_setup_32b_dma_allocs(struct qcom_adsp *adsp)
 
 	ret = of_reserved_mem_device_init_by_idx(adsp->dev, adsp->dev->of_node,
 			adsp->dtb_firmware_name ? 2 : 1);
+
 	if (ret) {
 		dev_err(adsp->dev,
 			"Unable to get the CMA area for performing dma_alloc_* calls\n");
