@@ -2240,6 +2240,8 @@ inline int smblite_lib_get_usb_prop_typec_accessory_mode(struct smb_charger *chg
 		return 0;
 	}
 
+	chg->typec_mode = smblite_lib_get_prop_typec_mode(chg);
+
 	switch (chg->typec_mode) {
 	case QTI_POWER_SUPPLY_TYPEC_NONE:
 		*val = TYPEC_ACCESSORY_NONE;
