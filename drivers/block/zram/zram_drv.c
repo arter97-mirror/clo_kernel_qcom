@@ -1605,6 +1605,7 @@ static struct qpace_request_queue copy_out_queue = {
 static DECLARE_WAIT_QUEUE_HEAD(qpace_compress_wait);
 
 static struct task_struct *comp_thread;
+static struct workqueue_struct *qpace_wq;
 static void signal_comp_work_available(struct timer_list *unused);
 static void pending_list_work_fn(struct work_struct *work);
 static int comp_request_submit(struct qpace_request_meta *zmeta);
@@ -1853,9 +1854,9 @@ static int comp_request_submit(struct qpace_request_meta *zmeta)
 	 * that small bursts are coalesced before hitting the HW.
 	 */
 	if (comp_control.pending_list_count == DESCRIPTORS_PER_RING - 1)
-		mod_delayed_work(system_highpri_wq, &comp_control.dwork, 0);
+		mod_delayed_work(qpace_wq, &comp_control.dwork, 0);
 	else if (comp_control.pending_list_count == 1)
-		mod_delayed_work(system_highpri_wq, &comp_control.dwork, 1);
+		mod_delayed_work(qpace_wq, &comp_control.dwork, 1);
 	mutex_unlock(&comp_control.queue_pending_list_lock);
 
 	return 0;
@@ -1905,8 +1906,8 @@ static int enqueue_from_pending_list(struct qpace_control *qpace_ctl)
 			/*
 			 * _zram_req_queue() can fail with -EBUSY if QPaCE is
 			 * suspended (get_ring() checks qpace_suspended). Since
-			 * we use system_highpri_wq (non-freezable), this dwork
-			 * may run during suspend. Put the entry back at the
+			 * the dwork may run during suspend if it is not frozen
+			 * in time. Put the entry back at the
 			 * front of the pending list so it is retried after
 			 * resume, and stop draining for now.
 			 */
@@ -2889,9 +2890,13 @@ free_pages:
 /* Check comp_thread for NULL before use */
 static void kill_comp_thread(void)
 {
+	flush_delayed_work(&comp_control.dwork);
 	complete_all(&comp_control.work_available);
 	kthread_stop(comp_thread);
+	del_timer_sync(&comp_control.work_available_timer);
 	comp_thread = NULL;
+	destroy_workqueue(qpace_wq);
+	qpace_wq = NULL;
 }
 
 /*
@@ -2971,6 +2976,17 @@ static int zram_add(void)
 			goto mempool_exit;
 		}
 		/*
+		 * Freezable so the pending list work does not run inside the
+		 * suspend callback window.
+		 */
+		qpace_wq = alloc_workqueue("qpace_wq",
+					   WQ_FREEZABLE | WQ_HIGHPRI, 0);
+		if (!qpace_wq) {
+			pr_err("Failed to create workqueue for qpace!\n");
+			ret = -ENOMEM;
+			goto delete_comp_queue;
+		}
+		/*
 		 * only allowed to enter once, unlikely to fail and if it fails
 		 * qpace functionality will be broken.
 		 */
@@ -2978,7 +2994,8 @@ static int zram_add(void)
 		if (IS_ERR(comp_thread)) {
 			pr_warn("Failed to run zram_qpace_comp\n");
 			ret = PTR_ERR(comp_thread);
-			goto delete_comp_queue;
+			comp_thread = NULL;
+			goto del_wq;
 		}
 
 		use_qpace = false;
@@ -3030,6 +3047,11 @@ out_free_idr:
 stop_thread:
 	if (zram->qpace && comp_thread)
 		kill_comp_thread();
+del_wq:
+	if (zram->qpace && qpace_wq) {
+		destroy_workqueue(qpace_wq);
+		qpace_wq = NULL;
+	}
 delete_comp_queue:
 	if (zram->qpace)
 		zram_delete_compress_queue(DESCRIPTORS_PER_RING - 1);
