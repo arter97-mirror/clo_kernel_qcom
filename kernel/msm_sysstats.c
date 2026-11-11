@@ -6,6 +6,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/msm_sysstats.h>
 #include <linux/percpu.h>
 #include <linux/slab.h>
@@ -19,6 +20,10 @@
 #include <linux/fdtable.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-resv.h>
+#include <linux/capability.h>
+#include <linux/cred.h>
+#include <linux/uidgid.h>
+#include <linux/user_namespace.h>
 
 #include <linux/qcom_dma_heap.h>
 
@@ -58,10 +63,97 @@ void sysstats_unregister_kgsl_stats_cb(void)
 }
 EXPORT_SYMBOL_GPL(sysstats_unregister_kgsl_stats_cb);
 
+/*
+ * GENL_ADMIN_PERM (CAP_NET_ADMIN) cannot be used to gate this family:
+ * Android's platform sepolicy (system/sepolicy/private/hal_neverallows.te)
+ * forbids every HAL server domain except a short list of networking HALs
+ * from holding net_admin/net_raw, so no Treble HAL - including the
+ * perf-hal client of this interface - can ever satisfy that check.
+ *
+ * Gate on a dedicated effective-or-supplementary GID instead, mirroring the model
+ * already used for vendor netlink/socket access (e.g. AID_VENDOR_THERMAL).
+ * AID_VENDOR_PERF_HAL is a GID reserved solely for the perf2-hal-service
+ * client of this interface, so no other process is newly authorized.
+ * Processes that hold CAP_NET_ADMIN are still allowed, for parity with
+ * the admin-perm behavior this replaces.
+ */
+#define SYSSTATS_DEFAULT_READER_GID 2920 /* AID_VENDOR_PERF_HAL */
+
+/*
+ * Android OEM-reserved GID ranges. Kernel code can't include bionic
+ * headers, so these are a manually-synced copy of the ranges bionic
+ * enforces for "oem_<N>" name resolution - keep in sync with
+ * bionic/libc/bionic/grp_pwd.cpp:is_oem_id() (AID_OEM_RESERVED_START/END,
+ * AID_OEM_RESERVED_2_START/END, as defined in
+ * system/core/libcutils/include/private/android_filesystem_config.h).
+ */
+#define SYSSTATS_OEM_GID_START		2900
+#define SYSSTATS_OEM_GID_END		2999
+#define SYSSTATS_OEM_GID_2_START	5000
+#define SYSSTATS_OEM_GID_2_END		5999
+
+static unsigned int sysstats_reader_gid = SYSSTATS_DEFAULT_READER_GID;
+
+static bool sysstats_gid_in_oem_range(unsigned int gid)
+{
+	return (gid >= SYSSTATS_OEM_GID_START && gid <= SYSSTATS_OEM_GID_END) ||
+	       (gid >= SYSSTATS_OEM_GID_2_START && gid <= SYSSTATS_OEM_GID_2_END);
+}
+
+static int sysstats_set_reader_gid(const char *val, const struct kernel_param *kp)
+{
+	unsigned int gid;
+	int ret = kstrtouint(val, 0, &gid);
+
+	if (ret)
+		return ret;
+	if (!sysstats_gid_in_oem_range(gid)) {
+		pr_err("msm_sysstats: rejecting reader_gid=%u, must be in [%u-%u] or [%u-%u]\n",
+		       gid, SYSSTATS_OEM_GID_START, SYSSTATS_OEM_GID_END,
+		       SYSSTATS_OEM_GID_2_START, SYSSTATS_OEM_GID_2_END);
+		return -EINVAL;
+	}
+
+	sysstats_reader_gid = gid;
+	return 0;
+}
+
+static const struct kernel_param_ops sysstats_reader_gid_ops = {
+	.set = sysstats_set_reader_gid,
+	.get = param_get_uint,
+};
+module_param_cb(reader_gid, &sysstats_reader_gid_ops, &sysstats_reader_gid, 0444);
+MODULE_PARM_DESC(reader_gid,
+	"Effective or supplementary GID permitted to query sysstats without CAP_NET_ADMIN. Overridable per-variant since OEM GID allocations (2900-2999, 5000-5999) can collide across device/qcom/* config.fs trees; must fall within those ranges (default: AID_VENDOR_PERF_HAL (2920))");
+
+static bool sysstats_caller_authorized(const struct sk_buff *skb)
+{
+	if (netlink_capable(skb, CAP_NET_ADMIN))
+		return true;
+
+	if (in_egroup_p(make_kgid(&init_user_ns, sysstats_reader_gid)))
+		return true;
+
+	pr_err_ratelimited("msm_sysstats: denied access to pid %d (%s): missing CAP_NET_ADMIN and gid %u\n",
+			    task_pid_nr(current), current->comm, sysstats_reader_gid);
+	return false;
+}
+
+/* Shared gate for the dumpit commands: pre_doit is not invoked on the dump path. */
+static int sysstats_dump_start(struct netlink_callback *cb)
+{
+	if (!sysstats_caller_authorized(cb->skb))
+		return -EPERM;
+	return 0;
+}
+
 static int sysstats_pre_doit(const struct genl_split_ops *ops, struct sk_buff *skb,
 			      struct genl_info *info)
 {
 	const struct nla_policy *policy = NULL;
+
+	if (!sysstats_caller_authorized(skb))
+		return -EPERM;
 
 	switch (ops->cmd) {
 	case SYSSTATS_TASK_CMD_GET:
@@ -647,20 +739,23 @@ static const struct genl_ops sysstats_ops[] = {
 	{
 		.cmd		= SYSSTATS_TASK_CMD_GET,
 		.validate	= GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags		= GENL_ADMIN_PERM,
 		.doit		= sysstats_task_user_cmd,
+		.start		= sysstats_dump_start,
 		.dumpit		= sysstats_task_foreach,
 	},
 	{
 		.cmd		= SYSSTATS_MEMINFO_CMD_GET,
 		.validate	= GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags		= GENL_ADMIN_PERM,
 		.doit		= sysstats_meminfo_user_cmd,
 	},
 	{
+		/*
+		 * No .doit: a name can match more than one pid, so this
+		 * command is dump-only by design.
+		 */
 		.cmd		= SYSSTATS_PIDS_CMD_GET,
 		.validate	= GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags		= GENL_ADMIN_PERM,
+		.start		= sysstats_dump_start,
 		.dumpit		= sysstats_all_pids_of_name,
 	}
 };
