@@ -6547,7 +6547,8 @@ static int dwc3_msm_dwc3_notify(struct notifier_block *nb, unsigned long action,
 		 * same mutex.
 		 */
 		cancel_work_sync(&mdwc->resume_work);
-		cancel_work_sync(&mdwc->sm_work);
+		if (current_work() != &mdwc->sm_work)
+			cancel_work_sync(&mdwc->sm_work);
 
 		/* 5. Re-enable interrupts */
 		for (i = 0; i < USB_MAX_IRQ; i++) {
