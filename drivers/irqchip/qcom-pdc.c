@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/delay.h>
@@ -53,6 +53,7 @@
 
 struct pdc_irq_info {
 	u32 type;
+	u32 gic_type;
 	bool set;
 	u32 enabled;
 };
@@ -82,6 +83,7 @@ static struct pdc_pin_region *pdc_region;
 static int pdc_region_cnt;
 static unsigned int pdc_version;
 static struct spi_cfg_regs *spi_cfg;
+static struct irq_domain *pdc_domain;
 #if IS_ENABLED(CONFIG_IPC_LOGGING)
 static void *pdc_ipc_log;
 #endif
@@ -310,6 +312,7 @@ static int qcom_pdc_gic_set_type(struct irq_data *d, unsigned int type)
 #endif
 
 	pdc_irq_config[d->hwirq].type = pdc_type;
+	pdc_irq_config[d->hwirq].gic_type = type;
 	pdc_irq_config[d->hwirq].set = true;
 
 	/* Additionally, configure (only) the GPIO in the f/w */
@@ -365,9 +368,9 @@ static int pdc_suspend_notifier(struct notifier_block *nb,
 		pdc_save_restore = true;
 	else if (event == PM_POST_HIBERNATION)
 		pdc_save_restore = false;
-	else if (event == PM_SUSPEND_PREPARE && (pm_suspend_target_state == PM_SUSPEND_MEM))
+	else if (event == PM_SUSPEND_PREPARE && !pm_suspend_default_s2idle())
 		pdc_save_restore = true;
-	else if (event == PM_POST_SUSPEND && (pm_suspend_target_state == PM_SUSPEND_MEM))
+	else if (event == PM_POST_SUSPEND && !pm_suspend_default_s2idle())
 		pdc_save_restore = false;
 
 	return NOTIFY_OK;
@@ -377,6 +380,8 @@ static void pdc_resume(void)
 {
 	int i;
 	u32 config;
+	unsigned int virq;
+	struct irq_data *d;
 
 	if (!pdc_save_restore)
 		return;
@@ -394,6 +399,12 @@ static void pdc_resume(void)
 
 			if (pdc_irq_config[i].enabled)
 				__pdc_enable_intr(i, true);
+
+			virq = irq_find_mapping(pdc_domain, i);
+			d = irq_get_irq_data(virq);
+			if (d && d->parent_data)
+				spi_configure_type(d->parent_data->hwirq,
+						    pdc_irq_config[i].gic_type);
 		}
 	}
 }
@@ -527,7 +538,7 @@ static int pdc_setup_pin_mapping(struct device_node *np)
 
 static int qcom_pdc_init(struct device_node *node, struct device_node *parent)
 {
-	struct irq_domain *parent_domain, *pdc_domain;
+	struct irq_domain *parent_domain;
 	resource_size_t res_size;
 	struct resource res;
 	int ret;
