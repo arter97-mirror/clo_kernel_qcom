@@ -7,11 +7,23 @@ load(":target_variants.bzl", "la_variants")
 
 target_name = "shikra_tiny"
 
+_SHIKRA_TINY_EXCLUDED_GKI_MODULES = [
+    "drivers/bluetooth/btbcm.ko",
+    "drivers/bluetooth/btqca.ko",
+    "drivers/bluetooth/btsdio.ko",
+    "drivers/bluetooth/hci_uart.ko",
+    "net/bluetooth/bluetooth.ko",
+    "net/bluetooth/hidp/hidp.ko",
+    "net/bluetooth/rfcomm/rfcomm.ko",
+    "net/nfc/nfc.ko",
+]
+
 def define_shikra_tiny():
     define_consolidated_kernel(
         name = "shikra_tiny_kernel_aarch64_perf",
         defconfig = ":arch/arm64/configs/shikra_tiny_defconfig",
         pre_defconfig_fragments = [],
+        exclude_modules = _SHIKRA_TINY_EXCLUDED_GKI_MODULES,
     )
     native.filegroup(
         name = "shikra_tiny_kernel_aarch64_perf_download_configs",
@@ -25,6 +37,7 @@ def define_shikra_tiny():
     define_consolidated_kernel(
         name = "shikra_tiny_kernel_aarch64_consolidate",
         defconfig = ":arch/arm64/configs/shikra_tiny_defconfig",
+        exclude_modules = _SHIKRA_TINY_EXCLUDED_GKI_MODULES,
     )
     native.filegroup(
         name = "shikra_tiny_kernel_aarch64_consolidate_download_configs",
