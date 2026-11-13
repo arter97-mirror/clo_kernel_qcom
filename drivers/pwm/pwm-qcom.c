@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  */
 
@@ -107,7 +107,7 @@ struct pdm_pwm_chip {
 };
 
 static int __pdm_pwm_calc_pwm_frequency(struct pdm_pwm_chip *chip,
-					int period_ns, u32 hw_idx)
+					u64 period_ns, u32 hw_idx)
 {
 	unsigned long cyc_cfg, freq, rate;
 	int ret;
@@ -160,10 +160,10 @@ static int pdm_pwm_get_state(struct pwm_chip *pwm_chip, struct pwm_device *pwm,
 }
 
 static int pdm_pwm_config(struct pdm_pwm_chip *chip, u32 hw_idx,
-				int duty_ns, int period_ns, int polarity)
+				u64 duty_ns, u64 period_ns, int polarity)
 {
-	unsigned long ctl1, rate;
-	int current_period = period_ns, ret;
+	u64 ctl1, rate, current_period = period_ns;
+	int ret;
 	u32 cyc_cfg;
 
 	/*
@@ -500,7 +500,7 @@ static int pdm_pwm_parse_dt(struct platform_device *pdev,
 	if (ret)
 		return ret;
 
-	ret = regmap_update_bits(chip->regmap, PWM_TOPCTL0, GENMASK(chip->num_frames, 0), 0);
+	ret = regmap_update_bits(chip->regmap, PWM_TOPCTL0, GENMASK((chip->num_frames - 1), 0), 0);
 	if (ret)
 		return ret;
 

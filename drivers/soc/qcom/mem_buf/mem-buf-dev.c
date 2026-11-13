@@ -110,12 +110,8 @@ static int mem_buf_probe(struct platform_device *pdev)
 	u64 dma_mask = IS_ENABLED(CONFIG_ARM64) ? DMA_BIT_MASK(64) :
 		DMA_BIT_MASK(32);
 
-	ret = mem_buf_dma_buf_init();
-	if (ret)
-		return dev_err_probe(dev, ret, "mem_buf_dma_buf_init failed\n");
-
 	if (of_property_match_string(dev->of_node, "qcom,mem-buf-capabilities",
-				     "supplier") >= 0)
+					     "supplier") >= 0)
 		mem_buf_capability = MEM_BUF_CAP_SUPPLIER;
 	else if (of_property_match_string(dev->of_node,
 					    "qcom,mem-buf-capabilities",
@@ -127,6 +123,10 @@ static int mem_buf_probe(struct platform_device *pdev)
 		mem_buf_capability = MEM_BUF_CAP_DUAL;
 	else
 		mem_buf_capability = 0;
+
+	ret = mem_buf_dma_buf_init();
+	if (ret)
+		return dev_err_probe(dev, ret, "mem_buf_dma_buf_init failed\n");
 
 	ret = dma_set_mask_and_coherent(dev, dma_mask);
 	if (ret) {

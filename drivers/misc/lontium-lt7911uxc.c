@@ -15,6 +15,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
+#include <linux/pm_wakeup.h>
 #include <linux/regulator/consumer.h>
 #include <linux/soc/qcom/altmode-glink.h>
 #include <linux/atomic.h>
@@ -104,6 +105,7 @@ struct lt7911uxc_data {
 	u8 pan_ack_port_index;    /* port_index to use when sending PAN ACKs from dpalt_work */
 	struct cci_util_handle *cci_handle;   /* handle to dpin_cci_util device, set at probe */
 	struct usbmux_handle *usbmux_handle; /* handle to usbmux_ps8822 device, set at probe */
+	struct wakeup_source *ws;
 };
 
 enum dpin_pin_assignment {
@@ -415,6 +417,7 @@ static void lt7911uxc_dpalt_work_fn(struct work_struct *work)
 		lt7911_notify_event(lt7911, 0, 0, 0, 0, 0, 0, 0);
 
 		/* Defer cutting power by 1500ms to allow streamoff I2C transfers to finish cleanly */
+		__pm_wakeup_event(lt7911->ws, LT7911_POWER_DOWN_GRACE_MS + 200);
 		queue_delayed_work(system_freezable_wq,
 				   &lt7911->delayed_power_down_work,
 				   msecs_to_jiffies(LT7911_POWER_DOWN_GRACE_MS));
@@ -653,6 +656,7 @@ static int lt7911uxc_dpalt_notify(void *priv, void *payload_data, size_t len)
 			dev_dbg(lt7911->dev, "DPIN cable is removed...\n");
 
 			lt7911->pan_ack_port_index = port_index;
+			__pm_wakeup_event(lt7911->ws, LT7911_POWER_DOWN_GRACE_MS + 200);
 			mutex_unlock(&lt7911->device_lock);
 			/*
 			 * Using the freezable workqueue guarantees that background tasks are
@@ -2573,6 +2577,8 @@ static int lt7911uxc_probe(struct platform_device *pdev)
 		return -EPROBE_DEFER;
 	}
 
+	lt7911->ws = wakeup_source_register(NULL, "lt7911uxc");
+
 	dev_dbg(lt7911->dev, "Successfully probed..\n");
 	/*
 	 * Schedule the firmware upgrade worker.  It will power up the chip,
@@ -2610,6 +2616,8 @@ static int lt7911uxc_remove(struct platform_device *pdev)
 		mutex_lock(&lt7911->device_lock);
 		lt7911_power_down(lt7911);
 		mutex_unlock(&lt7911->device_lock);
+		wakeup_source_unregister(lt7911->ws);
+		lt7911->ws = NULL;
 		cci_util_lt7911_put_device(lt7911->cci_handle);
 		lt7911->cci_handle = NULL;
 		usbmux_put_device(lt7911->usbmux_handle);
@@ -2633,8 +2641,12 @@ static int lt7911uxc_suspend(struct device *dev)
 	cancel_delayed_work_sync(&lt7911->delayed_power_down_work);
 
 	mutex_lock(&lt7911->device_lock);
-	if (lt7911->cci_handle)
+	if (!lt7911->connected && lt7911->lt7911_poweron) {
+		dev_info(dev, "Suspend with cable detached, powering down LT7911\n");
+		lt7911_power_down(lt7911);
+	} else if (lt7911->cci_handle) {
 		cci_util_lt7911_release_cci(lt7911->cci_handle);
+	}
 	mutex_unlock(&lt7911->device_lock);
 
 	return 0;
