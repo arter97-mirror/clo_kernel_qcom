@@ -5,9 +5,9 @@
  *
  * Supports cells where one or more output bytes are non-contiguous in eFuse.
  * Each cell node may carry "qcom,byte-fixups" — an array of <byte_idx src_offset>
- * pairs. At add_cells time the driver reads each src_offset from the nvmem
- * device and stores the value; read_post_process applies the replacements on
- * every cell read.
+ * pairs. At add_cells time the driver parses each pair from DT and stores the
+ * src_offset; read_post_process reads the nvmem device at that offset and
+ * applies the replacement on every cell read.
  *
  * Example (SA8797P eth1 MAC, byte[5] lives at eFuse offset 0x326):
  *   qcom,byte-fixups = <5 0x326>;
@@ -34,12 +34,15 @@
 
 
 struct qcom_eth_mac_fixup {
-	u8 byte_idx;
-	u8 src_val;
+	u8  byte_idx;
+	u32 src_offset;
+	u8  byte_in_word;
 };
 
 struct qcom_eth_mac_priv {
 	u32 num_fixups;
+	struct nvmem_device *nvmem;
+	struct device *dev;
 	struct qcom_eth_mac_fixup fixups[QCOM_ETH_MAC_MAX_FIXUPS];
 };
 
@@ -47,7 +50,9 @@ static int qcom_eth_mac_post_process(void *priv, const char *id, int index,
 				     unsigned int offset, void *buf, size_t bytes)
 {
 	struct qcom_eth_mac_priv *p = priv;
+	u8 word[QCOM_QFPROM_WORD_SIZE];
 	u32 i;
+	int ret;
 
 	if (!p)
 		return 0;
@@ -55,13 +60,25 @@ static int qcom_eth_mac_post_process(void *priv, const char *id, int index,
 	for (i = 0; i < p->num_fixups; i++) {
 		if (p->fixups[i].byte_idx >= bytes)
 			return -EINVAL;
-		((u8 *)buf)[p->fixups[i].byte_idx] = p->fixups[i].src_val;
+
+		ret = nvmem_device_read(p->nvmem, p->fixups[i].src_offset,
+					sizeof(word), word);
+		if (ret < 0)
+			return ret;
+		if (ret != (int)sizeof(word))
+			return -EIO;
+
+		dev_dbg(p->dev, "post_process fixup[%u]: offset=0x%x word=%02x %02x %02x %02x byte_idx=%u -> 0x%02x\n",
+			i, p->fixups[i].src_offset,
+			word[0], word[1], word[2], word[3],
+			p->fixups[i].byte_idx, word[p->fixups[i].byte_in_word]);
+
+		((u8 *)buf)[p->fixups[i].byte_idx] = word[p->fixups[i].byte_in_word];
 	}
 	return 0;
 }
 
 static int qcom_eth_mac_parse_fixups(struct device *dev,
-				     struct nvmem_device *nvmem,
 				     struct device_node *child,
 				     struct nvmem_cell_info *info,
 				     resource_size_t nvmem_size)
@@ -101,17 +118,16 @@ static int qcom_eth_mac_parse_fixups(struct device *dev,
 		/* qfprom word_size=4: align down to 4-byte boundary */
 		u32 aligned      = src_offset & ~(QCOM_QFPROM_WORD_SIZE - 1U);
 		u32 byte_in_word = src_offset - aligned;
-		u8  word[QCOM_QFPROM_WORD_SIZE];
 
 		if (byte_idx >= info->bytes) {
 			dev_err(dev, "%pOF: byte_idx %u out of cell range (%u bytes)\n",
-				child, byte_idx, info->bytes);
+					child, byte_idx, info->bytes);
 			return -EINVAL;
 		}
 
 		if (nvmem_size && src_offset >= nvmem_size) {
 			dev_err(dev, "%pOF: src_offset 0x%x exceeds nvmem size 0x%llx\n",
-				child, src_offset, (unsigned long long)nvmem_size);
+					child, src_offset, (unsigned long long)nvmem_size);
 			return -EINVAL;
 		}
 
@@ -124,17 +140,10 @@ static int qcom_eth_mac_parse_fixups(struct device *dev,
 			}
 		}
 
-		ret = nvmem_device_read(nvmem, aligned, sizeof(word), word);
-		if (ret < 0) {
-			dev_err(dev, "%pOF: failed to read src_offset 0x%x: %d\n",
-				child, src_offset, ret);
-			return ret;
-		}
-		if (ret != (int)sizeof(word))
-			return -EIO;
+		priv->fixups[i].byte_idx    = (u8)byte_idx;
+		priv->fixups[i].src_offset  = aligned;
+		priv->fixups[i].byte_in_word = (u8)byte_in_word;
 
-		priv->fixups[i].byte_idx = (u8)byte_idx;
-		priv->fixups[i].src_val  = word[byte_in_word];
 	}
 
 	info->read_post_process = qcom_eth_mac_post_process;
@@ -152,9 +161,13 @@ static int qcom_eth_mac_add_cells(struct nvmem_layout *layout)
 	resource_size_t nvmem_size = 0;
 	int ret = 0;
 
+	dev_dbg(dev, "add_cells: entry\n");
+
 	layout_node = of_nvmem_layout_get_container(nvmem);
-	if (!layout_node)
+	if (!layout_node) {
+		dev_err(dev, "add_cells: no nvmem-layout container node\n");
 		return -ENOENT;
+	}
 
 	efuse_np = of_get_parent(layout_node);
 	if (efuse_np) {
@@ -180,10 +193,18 @@ static int qcom_eth_mac_add_cells(struct nvmem_layout *layout)
 		info.bytes  = reg[1];
 		info.np     = of_node_get(child);
 
-		ret = qcom_eth_mac_parse_fixups(dev, nvmem, child, &info, nvmem_size);
+		dev_dbg(dev, "add_cells: cell %s offset=0x%x bytes=%u\n",
+			 info.name, info.offset, info.bytes);
+
+		ret = qcom_eth_mac_parse_fixups(dev, child, &info, nvmem_size);
 		if (ret) {
 			of_node_put(info.np);
 			goto out;
+		}
+
+		if (info.priv) {
+			((struct qcom_eth_mac_priv *)info.priv)->nvmem = nvmem;
+			((struct qcom_eth_mac_priv *)info.priv)->dev = dev;
 		}
 
 		ret = nvmem_add_one_cell(nvmem, &info);
@@ -193,6 +214,15 @@ static int qcom_eth_mac_add_cells(struct nvmem_layout *layout)
 				info.name, ret);
 			goto out;
 		}
+		dev_dbg(dev, "add_cells: cell %s added ok\n", info.name);
+		/*
+		 * Mark the cell fwnode as not-a-device so fw_devlink stops
+		 * blocking ethernet on this supplier link.  Must be called
+		 * after nvmem_add_one_cell() so the fwnode exists.
+		 * fw_devlink_refresh_fwnode() cannot be used here because the
+		 * efuse device is still in probe and not yet DL_DEV_DRIVER_BOUND.
+		 */
+		fw_devlink_purge_absent_suppliers(of_fwnode_handle(child));
 	}
 
 out:

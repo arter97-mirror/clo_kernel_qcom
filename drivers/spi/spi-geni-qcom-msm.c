@@ -1322,10 +1322,13 @@ static int __maybe_unused spi_geni_resume(struct device *dev)
 		return ret;
 	if (pm_suspend_target_state == PM_SUSPEND_MEM) {
 		/*
-		 * Initialize last_mode to 0xFF during system resume
+		 * Initialize last_mode, last_cs and cur_bits_per_word to
+		 * 0,~0U and 0 during system resume
 		 * to force hardware reconfiguration after DSQB.
 		 */
-		mas->last_mode = 0XFF;
+		mas->last_mode = 0;
+		mas->last_cs = U8_MAX;
+		mas->cur_bits_per_word = 0;
 		mas->cur_xfer_mode = GENI_SE_INVALID;
 		ret = spi_geni_init(mas);
 		if (ret) {

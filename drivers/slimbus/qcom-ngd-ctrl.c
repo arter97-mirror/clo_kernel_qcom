@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
 // Copyright (c) 2018, Linaro Limited
-// Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 #include <linux/irq.h>
 #include <linux/kernel.h>
@@ -90,6 +90,7 @@
 
 /* Per spec.max 40 bytes per received message */
 #define SLIM_MSGQ_BUF_LEN	40
+#define SLIM_MSG_RESPONSE_HDR_LEN	4
 #define QCOM_SLIM_NGD_DESC_NUM	30
 
 #define SLIM_MSG_ASM_FIRST_WORD(l, mt, mc, dt, ad) \
@@ -701,6 +702,11 @@ static void qcom_slim_ngd_rx(struct qcom_slim_ngd_ctrl *ctrl, u8 *buf)
 	    mt == SLIM_MSG_MT_SRC_REFERRED_USER) ||
 		(mc == SLIM_USR_MC_GENERIC_ACK &&
 		 mt == SLIM_MSG_MT_SRC_REFERRED_USER)) {
+		if (len < SLIM_MSG_RESPONSE_HDR_LEN || len > SLIM_MSGQ_BUF_LEN) {
+			SLIM_WARN(ctrl, "Invalid response packet len:%d mc:0x%x\n", len, mc);
+			return;
+		}
+
 		slim_msg_response(&ctrl->ctrl, &buf[4], buf[3], len - 4);
 		pm_runtime_mark_last_busy(ctrl->ctrl.dev);
 	}

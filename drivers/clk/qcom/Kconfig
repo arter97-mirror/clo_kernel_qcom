@@ -1331,4 +1331,40 @@ config SM_GCC_FILLMORE
 	  Say Y if you want to use peripheral devices such as UART,
 	  SPI, I2C, USB, SD/UFS, PCIe etc.
 
+config SM_CAMCC_DIWALI
+	tristate "DIWALI Camera Clock Controller"
+	select SM_GCC_FILLMORE
+	help
+	  Support for the camera clock controller on Qualcomm Technologies, Inc.
+	  DIWALI devices.
+	  Say Y if you want to support camera devices and functionality such as
+	  capturing pictures.
+
+config SM_GPUCC_DIWALI
+	tristate "DIWALI Graphics Clock Controller"
+	select SM_GCC_FILLMORE
+	help
+	  Support for the graphics clock controller on Qualcomm Technologies, Inc.
+	  DIWALI devices.
+	  Say Y if you want to support graphics controller devices and
+	  functionality such as 3D graphics.
+
+config SM_VIDEOCC_DIWALI
+	tristate "DIWALI Video Clock Controller"
+	select SM_GCC_FILLMORE
+	help
+	  Support for the video clock controller on Qualcomm Technologies, Inc.
+	  DIWALI devices.
+	  Say Y if you want to support video devices and functionality such as
+	  video encode/decode.
+
+config SM_DISPCC_DIWALI
+	tristate "DIWALI Display Clock Controller"
+	select SM_GCC_FILLMORE
+	help
+	  Support for the display clock controller on Qualcomm Technologies, Inc
+	  DIWALI devices.
+	  Say Y if you want to support display devices and functionality such as
+	  splash screen.
+
 endif

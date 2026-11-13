@@ -28,6 +28,7 @@ gh_virt_wdt.ko
 bootmarker_proxy.ko
 qseecom_proxy.ko
 qcom_dma_heaps.ko
+system_heap.ko
 virtio_clk_monaco.ko
 virtio_clk_lemans.ko
 virtio_clk_direwolf.ko

@@ -6481,6 +6481,13 @@ static void typec_src_removal(struct smb_charger *chg)
 static void typec_mode_unattached(struct smb_charger *chg)
 {
 	vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true, USBIN_100MA);
+
+	/*
+	 * No spurious extcon disconnect notifications are observed during
+	 * normal attach or Type-C debounce flows.
+	 */
+	if (chg->use_extcon)
+		smblib_notify_device_mode(chg, false);
 }
 
 static void smblib_handle_rp_change(struct smb_charger *chg, int typec_mode)

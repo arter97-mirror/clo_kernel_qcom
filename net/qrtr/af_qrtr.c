@@ -119,6 +119,9 @@ struct qrtr_sock {
 
 	int state;
 
+	/* AP-local client ports that sent DATA to this socket */
+	struct xarray connected_clients;
+
 	struct completion rx_queue_has_space;
 	bool signal_on_recv;
 	/* protect above signal variables */
@@ -1634,6 +1637,52 @@ exit:
 	qrtr_local_enqueue(NULL, skb, type, &ipc->us, &to, 0);
 }
 
+/**
+ * filter_local_transaction() - record or filter a local socket delivery
+ * @ipc:   destination server socket
+ * @skb:   packet being delivered
+ * @type:  packet type
+ * @from:  source address
+ *
+ * For DATA packets: records the client→server relationship under the
+ * xarray's own lock. Only stores on the first DATA from each client.
+ *
+ * For DEL_CLIENT to a non-CTRL service socket: Returns True if the
+ * local client never communicated with this service. Peripheral client
+ * closures are always forwarded.
+ *
+ * Returns true if the packet has been consumed and should not be
+ * delivered, false to proceed with normal delivery.
+ */
+static bool filter_local_transaction(struct qrtr_sock *ipc, struct sk_buff *skb,
+				     int type, struct sockaddr_qrtr *from)
+{
+	struct qrtr_ctrl_pkt pkt = {0};
+	u32 dying_node, dying_port;
+
+	if (!ipc)
+		return false;
+
+	if (type == QRTR_TYPE_DATA) {
+		xa_store(&ipc->connected_clients, from->sq_port, (void *)1UL, GFP_KERNEL);
+		return false;
+	}
+
+	if (type == QRTR_TYPE_DEL_CLIENT &&
+	    ipc->us.sq_port != QRTR_PORT_CTRL) {
+		skb_copy_bits(skb, 0, &pkt, sizeof(pkt));
+		dying_node = le32_to_cpu(pkt.client.node);
+		dying_port = le32_to_cpu(pkt.client.port);
+
+		if (dying_node != qrtr_local_nid)
+			return false;
+
+		if (!xa_erase(&ipc->connected_clients, dying_port))
+			return true;
+	}
+	return false;
+}
+
 /* Remove port assignment. */
 static void qrtr_port_remove(struct qrtr_sock *ipc)
 {
@@ -1813,6 +1862,12 @@ static int qrtr_local_enqueue(struct qrtr_node *node, struct sk_buff *skb,
 	cb = (struct qrtr_cb *)skb->cb;
 	cb->src_node = from->sq_node;
 	cb->src_port = from->sq_port;
+
+	if (filter_local_transaction(ipc, skb, type, from)) {
+		qrtr_port_put(ipc);
+		kfree_skb(skb);
+		return 0;
+	}
 
 	QRTR_INFO(qrtr_local_ilc,
 		  "LOCAL ENQUEUE: cmd:0x%x src[0x%x:0x%x] dst[0x%x:0x%x] [%s] pid:%d\n",
@@ -2381,6 +2436,11 @@ static struct proto qrtr_proto = {
 	.obj_size	= sizeof(struct qrtr_sock),
 };
 
+static void qrtr_sock_destruct(struct sock *sk)
+{
+	xa_destroy(&qrtr_sk(sk)->connected_clients);
+}
+
 static int qrtr_create(struct net *net, struct socket *sock,
 		       int protocol, int kern)
 {
@@ -2406,6 +2466,8 @@ static int qrtr_create(struct net *net, struct socket *sock,
 	ipc->us.sq_port = 0;
 	ipc->state = QRTR_STATE_INIT;
 	ipc->signal_on_recv = false;
+	xa_init(&ipc->connected_clients);
+	sk->sk_destruct = qrtr_sock_destruct;
 	init_completion(&ipc->rx_queue_has_space);
 	spin_lock_init(&ipc->signal_lock);
 

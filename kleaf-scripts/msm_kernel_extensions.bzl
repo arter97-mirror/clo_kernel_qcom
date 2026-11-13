@@ -21,6 +21,9 @@ def define_combined_vm_image(target, variant, vm_size_ext4):
 def export_init_boot_prebuilt(target, variant):
     return
 
+def define_android_desktop_build(name, variant, base_kernel, dtbo_target_name = None):
+    return None
+
 def define_extras(target, kbuild_config, flavor = None, alias = None):
     return
 

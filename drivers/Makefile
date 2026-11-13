@@ -25,6 +25,7 @@ obj-y += gpu/drm/display/
 obj-y += hwmon/
 obj-y += hwspinlock/
 obj-y += hwtracing/
+obj-y += i2c/
 obj-y += i2c/busses/
 obj-y += i3c/master/
 obj-y += iio/adc/

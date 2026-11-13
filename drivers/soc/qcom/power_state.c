@@ -395,7 +395,7 @@ static int ps_pm_cb(struct notifier_block *nb, unsigned long event, void *unused
 		break;
 
 	case PM_POST_SUSPEND:
-		if (pm_suspend_target_state == PM_SUSPEND_MEM) {
+		if (!pm_suspend_default_s2idle()) {
 			pr_info("Deep Sleep exit\n");
 
 			ret = send_deep_sleep_vote(DS_EXIT, drv);

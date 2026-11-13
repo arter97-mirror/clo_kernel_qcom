@@ -827,6 +827,15 @@ config QCOM_MINIDUMP_SMEM
 	  this config option shall be enabled by
 	  default.
 
+config QCOM_MINIDUMP_HLOS_ENCRYPTION
+	bool "QCOM Minidump SMEM Encryption Support"
+	depends on QCOM_MINIDUMP_SMEM
+	help
+	  This enables encryption for HLOS minidump regions.
+	  When enabled, encryption_required and encryption_status fields
+	  in the HLOS SMEM TOC are set to request encryption.
+	  If unsure, say no.
+
 config QCOM_MINIDUMP_RM
 	bool "QCOM Minidump RM Support"
 	depends on QCOM_MINIDUMP && GUNYAH_DRIVERS

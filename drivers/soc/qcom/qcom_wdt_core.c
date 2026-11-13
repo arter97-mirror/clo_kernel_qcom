@@ -146,10 +146,10 @@ static int qcom_wdt_hibernation_notifier(struct notifier_block *nb,
 				unsigned long event, void *dummy)
 {
 	if ((event == PM_HIBERNATION_PREPARE) || ((event == PM_SUSPEND_PREPARE)
-			&& (pm_suspend_target_state == PM_SUSPEND_MEM)))
+			&& !pm_suspend_default_s2idle()))
 		wdog_data->hibernate = true;
 	else if ((event == PM_POST_HIBERNATION) || ((event == PM_POST_SUSPEND)
-			&& (pm_suspend_target_state == PM_SUSPEND_MEM)))
+			&& !pm_suspend_default_s2idle()))
 		wdog_data->hibernate = false;
 	return NOTIFY_OK;
 }

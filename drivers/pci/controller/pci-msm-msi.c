@@ -84,12 +84,22 @@ static void msm_msi_snps_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct msm_msi_grp *msi_grp;
+	struct msm_msi *msi;
+	unsigned long flags;
 	int i;
 	u32 status, mask;
 
 	chained_irq_enter(chip, desc);
 
 	msi_grp = irq_desc_get_handler_data(desc);
+	msi = msi_grp->irqs[0].client->msi;
+
+	spin_lock_irqsave(&msi->cfg_lock, flags);
+	if (!msi->cfg_access) {
+		spin_unlock_irqrestore(&msi->cfg_lock, flags);
+		chained_irq_exit(chip, desc);
+		return;
+	}
 
 	status = readl_relaxed(msi_grp->int_status_reg);
 
@@ -100,6 +110,7 @@ static void msm_msi_snps_handler(struct irq_desc *desc)
 	/* process only interrupts which are not masked */
 	status ^= (status & mask);
 	writel_relaxed(status, msi_grp->int_status_reg);
+	spin_unlock_irqrestore(&msi->cfg_lock, flags);
 
 	for (i = 0; status; i++, status >>= 1)
 		if (status & 0x1)

@@ -2648,6 +2648,16 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 						gi2c->ipcl);
 			gi2c->err = -ETIMEDOUT;
 
+			if (i < (num - 1)) {
+				ret = geni_i2c_stop_on_bus(gi2c);
+				if (ret) {
+					I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
+						"%s: stop_on_bus failed after timeout:%d\n",
+						__func__, ret);
+					goto geni_i2c_err_prep_sg;
+				}
+			}
+
 			/* WAR: Set flag to mark cancel pending if IOS stuck */
 			geni_ios = geni_read_reg(gi2c->base, SE_GENI_IOS);
 			if ((geni_ios & 0x3) != 0x3) { //SCL:b'1, SDA:b'0
@@ -2963,6 +2973,11 @@ static int geni_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 	/* Do Not vote if is_le_vm: LA votes and pm_ctrl_client: client votes */
 	if (!gi2c->is_le_vm && !gi2c->pm_ctrl_client) {
 		ret = pm_runtime_get_sync(gi2c->dev);
+		if (ret == -EACCES) {
+			I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev,
+				    "Runtime PM is disabled:%d\n", ret);
+			ret = 0;
+		}
 		if (ret < 0) {
 			I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
 					"error turning SE resources:%d\n", ret);
@@ -3260,7 +3275,7 @@ static int geni_i2c_resources_init(struct platform_device *pdev, struct geni_i2c
 
 	irq_set_status_flags(gi2c->irq, IRQ_NOAUTOEN);
 	ret = devm_request_irq(gi2c->dev, gi2c->irq, geni_i2c_irq,
-			       0, "i2c_geni", gi2c);
+			       IRQF_NO_SUSPEND | IRQF_EARLY_RESUME, "i2c_geni", gi2c);
 	if (ret) {
 		dev_err(gi2c->dev, "Request_irq failed:%d: err:%d\n",
 			gi2c->irq, ret);
@@ -3774,6 +3789,43 @@ skip_bw_vote:
 	return 0;
 }
 
+static int __maybe_unused geni_i2c_suspend_noirq(struct device *dev)
+{
+	struct geni_i2c_dev *gi2c = dev_get_drvdata(dev);
+	int ret;
+
+	i2c_mark_adapter_suspended(&gi2c->adap);
+
+	ret = pm_runtime_force_suspend(dev);
+	if (ret)
+		i2c_mark_adapter_resumed(&gi2c->adap);
+
+	return ret;
+}
+
+static int __maybe_unused geni_i2c_resume_noirq(struct device *dev)
+{
+	struct geni_i2c_dev *gi2c = dev_get_drvdata(dev);
+	int ret;
+
+	ret = pm_runtime_force_resume(dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * geni_i2c_suspend_late() calls pm_runtime_disable(), leaving
+	 * disable_depth at 1 after pm_runtime_force_resume() returns (which
+	 * only undoes the pm_runtime_disable() done by force_suspend).
+	 * Re-enable here to bring disable_depth back to 0.
+	 */
+	if (!pm_runtime_enabled(dev))
+		pm_runtime_enable(dev);
+
+	i2c_mark_adapter_resumed(&gi2c->adap);
+
+	return 0;
+}
+
 static int geni_i2c_suspend_late(struct device *device)
 {
 	struct geni_i2c_dev *gi2c = dev_get_drvdata(device);
@@ -3848,9 +3900,20 @@ static int geni_i2c_suspend_late(struct device *device)
 {
 	return 0;
 }
+
+static int __maybe_unused geni_i2c_suspend_noirq(struct device *dev)
+{
+	return 0;
+}
+
+static int __maybe_unused geni_i2c_resume_noirq(struct device *dev)
+{
+	return 0;
+}
 #endif
 
 static const struct dev_pm_ops geni_i2c_pm_ops = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(geni_i2c_suspend_noirq, geni_i2c_resume_noirq)
 	.suspend_late		= geni_i2c_suspend_late,
 	.resume_early		= geni_i2c_resume_early,
 	.runtime_suspend	= geni_i2c_runtime_suspend,
