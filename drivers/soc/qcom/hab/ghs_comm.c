@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include "hab.h"
 #include "hab_ghs.h"
@@ -47,13 +47,13 @@ int ghs_physical_channel_send(struct physical_channel *pchan,
 		return -ENODEV;
 	}
 
-	irqs_disabled = irqs_disabled();
+	disabled_irqs = irqs_disabled();
 
-	hab_spin_lock(&dev->io_lock, irqs_disabled);
+	hab_spin_lock(&dev->io_lock, disabled_irqs);
 
 	result = hab_gipc_wait_to_send(dev->endpoint);
 	if (result != GIPC_Success) {
-		hab_spin_unlock(&dev->io_lock, irqs_disabled);
+		hab_spin_unlock(&dev->io_lock, disabled_irqs);
 		pr_err("failed to wait to send %d\n", result);
 		return -EBUSY;
 	}
@@ -61,13 +61,13 @@ int ghs_physical_channel_send(struct physical_channel *pchan,
 	result = GIPC_PrepareMessage(dev->endpoint, sizebytes+sizeof(*header),
 		(void **)&msg);
 	if (result == GIPC_Full) {
-		hab_spin_unlock(&dev->io_lock, irqs_disabled);
+		hab_spin_unlock(&dev->io_lock, disabled_irqs);
 		/* need to wait for space! */
 		pr_err("failed to reserve send msg for %zd bytes\n",
 			sizebytes+sizeof(*header));
 		return -EBUSY;
 	} else if (result != GIPC_Success) {
-		hab_spin_unlock(&dev->io_lock, irqs_disabled);
+		hab_spin_unlock(&dev->io_lock, disabled_irqs);
 		pr_err("failed to send due to error %d\n", result);
 		return -ENOMEM;
 	}
@@ -89,7 +89,7 @@ int ghs_physical_channel_send(struct physical_channel *pchan,
 
 	result = GIPC_IssueMessage(dev->endpoint, sizebytes+sizeof(*header),
 		header->id_type);
-	hab_spin_unlock(&dev->io_lock, irqs_disabled);
+	hab_spin_unlock(&dev->io_lock, disabled_irqs);
 	if (result != GIPC_Success) {
 		pr_err("send error %d, sz %zd, id type %x, size %x\n",
 			result, sizebytes+sizeof(*header),
@@ -115,9 +115,9 @@ void physical_channel_rx_dispatch_common(unsigned long physical_channel)
 		return;
 	}
 
-	irqs_disabled = irqs_disabled();
+	disabled_irqs = irqs_disabled();
 
-	hab_spin_lock(&pchan->rxbuf_lock, irqs_disabled);
+	hab_spin_lock(&pchan->rxbuf_lock, disabled_irqs);
 	while (1) {
 		dev->read_size = 0;
 		dev->read_offset = 0;
@@ -139,5 +139,5 @@ void physical_channel_rx_dispatch_common(unsigned long physical_channel)
 			result, dev->read_size);
 		break;
 	}
-	hab_spin_unlock(&pchan->rxbuf_lock, irqs_disabled);
+	hab_spin_unlock(&pchan->rxbuf_lock, disabled_irqs);
 }

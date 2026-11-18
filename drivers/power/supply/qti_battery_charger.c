@@ -37,6 +37,7 @@
 #define BC_SET_NOTIFY_REQ		0x04
 #define BC_DISABLE_NOTIFY_REQ		0x05
 #define BC_NOTIFY_IND			0x07
+#define BC_BATTERY_INFORMATION_GET	0x09
 #define BC_SHUTDOWN_NOTIFY_V2		0x22
 #define BC_BATTERY_STATUS_GET		0x30
 #define BC_BATTERY_STATUS_SET		0x31
@@ -56,6 +57,7 @@
 #define BC_GENERIC_NOTIFY		0x80
 
 /* Generic definitions */
+#define CHEMISTRY_MAX_STR_LEN		4
 #define MAX_STR_LEN			128
 #define BC_WAIT_TIME_MS			1000
 #define BC_FW_VER_WAIT_TIME_MS		1500
@@ -199,6 +201,40 @@ struct battery_model_resp_msg {
 	char			model[MAX_STR_LEN];
 };
 
+/* Response structure for BC_BATTERY_INFORMATION_GET (Opcode 0x09) */
+struct battery_information_resp_msg {
+	struct pmic_glink_hdr	hdr;
+	u32 power_unit;
+	u32 design_capacity;
+	u32 last_full_capacity;
+	u32 battery_tech;
+	u32 design_voltage;
+	u32 capacity_warning;
+	u32 capacity_low;
+	u32 cycle_count;
+	u32 accuracy;
+	u32 max_sample_time;
+	u32 min_sample_time;
+	u32 max_average_interval;
+	u32 min_average_interval;
+	u32 capacity_granularity1;
+	u32 capacity_granularity2;
+	u32 swappable;
+	u32 capabilities;
+	char model_number[MAX_STR_LEN];
+	char serial_number[MAX_STR_LEN];
+	char battery_type[MAX_STR_LEN];
+	char oem_info[MAX_STR_LEN];
+	char battery_chemistry[CHEMISTRY_MAX_STR_LEN];
+	char uid[MAX_STR_LEN];
+	u32 critical_bias;
+	u8 day;
+	u8 month;
+	u16 year;
+	u32 battery_id;
+	u32 batt_estimated_time;
+};
+
 struct wireless_fw_check_req {
 	struct pmic_glink_hdr	hdr;
 	u32			fw_version;
@@ -251,6 +287,7 @@ struct battery_charger_chg_ctrl_msg {
 struct psy_state {
 	struct power_supply	*psy;
 	char			*model;
+	char			*manufacturer;
 	const int		*map;
 	u32			*prop;
 	u32			prop_count;
@@ -260,6 +297,7 @@ struct psy_state {
 
 struct battery_charger_config {
 	u32			opcode;
+	const struct power_supply_desc	*batt_psy_desc;
 };
 
 struct battery_chg_dev {
@@ -528,6 +566,18 @@ static int read_property_id(struct battery_chg_dev *bcdev,
 	return battery_chg_write(bcdev, &req_msg, sizeof(req_msg), BC_WAIT_TIME_MS);
 }
 
+static int read_battery_information(struct battery_chg_dev *bcdev)
+{
+	struct battery_charger_req_msg req_msg = { { 0 } };
+
+	req_msg.hdr.owner = MSG_OWNER_BC;
+	req_msg.hdr.type = MSG_TYPE_REQ_RESP;
+	req_msg.hdr.opcode = BC_BATTERY_INFORMATION_GET;
+	req_msg.battery_id = 0;
+
+	return battery_chg_write(bcdev, &req_msg, sizeof(req_msg), BC_WAIT_TIME_MS);
+}
+
 static int get_property_id(struct psy_state *pst,
 			enum power_supply_property prop)
 {
@@ -672,6 +722,25 @@ static bool validate_message(struct battery_chg_dev *bcdev,
 	return true;
 }
 
+static void handle_battery_info(struct battery_chg_dev *bcdev, void *data,
+				size_t len)
+{
+	struct battery_information_resp_msg *info_msg = data;
+	struct psy_state *pst = &bcdev->psy_list[PSY_TYPE_BATTERY];
+
+	if (len != sizeof(*info_msg)) {
+		pr_err("Incorrect response length %zu for BC_BATTERY_INFORMATION_GET\n", len);
+		return;
+	}
+
+	if (!pst->manufacturer) {
+		pr_err("manufacturer buffer not allocated\n");
+		return;
+	}
+
+	strscpy(pst->manufacturer, info_msg->oem_info, MAX_STR_LEN);
+}
+
 #define MODEL_DEBUG_BOARD	"Debug_Board"
 static void handle_message(struct battery_chg_dev *bcdev, void *data,
 				size_t len)
@@ -686,6 +755,10 @@ static void handle_message(struct battery_chg_dev *bcdev, void *data,
 	bool ack_set = false;
 
 	switch (resp_msg->hdr.opcode) {
+	case BC_BATTERY_INFORMATION_GET:
+		handle_battery_info(bcdev, data, len);
+		ack_set = true;
+		break;
 	case BC_BATTERY_STATUS_GET:
 		pst = &bcdev->psy_list[PSY_TYPE_BATTERY];
 
@@ -881,7 +954,7 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 	struct battery_chg_dev *bcdev = container_of(work,
 					struct battery_chg_dev, usb_type_work);
 	struct power_supply_desc *desc;
-	struct psy_state *pst;
+	struct psy_state *pst = NULL;
 	int rc, i;
 
 	for (i = 0; i < NUM_USB_PORTS; i++) {
@@ -903,6 +976,11 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 		}
 
 		desc = &usb_psy_desc[i];
+
+		if (!pst) {
+			pr_err("USB power supply is NULL\n");
+			return;
+		}
 
 		rc = read_property_id(bcdev, pst, USB_ADAP_TYPE);
 		if (rc < 0) {
@@ -1549,6 +1627,16 @@ static int battery_psy_get_prop(struct power_supply *psy,
 	struct psy_state *pst = &bcdev->psy_list[PSY_TYPE_BATTERY];
 	int prop_id, rc;
 
+	if (prop == POWER_SUPPLY_PROP_MANUFACTURER) {
+		if (!pst->manufacturer[0]) {
+			rc = read_battery_information(bcdev);
+			if (rc < 0)
+				return rc;
+		}
+		pval->strval = pst->manufacturer ? pst->manufacturer : "";
+		return 0;
+	}
+
 	pval->intval = -ENODATA;
 
 	/*
@@ -1621,7 +1709,7 @@ static int battery_psy_prop_is_writeable(struct power_supply *psy,
 	return 0;
 }
 
-static enum power_supply_property battery_props[] = {
+static const enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_PRESENT,
@@ -1655,6 +1743,46 @@ static const struct power_supply_desc batt_psy_desc = {
 	.type			= POWER_SUPPLY_TYPE_BATTERY,
 	.properties		= battery_props,
 	.num_properties		= ARRAY_SIZE(battery_props),
+	.get_property		= battery_psy_get_prop,
+	.set_property		= battery_psy_set_prop,
+	.property_is_writeable	= battery_psy_prop_is_writeable,
+};
+
+static const enum power_supply_property x1e80100_battery_props[] = {
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_HEALTH,
+	POWER_SUPPLY_PROP_PRESENT,
+	POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_VOLTAGE_OCV,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_VOLTAGE_MAX,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CURRENT_AVG,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT_MAX,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD,
+	POWER_SUPPLY_PROP_TEMP,
+	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_CHARGE_COUNTER,
+	POWER_SUPPLY_PROP_CYCLE_COUNT,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_FULL,
+	POWER_SUPPLY_PROP_MODEL_NAME,
+	POWER_SUPPLY_PROP_MANUFACTURER,
+	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
+	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
+	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
+	POWER_SUPPLY_PROP_POWER_NOW,
+	POWER_SUPPLY_PROP_POWER_AVG,
+};
+
+static const struct power_supply_desc x1e80100_batt_psy_desc = {
+	.name			= "battery",
+	.type			= POWER_SUPPLY_TYPE_BATTERY,
+	.properties		= x1e80100_battery_props,
+	.num_properties		= ARRAY_SIZE(x1e80100_battery_props),
 	.get_property		= battery_psy_get_prop,
 	.set_property		= battery_psy_set_prop,
 	.property_is_writeable	= battery_psy_prop_is_writeable,
@@ -1724,7 +1852,7 @@ static int battery_chg_init_psy(struct battery_chg_dev *bcdev)
 	}
 
 	bcdev->psy_list[PSY_TYPE_BATTERY].psy =
-		devm_power_supply_register(bcdev->dev, &batt_psy_desc,
+		devm_power_supply_register(bcdev->dev, bcdev->config->batt_psy_desc,
 						&psy_cfg);
 	if (IS_ERR(bcdev->psy_list[PSY_TYPE_BATTERY].psy)) {
 		rc = PTR_ERR(bcdev->psy_list[PSY_TYPE_BATTERY].psy);
@@ -2950,6 +3078,13 @@ static int battery_chg_probe(struct platform_device *pdev)
 	if (!bcdev->psy_list[PSY_TYPE_BATTERY].model)
 		return -ENOMEM;
 
+	if (bcdev->config->batt_psy_desc == &x1e80100_batt_psy_desc) {
+		bcdev->psy_list[PSY_TYPE_BATTERY].manufacturer =
+			devm_kzalloc(&pdev->dev, MAX_STR_LEN, GFP_KERNEL);
+		if (!bcdev->psy_list[PSY_TYPE_BATTERY].manufacturer)
+			return -ENOMEM;
+	}
+
 	mutex_init(&bcdev->rw_lock);
 	init_rwsem(&bcdev->state_sem);
 	init_completion(&bcdev->ack);
@@ -3124,17 +3259,25 @@ static void battery_chg_remove(struct platform_device *pdev)
 }
 
 static struct battery_charger_config default_config = {
-	.opcode = BC_SHUTDOWN_NOTIFY
+	.opcode = BC_SHUTDOWN_NOTIFY,
+	.batt_psy_desc = &batt_psy_desc,
 };
 
 static struct battery_charger_config canoe_config = {
-	.opcode = BC_SHUTDOWN_NOTIFY_V2
+	.opcode = BC_SHUTDOWN_NOTIFY_V2,
+	.batt_psy_desc = &batt_psy_desc,
+};
+
+static struct battery_charger_config x1e80100_config = {
+	.opcode = BC_SHUTDOWN_NOTIFY,
+	.batt_psy_desc = &x1e80100_batt_psy_desc,
 };
 
 static const struct of_device_id battery_chg_match_table[] = {
 	{ .compatible = "qcom,battery-charger", .data = (void *)&default_config},
 	{ .compatible = "qcom,pmw6100-battery-charger", .data = (void *)&default_config},
 	{ .compatible = "qcom,canoe-battery-charger", .data = (void *)&canoe_config},
+	{ .compatible = "qcom,x1e80100-battery-charger", .data = (void *)&x1e80100_config},
 	{}
 };
 

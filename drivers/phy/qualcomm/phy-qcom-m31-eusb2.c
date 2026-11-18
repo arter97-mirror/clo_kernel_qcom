@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/clk.h>
@@ -149,8 +149,16 @@ static inline bool is_eud_debug_mode_active(struct m31eusb2_phy *phy)
 
 static void m31eusb2_phy_update_eud_detect(struct m31eusb2_phy *phy, bool set)
 {
+	if (!phy->eud_detect_reg)
+		return;
+
+	/*
+	 * eud_detect_reg is shared across ports (one EUD_DETECT bit per port),
+	 * so read-modify-write to avoid clearing the other ports' bits.
+	 */
 	if (set)
-		writel_relaxed(EUD_DETECT, phy->eud_detect_reg);
+		writel_relaxed(readl_relaxed(phy->eud_detect_reg) | EUD_DETECT,
+			       phy->eud_detect_reg);
 	else
 		writel_relaxed(readl_relaxed(phy->eud_detect_reg) & ~EUD_DETECT,
 			       phy->eud_detect_reg);
@@ -402,13 +410,17 @@ static int m31eusb2_phy_probe(struct platform_device *pdev)
 
 	phy->eud_enable_reg = devm_platform_ioremap_resource_byname(pdev,
 						"eud_enable_reg");
-	if (IS_ERR(phy->eud_enable_reg))
+	if (IS_ERR(phy->eud_enable_reg)) {
+		phy->eud_enable_reg = NULL;
 		dev_info(dev, "missing eud_enable register address\n");
+	}
 
 	phy->eud_detect_reg = devm_platform_ioremap_resource_byname(pdev,
 						"eud_detect_reg");
-	if (IS_ERR(phy->eud_detect_reg))
+	if (IS_ERR(phy->eud_detect_reg)) {
+		phy->eud_detect_reg = NULL;
 		dev_info(dev, "missing eud_detect register address\n");
+	}
 
 	phy->reset = devm_reset_control_get_exclusive(dev, NULL);
 	if (IS_ERR(phy->reset))

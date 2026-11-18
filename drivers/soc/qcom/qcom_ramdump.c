@@ -193,7 +193,7 @@ int register_dump_segments(struct list_head *head, const struct firmware *fw)
 }
 EXPORT_SYMBOL_GPL(register_dump_segments);
 
-int qcom_dump(struct list_head *segs, struct device *dev)
+static int __qcom_dump(struct list_head *segs, struct device *dev)
 {
 	struct qcom_dump_segment *segment;
 	void *data;
@@ -205,13 +205,8 @@ int qcom_dump(struct list_head *segs, struct device *dev)
 	if (!segs || list_empty(segs))
 		return -EINVAL;
 
-	if (!dump_enabled())
-		return 0;
-
-	list_for_each_entry(segment, segs, node) {
-		pr_info("Got segment size %zd\n", segment->size);
+	list_for_each_entry(segment, segs, node)
 		data_size += segment->size;
-	}
 
 	data = vmalloc(data_size);
 	if (!data)
@@ -228,8 +223,7 @@ int qcom_dump(struct list_head *segs, struct device *dev)
 					&segment->da, segment->size);
 				memset(data + offset, 0xff, segment->size);
 			} else {
-				memcpy_fromio(data + offset, ptr,
-					      segment->size);
+				memcpy_fromio(data + offset, ptr, segment->size);
 				iounmap(ptr);
 			}
 		}
@@ -242,7 +236,21 @@ int qcom_dump(struct list_head *segs, struct device *dev)
 
 	return ret;
 }
+
+int qcom_dump(struct list_head *segs, struct device *dev)
+{
+	if (!dump_enabled())
+		return 0;
+
+	return __qcom_dump(segs, dev);
+}
 EXPORT_SYMBOL(qcom_dump);
+
+int qcom_microdump(struct list_head *segs, struct device *dev)
+{
+	return __qcom_dump(segs, dev);
+}
+EXPORT_SYMBOL_GPL(qcom_microdump);
 
 /* Since the elf32 and elf64 identification is identical
  * apart from the class we use elf32 by default.

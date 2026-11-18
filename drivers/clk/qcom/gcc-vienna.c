@@ -2097,6 +2097,21 @@ static struct clk_regmap_div gcc_pcie_0_pipe_div2_clk_src = {
 	},
 };
 
+static struct clk_regmap_div gcc_pwm0_xo512_clk_src = {
+	.reg = 0x33030,
+	.shift = 0,
+	.width = 9,
+	.clkr.hw.init = &(const struct clk_init_data) {
+		.name = "gcc_pwm0_xo512_clk_src",
+		.parent_data = (const struct clk_parent_data[]) {
+			{ .fw_name = "bi_tcxo" },
+		},
+		.num_parents = 1,
+		.flags = CLK_SET_RATE_PARENT,
+		.ops = &clk_regmap_div_ops,
+	},
+};
+
 static struct clk_regmap_div gcc_qupv3_wrap1_s2_clk_src = {
 	.reg = 0xa728c,
 	.shift = 0,
@@ -2920,6 +2935,11 @@ static struct clk_branch gcc_pwm0_xo512_clk = {
 		.enable_mask = BIT(0),
 		.hw.init = &(const struct clk_init_data) {
 			.name = "gcc_pwm0_xo512_clk",
+			.parent_hws = (const struct clk_hw*[]) {
+				&gcc_pwm0_xo512_clk_src.clkr.hw,
+			},
+			.num_parents = 1,
+			.flags = CLK_SET_RATE_PARENT,
 			.ops = &clk_branch2_ops,
 		},
 	},
@@ -3671,6 +3691,7 @@ static struct clk_regmap *gcc_vienna_clocks[] = {
 	[GCC_PDM_AHB_CLK] = &gcc_pdm_ahb_clk.clkr,
 	[GCC_PDM_XO4_CLK] = &gcc_pdm_xo4_clk.clkr,
 	[GCC_PWM0_XO512_CLK] = &gcc_pwm0_xo512_clk.clkr,
+	[GCC_PWM0_XO512_CLK_SRC] = &gcc_pwm0_xo512_clk_src.clkr,
 	[GCC_QMIP_AOD_NOC_AHB_CLK] = &gcc_qmip_aod_noc_ahb_clk.clkr,
 	[GCC_QMIP_CAMERA_NRT_AHB_CLK] = &gcc_qmip_camera_nrt_ahb_clk.clkr,
 	[GCC_QMIP_CAMERA_RT_AHB_CLK] = &gcc_qmip_camera_rt_ahb_clk.clkr,

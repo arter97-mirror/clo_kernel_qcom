@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config RTC_QTI_GLINK
+	tristate "QTI Glink RTC"
+	depends on RTC_CLASS && QTI_PMIC_GLINK
+	help
+	  Say Y here to enable the Qualcomm Technologies, Inc. RTC driver
+	  for platforms where direct SPMI access to PMIC RTC hardware is
+	  restricted.
+
+	  On these platforms (such as Hamoa), the RTC hardware permissions
+	  are managed by a remote processor that handles the TAD (Time and
+	  Alarm Device) feature. This driver acts as a proxy, communicating
+	  over PMIC Glink to query time and program alarms, allowing the
+	  RTC to wake up or interrupt the APPS subsystem.
+
+	  To compile the driver as a module, choose M here: the module will be
+	  called rtc_qti_glink.

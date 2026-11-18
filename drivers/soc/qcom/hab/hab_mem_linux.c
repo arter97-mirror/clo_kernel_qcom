@@ -69,7 +69,8 @@ static struct pages_list *pages_list_create(
 		(struct compressed_pfns *)exp->payload;
 	struct pages_list *pglist = NULL;
 	unsigned long pfn;
-	int i, j, k = 0, size;
+	int i, j, k = 0;
+	size_t size;
 	unsigned long region_total_page = 0;
 
 	if (!pfn_table)
@@ -83,7 +84,7 @@ static struct pages_list *pages_list_create(
 		return ERR_PTR(-EINVAL);
 	}
 
-	size = exp->payload_count * sizeof(struct page *);
+	size = (size_t)exp->payload_count * sizeof(struct page *);
 	pages = vmalloc(size);
 	if (!pages)
 		return ERR_PTR(-ENOMEM);
@@ -101,20 +102,20 @@ static struct pages_list *pages_list_create(
 			goto err_region_total_page;
 		}
 
-		region_total_page += pfn_table->region[i].size;
-		if (region_total_page > exp->payload_count) {
+		region_total_page += (unsigned long)pfn_table->region[i].size;
+		if (region_total_page > (unsigned long)exp->payload_count) {
 			pr_err("payload_count %d but region_total_page %lu\n",
 				exp->payload_count, region_total_page);
 			goto err_region_total_page;
 		}
 
 		for (j = 0; j < pfn_table->region[i].size; j++) {
-			pages[k] = pfn_to_page(pfn+j);
+			pages[k] = pfn_to_page(pfn + (unsigned long)j);
 			k++;
 		}
 		pfn += pfn_table->region[i].size + pfn_table->region[i].space;
 	}
-	if (region_total_page != exp->payload_count) {
+	if (region_total_page != (unsigned long)exp->payload_count) {
 		pr_err("payload_count %d and region_total_page %lu are not equal\n",
 			exp->payload_count, region_total_page);
 		goto err_region_total_page;
@@ -172,6 +173,8 @@ static void pages_list_destroy(struct kref *refcount)
 	else if (pglist->type == HAB_PAGE_LIST_EXPORT_USER) {
 		for (i = 0; i < pglist->npages; i++)
 			put_page(pglist->pages[i]);
+	} else {
+		/* HAB_PAGE_LIST_EXPORT_KERNEL: kernel pages, no explicit release needed */
 	}
 
 	if (pglist->unimp_timing == PGLIST_DESTROY) {
@@ -355,7 +358,7 @@ static struct dma_buf *habmem_get_dma_buf_from_uva(unsigned long address,
 	kref_init(&pglist->refcount);
 
 	exp_info.ops = &dma_buf_ops;
-	exp_info.size = pglist->npages << PAGE_SHIFT;
+	exp_info.size = (size_t)pglist->npages << PAGE_SHIFT;
 	exp_info.flags = O_RDWR;
 	exp_info.priv = pglist;
 	dmabuf = dma_buf_export(&exp_info);
@@ -529,7 +532,7 @@ static int habmem_compress_pfns(
 	}
 
 	*data_size = sizeof(struct compressed_pfns) +
-		sizeof(struct region) * metadata->pfns.nregions;
+		sizeof(struct region) * (size_t)metadata->pfns.nregions;
 
 	pr_debug("first_pfn %lu, nregions %d, data_size %u\n",
 			metadata->pfns.first_pfn, metadata->pfns.nregions, *data_size);
@@ -566,12 +569,12 @@ static int habmem_add_export_compress(struct virtual_channel *vchan,
 	 * coming from PVM/Host side, as to resolve error for payload[1]
 	 * in 6.12 kernel, as it is converted to payload[]
 	 */
-	if (flags & HABMM_EXP_MEM_TYPE_LOOPBACK)
+	if ((unsigned int)flags & HABMM_EXP_MEM_TYPE_LOOPBACK)
 		sizebytes = (uint32_t)sizeof(*exp_super) + 1 + (uint32_t)sizeof(struct lb_mem_info);
 	else
 		sizebytes = sizeof(*exp_super) + 1 +
 				sizeof(struct compressed_pfns) +
-				page_count * sizeof(struct region);
+				(size_t)page_count * sizeof(struct region);
 
 	pr_debug("exp_desc %zu, comp_metadata  %zu, region %zu, page_count %d\n",
 		sizeof(struct export_desc),
@@ -655,12 +658,12 @@ int habmem_hyp_grant_user(struct virtual_channel *vchan,
 	struct dma_buf *dmabuf = NULL;
 	unsigned long off = 0;
 
-	if (HABMM_EXP_MEM_TYPE_DMA & flags)
+	if (HABMM_EXP_MEM_TYPE_DMA & (unsigned int)flags)
 		dmabuf = habmem_get_dma_buf_from_va(address,
 					page_count, &off);
-	else if (HABMM_EXPIMP_FLAGS_FD & flags)
+	else if (HABMM_EXPIMP_FLAGS_FD & (unsigned int)flags)
 		dmabuf = dma_buf_get(address);
-	else if ((HABMM_EXP_MEM_TYPE_LOOPBACK & flags) == 0)
+	else if ((HABMM_EXP_MEM_TYPE_LOOPBACK & (unsigned int)flags) == 0U)
 		dmabuf = habmem_get_dma_buf_from_uva(address, page_count);
 	else
 		pr_err("%x Cannot loopback memory via uva without existing dma-buf\n",
@@ -703,13 +706,13 @@ int habmem_hyp_grant(struct virtual_channel *vchan,
 	struct pages_list *pglist = NULL;
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
 
-	if (HABMM_EXPIMP_FLAGS_DMABUF & flags) {
+	if (HABMM_EXPIMP_FLAGS_DMABUF & (unsigned int)flags) {
 		dmabuf = (struct dma_buf *)address;
 		if (dmabuf)
 			get_dma_buf(dmabuf);
-	} else if (HABMM_EXPIMP_FLAGS_FD & flags) {
+	} else if (HABMM_EXPIMP_FLAGS_FD & (unsigned int)flags) {
 		dmabuf = dma_buf_get(address);
-	} else if ((HABMM_EXP_MEM_TYPE_LOOPBACK & flags) == 0) { /*Input is kva;*/
+	} else if ((HABMM_EXP_MEM_TYPE_LOOPBACK & (unsigned int)flags) == 0U) { /*Input is kva;*/
 		pages = vmalloc((page_count *
 				sizeof(struct page *)));
 		if (!pages) {
@@ -740,7 +743,7 @@ int habmem_hyp_grant(struct virtual_channel *vchan,
 		}
 
 		exp_info.ops = &dma_buf_ops;
-		exp_info.size = pglist->npages << PAGE_SHIFT;
+		exp_info.size = (size_t)pglist->npages << PAGE_SHIFT;
 		exp_info.flags = O_RDWR;
 		exp_info.priv = pglist;
 		dmabuf = dma_buf_export(&exp_info);
@@ -906,7 +909,7 @@ static vm_fault_t hab_map_fault(struct vm_fault *vmf)
 
 	pglist  = vma->vm_private_data;
 
-	if (page_idx < 0 || page_idx >= pglist->npages) {
+	if (page_idx < 0 || (unsigned long)page_idx >= (unsigned long)pglist->npages) {
 		pr_err("Out of page array! page_idx %d, pg cnt %ld\n",
 			page_idx, pglist->npages);
 		return VM_FAULT_SIGBUS;
@@ -1136,7 +1139,7 @@ static struct dma_buf *habmem_import_to_dma_buf(
 
 buffer_ready:
 		exp_info.ops = &dma_buf_ops;
-		exp_info.size = pglist->npages << PAGE_SHIFT;
+		exp_info.size = (size_t)pglist->npages << PAGE_SHIFT;
 		exp_info.flags = O_RDWR;
 		exp_info.priv = pglist;
 		dmabuf = dma_buf_export(&exp_info);

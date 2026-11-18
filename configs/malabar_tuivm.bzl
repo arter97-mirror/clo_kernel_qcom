@@ -1,6 +1,6 @@
 malabar_tuivm_config = {
-    "CONFIG_ARCH_QTI_VM": "y",
     "CONFIG_ARCH_MALABAR": "y",
+    "CONFIG_ARCH_QTI_VM": "y",
     "CONFIG_ARM_SMMU": "m",
     "CONFIG_COMMON_CLK_QCOM": "m",
     "CONFIG_GH_ARM64_DRV": "m",
@@ -51,6 +51,7 @@ malabar_tuivm_config = {
     "CONFIG_QCOM_SOC_WATCHDOG": "m",
     "CONFIG_QCOM_TLMM_VM_IRQCHIP": "m",
     "CONFIG_QCOM_TZMEM": "m",
+    "CONFIG_QCOM_TZMEM_LOW_MEMORY": "y",
     "CONFIG_QCOM_TZMEM_MODE_SHMBRIDGE": "y",
     "CONFIG_QCOM_VM_DMESG_DUMPER": "m",
     "CONFIG_QCOM_WATCHDOG_WAKEUP_ENABLE": "n",

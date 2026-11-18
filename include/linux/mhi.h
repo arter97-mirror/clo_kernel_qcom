@@ -34,10 +34,12 @@ struct mhi_buf_info;
  * @MHI_CB_LPM_ENTER: MHI host entered low power mode
  * @MHI_CB_LPM_EXIT: MHI host about to exit low power mode
  * @MHI_CB_EE_RDDM: MHI device entered RDDM exec env
+ * @MHI_CB_EE_SBL_MODE: MHI device entered SBL exec env
  * @MHI_CB_EE_MISSION_MODE: MHI device entered Mission Mode exec env
  * @MHI_CB_SYS_ERROR: MHI device entered error state (may recover)
  * @MHI_CB_FATAL_ERROR: MHI device entered fatal error state
  * @MHI_CB_BW_REQ: Received a bandwidth switch request from device
+ * @MHI_CB_FW_DL_ERR: Firmware download error
  * @MHI_CB_DTR_SIGNAL: DTR signaling update
  * @MHI_CB_DTR_START_CHANNELS: DTR signal for client driver to start channels
  */
@@ -47,10 +49,12 @@ enum mhi_callback {
 	MHI_CB_LPM_ENTER,
 	MHI_CB_LPM_EXIT,
 	MHI_CB_EE_RDDM,
+	MHI_CB_EE_SBL_MODE,
 	MHI_CB_EE_MISSION_MODE,
 	MHI_CB_SYS_ERROR,
 	MHI_CB_FATAL_ERROR,
 	MHI_CB_BW_REQ,
+	MHI_CB_FW_DL_ERR,
 	MHI_CB_DTR_SIGNAL,
 	MHI_CB_DTR_START_CHANNELS,
 };
@@ -404,6 +408,8 @@ struct mhi_controller_config {
  * @img_pre_alloc: allocate rddm and fbc image buffers one time
  * @bounce_buf: Use of bounce buffer
  * @fbc_download: MHI host needs to do complete image transfer (optional)
+ * @edl_download: proceed with EDL firmware download without waiting for a
+ *		  sysfs trigger (optional)
  * @wake_set: Device wakeup set flag
  * @irq_flags: irq flags passed to request_irq (optional)
  * @mru: the default MRU for the MHI device
@@ -509,6 +515,7 @@ struct mhi_controller {
 	bool img_pre_alloc;
 	bool bounce_buf;
 	bool fbc_download;
+	bool edl_download;
 	bool wake_set;
 	unsigned long irq_flags;
 	u32 mru;
@@ -846,6 +853,18 @@ int mhi_prepare_for_transfer_autoqueue(struct mhi_device *mhi_dev);
  * @mhi_dev: Device associated with the channels
  */
 void mhi_unprepare_from_transfer(struct mhi_device *mhi_dev);
+
+/**
+ * mhi_poll - Poll for any available data in DL direction
+ * @mhi_dev: Device associated with the channels
+ * @budget: # of events to process
+ *
+ * May be called from softirq/process context; do not call while holding
+ * the channel event lock.
+ *
+ * Return: number of events processed, or a negative error code otherwise
+ */
+int mhi_poll(struct mhi_device *mhi_dev, u32 budget);
 
 /**
  * mhi_queue_dma - Send or receive DMA mapped buffers from client device

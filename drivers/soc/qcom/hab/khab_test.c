@@ -276,8 +276,9 @@ static ssize_t vchan_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (ret < 1) {
 		pr_err("failed to read anything from input %d\n", ret);
 		return 0;
-	} else
-		return count;
+	} else {
+		return (ssize_t)count;
+	}
 }
 
 static ssize_t ctx_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -295,8 +296,9 @@ static ssize_t ctx_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (ret < 1) {
 		pr_err("failed to read anything from input %d\n", ret);
 		return 0;
-	} else
-		return count;
+	} else {
+		return (ssize_t)count;
+	}
 }
 
 static ssize_t virq_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -314,23 +316,29 @@ static ssize_t virq_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (ret < 1) {
 		pr_err("failed to read anything from input %d\n", ret);
 		return 0;
-	} else
-		return count;
+	} else {
+		return (ssize_t)count;
+	}
 }
 
 static ssize_t expimp_show(struct kobject *kobj, struct kobj_attribute *attr,
 						char *buf)
 {
+	(void)kobj;
+	(void)attr;
 	return hab_stat_show_expimp(&hab_driver, pid_stat, buf, PAGE_SIZE);
 }
+
+#define DUMP_PIPE_CMD "dump_pipe"
+#define EXPIMP_STR_SIZE 36
 
 static ssize_t expimp_store(struct kobject *kobj, struct kobj_attribute *attr,
 						const char *buf, size_t count)
 {
-	int ret = -1;
-	char str[36] = {0};
-	struct uhab_context *ctx = NULL;
-	struct virtual_channel *vchan = NULL;
+	int ret;
+	char str[EXPIMP_STR_SIZE] = {0};
+	struct uhab_context *ctx;
+	struct virtual_channel *vchan;
 
 	if (buf) {
 		ret = sscanf(buf, "%35s", str);
@@ -338,28 +346,29 @@ static ssize_t expimp_store(struct kobject *kobj, struct kobj_attribute *attr,
 			pr_err("failed to read anything from input %d\n", ret);
 			return -EINVAL;
 		}
-	} else
+	} else {
 		return -EINVAL;
+	}
 
-	if (strnlen(str, strlen("dump_pipe")) == strlen("dump_pipe") &&
-		strcmp(str, "dump_pipe") == 0) {
+	if (strcmp(str, DUMP_PIPE_CMD) == 0) {
 		/* string terminator is ignored */
 		list_for_each_entry(ctx, &hab_driver.uctx_list, node) {
 			if (ctx->owner == pid_stat) {
-				vchan = list_first_entry(&ctx->vchannels,
-					struct virtual_channel, node);
-				if (vchan)
+				if (!list_empty(&ctx->vchannels)) {
+					vchan = list_first_entry(&ctx->vchannels,
+						struct virtual_channel, node);
 					dump_hab_wq(vchan->pchan); /* user context */
+				}
 			}
 		}
-		return count;
+		return (ssize_t)count;
 	}
 
 	ret = sscanf(buf, "%du", &pid_stat);
 	if (ret < 1)
 		pr_err("failed to read anything from input %d\n", ret);
 	else
-		return count; /* good result stored */
+		return (ssize_t)count; /* good result stored */
 	return -EEXIST;
 }
 
@@ -387,7 +396,7 @@ static ssize_t rx_pending_store(struct kobject *kobj, struct kobj_attribute *att
 	int ret;
 
 	ret = hab_stat_store_rx_pending(buf, (int)PAGE_SIZE);
-	if (ret) {
+	if (ret != 0) {
 		pr_err("failed due to invalid input\n");
 		return 0;
 	}
@@ -428,27 +437,27 @@ int hab_stat_init_sub(struct hab_driver *driver)
 		return -ENOMEM;
 
 	result = sysfs_create_file(hab_kobject, &vchan_attribute.attr);
-	if (result)
+	if (result != 0)
 		pr_debug("cannot add vchan in /sys/kernel/hab %d\n", result);
 
 	result = sysfs_create_file(hab_kobject, &ctx_attribute.attr);
-	if (result)
+	if (result != 0)
 		pr_debug("cannot add ctx in /sys/kernel/hab %d\n", result);
 
 	result = sysfs_create_file(hab_kobject, &expimp_attribute.attr);
-	if (result)
+	if (result != 0)
 		pr_debug("cannot add expimp in /sys/kernel/hab %d\n", result);
 
 	result = sysfs_create_file(hab_kobject, &reclaim_attribute.attr);
-	if (result)
+	if (result != 0)
 		pr_debug("cannot add reclaim in /sys/kernel/hab %d\n", result);
 
 	result = sysfs_create_file(hab_kobject, &virq_attribute.attr);
-	if (result)
+	if (result != 0)
 		pr_debug("cannot add virq in /sys/kernel/hab %d\n", result);
 
 	result = sysfs_create_file(hab_kobject, &rx_pending_attribute.attr);
-	if (result)
+	if (result != 0)
 		pr_debug("cannot add rx_limit in /sys/kernel/hab %d\n", result);
 
 	return result;
@@ -477,10 +486,10 @@ int dump_hab_get_file_name(char *file_time, int ft_size)
 	local_time = (unsigned long)(time.tv_sec - sys_tz.tz_minuteswest * 60);
 	rtc_time64_to_tm(local_time, &tm);
 
-	snprintf(file_time, ft_size, "%04d_%02d_%02d-%02d_%02d_%02d",
+	(void)snprintf(file_time, (size_t)ft_size,
+		"%04d_%02d_%02d-%02d_%02d_%02d",
 		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
 		tm.tm_min, tm.tm_sec);
 
 	return 0;
 }
-

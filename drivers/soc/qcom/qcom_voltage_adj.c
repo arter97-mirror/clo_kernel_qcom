@@ -106,6 +106,10 @@ static const struct qvadj_device_data qvadj_canoe = {
 	.sdam_reg = SDAM2_MEM17,
 };
 
+static const struct qvadj_device_data qvadj_malabar = {
+	.sdam_reg = SDAM2_MEM54,
+};
+
 static const struct of_device_id qvadj_table[] = {
 	{
 		.compatible = "qcom,vadj-chora",
@@ -115,6 +119,11 @@ static const struct of_device_id qvadj_table[] = {
 	{
 		.compatible = "qcom,vadj-canoe",
 		.data = &qvadj_canoe,
+	},
+
+	{
+		.compatible = "qcom,vadj-malabar",
+		.data = &qvadj_malabar,
 	},
 
 	{ .compatible = "qcom,vadj" },

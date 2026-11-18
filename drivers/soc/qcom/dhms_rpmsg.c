@@ -26,6 +26,7 @@
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
+#include <linux/delay.h>
 
 #include "dhms_rpmsg.h"
 
@@ -356,6 +357,14 @@ static int dhms_broadcast_import(struct dhms_device *ctx,
 	list_for_each_entry(ref, &buf->processor_refs, node) {
 		struct rpmsg_device *rpdev = ref->rpdev;
 
+		if (!rpdev) {
+			dev_warn(ctx->dma_dev,
+				 "DHMS: Skipping IMPORT to %s — channel down (SSR)\n",
+				 ref->processor_name);
+			ref->ack_state = DHMS_ACK_NODEV;
+			continue;
+		}
+
 		spin_unlock(&buf->ref_lock);
 		ret = rpmsg_send(rpdev->ept, &msg, sizeof(msg));
 		spin_lock(&buf->ref_lock);
@@ -472,6 +481,14 @@ static int dhms_send_release_to_all(struct dhms_device *ctx,
 	list_for_each_entry(ref, &buf->processor_refs, node) {
 		struct rpmsg_device *rpdev = ref->rpdev;
 
+		if (!rpdev) {
+			dev_warn(ctx->dma_dev,
+				 "DHMS: Skipping RELEASE to %s — channel down (SSR)\n",
+				 ref->processor_name);
+			ref->ack_state = DHMS_ACK_NODEV;
+			continue;
+		}
+
 		spin_unlock(&buf->ref_lock);
 		ret = rpmsg_send(rpdev->ept, &msg, sizeof(msg));
 		spin_lock(&buf->ref_lock);
@@ -542,6 +559,14 @@ static void dhms_release_dmabuf_multi(struct dhms_device *ctx,
 	}
 
 	send_count = dhms_send_release_to_all(ctx, buf);
+
+	/*
+	 * WORKAROUND: Add a 1ms delay before tearing down the IOMMU mapping.
+	 * TODO: Remove once LMCU firmware  add fix.
+	 *
+	 */
+	if (send_count > 0)
+		usleep_range(1000, 1500);
 
 	dhms_buf_free_resources(buf);
 
@@ -947,6 +972,13 @@ static int dhms_handle_release_req(struct dhms_device *ctx,
 		goto send_ack_single;
 	}
 
+	/*
+	 * WORKAROUND: Add a 1ms delay before tearing down the IOMMU mapping.
+	 * TODO: Remove once LMCU firmware adds fix
+	 *
+	 */
+	usleep_range(1000, 1500);
+
 	dhms_buf_free_resources(buf);
 
 	dev_dbg(&rpdev->dev,
@@ -1237,12 +1269,61 @@ static int dhms_rpmsg_probe(struct rpmsg_device *rpdev)
 	return 0;
 }
 
+/**
+ * dhms_invalidate_processor_refs_for_rpdev() - Clear stale rpdev in buffer entries on SSR
+ * @ctx: DHMS context
+ * @rpdev: The rpmsg_device being torn down
+ *
+ * FIX for use-after-free:
+ *
+ * This function walks all active buffers (ctx->buf_idr) and pending-release
+ * buffers, and for every dhms_processor_entry whose ref->rpdev matches the
+ * dying channel, sets ref->rpdev = NULL and ref->ack_state = DHMS_ACK_NODEV.
+ *
+ */
+static void dhms_invalidate_processor_refs_for_rpdev(struct dhms_device *ctx,
+						      struct rpmsg_device *rpdev)
+{
+	struct dhms_buffer_entry *buf;
+	struct dhms_processor_entry *ref;
+	unsigned long flags;
+	int id;
+
+	spin_lock_irqsave(&ctx->lock, flags);
+
+	idr_for_each_entry(&ctx->buf_idr, buf, id) {
+		spin_lock(&buf->ref_lock);
+		list_for_each_entry(ref, &buf->processor_refs, node) {
+			if (ref->rpdev == rpdev) {
+				ref->rpdev     = NULL;
+				ref->ack_state = DHMS_ACK_NODEV;
+			}
+		}
+		spin_unlock(&buf->ref_lock);
+	}
+
+	list_for_each_entry(buf, &ctx->pending_releases, release_node) {
+		spin_lock(&buf->ref_lock);
+		list_for_each_entry(ref, &buf->processor_refs, node) {
+			if (ref->rpdev == rpdev) {
+				ref->rpdev     = NULL;
+				ref->ack_state = DHMS_ACK_NODEV;
+			}
+		}
+		spin_unlock(&buf->ref_lock);
+	}
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
+}
+
 static void dhms_rpmsg_remove(struct rpmsg_device *rpdev)
 {
 	struct dhms_device *ctx = dev_get_drvdata(&rpdev->dev);
 
 	if (!ctx)
 		return;
+
+	dhms_invalidate_processor_refs_for_rpdev(ctx, rpdev);
 
 	dhms_unregister_processor(ctx, rpdev);
 	dev_info(&rpdev->dev, "DHMS: Processor disconnected from GLink\n");

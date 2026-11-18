@@ -198,3 +198,22 @@ def register_modules(registry):
             "drivers/rpmsg/rpm-smd",
         ],
     )
+
+    registry.register(
+        name = "drivers/rpmsg/qcom_glink_slatecom",
+        out = "qcom_glink_slatecom.ko",
+        config = "CONFIG_RPMSG_QCOM_GLINK_SLATECOM",
+        srcs = [
+            # do not sort
+            "drivers/rpmsg/qcom_glink_native.h",
+            "drivers/rpmsg/qcom_glink_slatecom.c",
+            "drivers/soc/qcom/slatecom.h",
+        ],
+        deps = [
+            # do not sort
+            "drivers/rpmsg/qcom_glink",
+            "kernel/trace/qcom_ipc_logging",
+            "drivers/soc/qcom/debug_symbol",
+            "drivers/soc/qcom/slatecom_spi",
+        ],
+    )

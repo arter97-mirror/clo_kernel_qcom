@@ -2233,6 +2233,32 @@ int smblite_lib_get_prop_typec_power_role(struct smb_charger *chg,
 	return rc;
 }
 
+inline int smblite_lib_get_usb_prop_typec_accessory_mode(struct smb_charger *chg, int *val)
+{
+	if (chg->connector_type == QTI_POWER_SUPPLY_CONNECTOR_MICRO_USB) {
+		*val = TYPEC_ACCESSORY_NONE;
+		return 0;
+	}
+
+	chg->typec_mode = smblite_lib_get_prop_typec_mode(chg);
+
+	switch (chg->typec_mode) {
+	case QTI_POWER_SUPPLY_TYPEC_NONE:
+		*val = TYPEC_ACCESSORY_NONE;
+		break;
+	case QTI_POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER:
+		*val = TYPEC_ACCESSORY_AUDIO;
+		break;
+	case QTI_POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY:
+		*val = TYPEC_ACCESSORY_DEBUG;
+		break;
+	default:
+		*val = -EINVAL;
+	}
+
+	return 0;
+}
+
 int smblite_lib_get_prop_input_current_settled(struct smb_charger *chg,
 					  int *val)
 {
@@ -4228,6 +4254,7 @@ static void smblite_lib_thermal_regulation_work(struct work_struct *work)
 {
 	struct smb_charger *chg = container_of(work, struct smb_charger,
 						thermal_regulation_work.work);
+	const char *effective_client;
 	int rc = 0, icl_ua = 0, input_present = 0;
 	u8 stat = 0;
 
@@ -4284,8 +4311,9 @@ static void smblite_lib_thermal_regulation_work(struct work_struct *work)
 		 * with increment otherwise if other voter has voted a lower
 		 * ICL then remove vote and exit work.
 		 */
-		if (!strcmp(get_effective_client(chg->usb_icl_votable),
-				SW_THERM_REGULATION_VOTER)) {
+		effective_client =
+			get_effective_client(chg->usb_icl_votable);
+		if (effective_client && !strcmp(effective_client, SW_THERM_REGULATION_VOTER)) {
 			icl_ua += THERM_REGULATION_STEP_UA;
 			vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER,
 					true, icl_ua);

@@ -991,7 +991,7 @@ static long slate_com_ioctl(struct file *filp,
 		unsigned int ui_slatecom_cmd, unsigned long arg)
 {
 	int ret = 0;
-	struct slate_ui_data ui_obj_msg = {0, 0, 0, 0, 0, NULL};
+	struct slate_ui_data ui_obj_msg;
 
 	if (!dev || (dev->slatecom_current_state == SLATECOM_STATE_UNKNOWN) || (filp == NULL)) {
 		pr_err("slatecom driver not initialized\n");
@@ -1210,12 +1210,21 @@ static int slate_daemon_probe(struct platform_device *pdev)
 	wakeup_source_add(&dev->slatecom_ws);
 	dev->slatecom_current_state = SLATECOM_STATE_UNKNOWN;
 	rc = slatecom_rpmsg_init(dev);
-	if (rc)
+	if (rc) {
+		wakeup_source_remove(&dev->slatecom_ws);
+		kfree(dev);
 		return -ENODEV;
+	}
 	dev->platform_dev = &pdev->dev;
 	pr_info("%s success\n", __func__);
 	slate_pdev = pdev;
-	setup_pmic_gpio15();
+	rc = setup_pmic_gpio15();
+	if (rc) {
+		destroy_workqueue(dev->slatecom_wq);
+		wakeup_source_remove(&dev->slatecom_ws);
+		kfree(dev);
+		return rc;
+	}
 	ssr_register();
 	dt_parse_clk_info(&pdev->dev,
 					&dev->rf_clk_2);
@@ -1547,7 +1556,7 @@ static int setup_pmic_gpio15(void)
 	val = of_get_named_gpio(slate_pdev->dev.of_node, "qcom,platform-reset-gpio", 0);
 	if (val < 0) {
 		pr_err("pmic gpio is not found, error=%d\n", val);
-		return -EINVAL;
+		return val;
 	}
 	pmic_gpio15 = val;
 	if (gpio_request(pmic_gpio15, "SLATE_EFLASH_STATUS")) {

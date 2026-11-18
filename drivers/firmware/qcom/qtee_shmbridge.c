@@ -18,7 +18,7 @@
 
 struct qcom_tzmem_pool *shmbridge_pool;
 
-static uint32_t cookie;
+static uint32_t cookie = 1;
 
 static inline uint32_t handle_to_index(uint64_t handle)
 {
@@ -272,9 +272,12 @@ int qtee_shmbridge_driver_init(void)
 	struct qcom_tzmem_pool_config pool_config;
 
 	memset(&pool_config, 0, sizeof(pool_config));
-	pool_config.initial_size = SZ_256K;
+	if (IS_ENABLED(CONFIG_QCOM_TZMEM_LOW_MEMORY))
+		pool_config.initial_size = SZ_256K - SZ_32K; /* 224K */
+	else
+		pool_config.initial_size = SZ_512K;
 	pool_config.policy = QCOM_TZMEM_POLICY_STATIC;
-	pool_config.max_size = SZ_256K;
+	pool_config.max_size = pool_config.initial_size;
 	pool_config.is_cached = true;
 
 	shmbridge_pool = qcom_tzmem_pool_new(&pool_config);
@@ -307,7 +310,8 @@ int qtee_shmbridge_pm_freeze(void)
 int qtee_shmbridge_pm_restore(void)
 {
 	mutex_lock(&bridge_list_head.lock);
-	cookie++;
+	if (++cookie == 0)
+		cookie++;
 	qtee_shmbridge_delete_list_locked();
 	mutex_unlock(&bridge_list_head.lock);
 	return 0;

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "logbuf_vh: " fmt
@@ -66,13 +65,18 @@ void register_log_minidump(struct printk_ringbuffer *prb)
 
 static int logbuf_vh_driver_probe(struct platform_device *pdev)
 {
-	struct printk_ringbuffer *prb = NULL;
+	struct printk_ringbuffer **prb = NULL;
 
 	if (!debug_symbol_available())
 		return -EPROBE_DEFER;
 
-	prb = *(struct printk_ringbuffer **)DEBUG_SYMBOL_LOOKUP(prb);
-	register_log_minidump(prb);
+	prb = DEBUG_SYMBOL_LOOKUP(prb);
+	if (!prb) {
+		pr_err("failed to lookup prb symbol\n");
+		return -ENOENT;
+	}
+
+	register_log_minidump(*prb);
 
 	return 0;
 }

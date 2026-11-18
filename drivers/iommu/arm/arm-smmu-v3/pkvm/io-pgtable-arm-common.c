@@ -379,12 +379,13 @@ static size_t arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
 	phys_addr_t blk_paddr;
 	size_t tablesz = ARM_LPAE_GRANULE(data);
 	int ptes_per_table = ARM_LPAE_PTES_PER_TABLE(data);
+	unsigned long blk_iova = iova & ~(ARM_LPAE_BLOCK_SIZE(lvl - 1, data) - 1);
 
-	if (WARN_ON(lvl == ARM_LPAE_MAX_LEVELS))
+	if (WARN_ON(lvl == ARM_LPAE_MAX_LEVELS) || !data->idmapped)
 		return 0;
 
 	tablep = __arm_lpae_alloc_pages(tablesz, GFP_ATOMIC, cfg, data->iop.cookie);
-	if (!tablep)
+	if (WARN_ON(!tablep))
 		return 0; /* Bytes unmapped */
 
 	blk_paddr = iopte_to_paddr(blk_pte, data);
@@ -406,6 +407,10 @@ static size_t arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
 
 		tablep = iopte_deref(pte, data);
 	}
+
+	if (!iommu_iotlb_gather_queued(gather))
+		io_pgtable_tlb_add_page(&data->iop, gather, blk_iova,
+					(ARM_LPAE_BLOCK_SIZE(lvl - 1, data)));
 
 	return __arm_lpae_unmap(data, gather, iova, size, pgcount, lvl, tablep);
 }
@@ -463,7 +468,7 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 		/* Clear the remaining entries */
 		__arm_lpae_clear_pte(ptep, &iop->cfg, i);
 
-		if (gather && !iommu_iotlb_gather_queued(gather))
+		if (!iommu_iotlb_gather_queued(gather))
 			for (int j = 0; j < i; j++)
 				io_pgtable_tlb_add_page(iop, gather, iova + j * size, size);
 

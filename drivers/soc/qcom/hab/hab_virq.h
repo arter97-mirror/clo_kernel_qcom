@@ -14,6 +14,7 @@ enum hvirq_id {
 	VIRQ_4 = 4,
 	VIRQ_5 = 5,
 	VIRQ_6 = 6,
+	VIRQ_7 = 7,
 };
 
 #define HAB_VIRTIRQ_MAX  (VIRQ_MAX/1000)

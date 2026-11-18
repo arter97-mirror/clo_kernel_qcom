@@ -1,3 +1,4 @@
+load("//build:msm_kernel_extensions.bzl", "define_android_desktop_build")
 load("//build/kernel/kleaf:kernel.bzl", "kernel_abi", "kernel_module_group")
 load(":configs/glymur_consolidate.bzl", "glymur_consolidate_config")
 load(":configs/glymur_perf.bzl", "glymur_perf_config")
@@ -27,9 +28,45 @@ def define_glymur():
             ]
             kernel_vendor_cmdline_extras += [
                 # do not sort
-                "console=ttyMSM0,115200n8",
-                "qcom_geni_serial.con_enabled=1",
+                "clk_ignore_unused",
+                "pd_ignore_unused",
+                "efi=noruntime",
+                "efi=novamap",
                 "earlycon",
+                "console=ttyMSM0,115200",
+                "androidboot.hardware.platform=android-desktop",
+                "androidboot.hardware=android-desktop",
+                "androidboot.load_modules_parallel=true",
+                "android_arch_task_struct_size=512",
+                "id_aa64mmfr1.vh=0",
+                "arm64_sw.hvhe=0",
+                "kvm-arm.mode=none",
+                "arm64.nosme",
+                "arm64.nosve",
+                "androidboot.selinux=permissive",
+                "irqaffinity=0-3",
+                "pcie_ports=compat",
+                "cpufreq.default_governor=performance",
+                "cpuidle.off=1",
+                "firmware_class.path=/vendor/firmware,/vendor/firmware_mnt/image",
+                "console=null",
+                "8250.nr_uarts=4",
+                "console_msg_format=syslog",
+                "log_buf_len=4M",
+                "cgroup_disable=pressure",
+                "root=/dev/ram0",
+                "firmware_class.path=/vendor/firmware",
+                "reserve_mem=20M:2M:trace",
+                "trace_instance=boot_mapped^traceoff@trace",
+                "drm.trace=0x106",
+                "module_blacklist=cros_ec_debugfs",
+                "proc_mem.force_override=ptrace",
+                "binder.impl=rust",
+                "no_console_suspend",
+                "cpufreq.default_governor=performance",
+                "trace_instance=backup=boot_mapped",
+                "cpuidle.governor=teo",
+                "kvm-arm.protected_modules=pkvm-geni.ko,pkvm-smc-filter.ko,qcom_smmu_v2_v3_dispatcher.ko",
             ]
 
             consolidate_build_img_opts = boot_image_opts(
@@ -59,9 +96,21 @@ def define_glymur():
         perf_build_img_opts = perf_build_img_opts,
         consolidate_kwargs = {
             "config_path": "configs/glymur_consolidate.bzl",
+            "desktop_build": define_android_desktop_build(
+                name = "glymur",
+                variant = "consolidate",
+                base_kernel = "//soc-repo:kernel_aarch64_consolidate",
+                dtbo_target_name = "glymur",
+            ),
         },
         perf_kwargs = {
             "config_path": "configs/glymur_perf.bzl",
+            "desktop_build": define_android_desktop_build(
+                name = "glymur",
+                variant = "perf",
+                base_kernel = "//common:kernel_aarch64",
+                dtbo_target_name = "glymur",
+            ),
         },
     )
 

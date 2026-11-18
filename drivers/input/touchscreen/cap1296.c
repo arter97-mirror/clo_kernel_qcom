@@ -302,8 +302,6 @@ static int cap1296_ts_init(struct i2c_client *client,
 	for (i = 0; i < MAX_KEY_NUM; i++)
 		set_bit(key_array[i], input_device->keybit);
 
-	//touch function
-	cap->irq = client->irq;
 	//create a workqueue
 	cap->wq = create_singlethread_workqueue("kworkqueue_ts");
 	if (!cap->wq) {
@@ -542,12 +540,18 @@ static int cap1296_probe(struct i2c_client *client)
 
 	cap->irq = gpio_to_irq(cap->irq_gpio);
 	if (cap->irq < 0) {
-		ret = request_irq(cap->irq, cap_ts_irq_handler,
+		dev_err(&client->dev, "gpio_to_irq failed, irq_gpio=%d ret=%d\n",
+			cap->irq_gpio, cap->irq);
+			ret = cap->irq;
+		goto ldo_err;
+	}
+
+	ret = request_irq(cap->irq, cap_ts_irq_handler,
 			IRQF_TRIGGER_LOW, client->name, cap);
-		if (ret != 0)
-			dev_err(cap->dev, "Cannot allocate ts INT!ERRNO:%d\n", ret);
-	} else
-		dev_err(&client->dev, "Fail to alloc irq\n");
+	if (ret) {
+		dev_err(cap->dev, "Cannot allocate ts INT! ERRNO:%d\n", ret);
+		goto ldo_err;
+	}
 
 	CAP_exitDeepSleep(cap);
 	state = CAP_getSensorStatus(cap);
@@ -589,9 +593,9 @@ static void cap1296_remove(struct i2c_client *client)
 
 	cancel_work_sync(&cap->work);
 
-	if (client->irq) {
-		disable_irq(client->irq);
-		free_irq(client->irq, cap);
+	if (cap->irq > 0) {
+		disable_irq(cap->irq);
+		free_irq(cap->irq, cap);
 	}
 
 	if (cap->wq)

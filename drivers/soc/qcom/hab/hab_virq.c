@@ -81,13 +81,13 @@ struct hvirq_dbl *hab_virq_get_fromid(struct virq_uhab_context *ctx, int32_t id)
 void hab_virq_get(struct hvirq_dbl *dbl)
 {
 	if (dbl != NULL)
-		kref_get(&dbl->refcount);
+		(void)kref_get(&dbl->refcount);
 }
 
 void hab_virq_put(struct hvirq_dbl *dbl)
 {
 	if (dbl != NULL)
-		kref_put(&dbl->refcount, hab_virq_free);
+		(void)kref_put(&dbl->refcount, hab_virq_free);
 }
 
 struct hvirq_dbl *hab_virtirq_freelabel_find(int vmid_remote, int virq_num)
@@ -100,9 +100,11 @@ struct hvirq_dbl *hab_virtirq_freelabel_find(int vmid_remote, int virq_num)
 		if (dbl == NULL) {
 			pr_err("dbl is NULL for virq_num %d\n", virq_num);
 			return NULL;
-		} else if (!dbl->virq_registered && (dbl->dom_id == vmid_remote)
+		} else if ((dbl->virq_registered == 0) && (dbl->dom_id == vmid_remote)
 				&& (dbl->virtirq_num == virq_num)) {
 			return dbl;
+		} else {
+			/* no match, continue loop */
 		}
 	}
 
@@ -114,7 +116,7 @@ int hab_virq_register(struct virq_uhab_context *ctx, int32_t *virq_handle, unsig
 		unsigned int virq_num, virq_rx_cb_t rx_cb, void *priv, unsigned int flags)
 {
 	int ret = 0;
-	struct hvirq_dbl *dbl = NULL;
+	struct hvirq_dbl *dbl;
 	int *fd = NULL;
 
 	if (vmid >= (unsigned int)HABCFG_VMID_MAX) {
@@ -131,7 +133,7 @@ int hab_virq_register(struct virq_uhab_context *ctx, int32_t *virq_handle, unsig
 
 	hab_virq_get(dbl);
 
-	if (HABMM_VIRQ_FLAGS_TX & flags) {
+	if ((HABMM_VIRQ_FLAGS_TX & flags) != 0U) {
 		ret = habhyp_virq_tx_register(dbl, dbl->virtirq_label);
 		if (ret != 0) {
 			pr_err("Failed to register tx virq_num %d ret %d\n", virq_num, ret);
@@ -139,14 +141,15 @@ int hab_virq_register(struct virq_uhab_context *ctx, int32_t *virq_handle, unsig
 			return ret;
 		}
 
-	} else if (HABMM_VIRQ_FLAGS_RX & flags) {
-		if (rx_cb == NULL && (priv != NULL))
+	} else if ((HABMM_VIRQ_FLAGS_RX & flags) != 0U) {
+		if ((rx_cb == NULL) && (priv != NULL)) {
 			fd = (int *)priv;
+		}
 
 		/* fd will only be passed from userspace,
 		 * so deal with it in case of non kernel context
 		 */
-		if (!ctx->kernel && (fd != NULL)) {
+		if ((ctx->kernel == 0) && (fd != NULL)) {
 			if (*fd != -1) {
 				dbl->efd = eventfd_ctx_fdget(*fd);
 
@@ -206,8 +209,13 @@ int hab_virq_send(struct virq_uhab_context *ctx,
 	}
 
 	ret = habhyp_virq_send(dbl);
-	if (ret) {
-		pr_err("failed to raise virq to the sender dbl id %d ret %d\n", virq_handle, ret);
+	if (ret == -EAGAIN) {
+		ret = -ENODEV;
+		pr_err("remote closed during virq send ret %d\n", ret);
+		hab_virq_put(dbl);
+		return ret;
+	} else if (ret) {
+		pr_err("failed to send virq id %d ret %d\n", virq_handle, ret);
 		hab_virq_put(dbl);
 		return ret;
 	}
@@ -224,8 +232,8 @@ int hab_virq_send(struct virq_uhab_context *ctx,
 int hab_virq_unregister(struct virq_uhab_context *ctx,
 		int32_t virq_handle, unsigned int flags)
 {
-	int ret = 0;
-	struct hvirq_dbl *dbl = NULL;
+	int ret;
+	struct hvirq_dbl *dbl;
 
 	dbl = hab_virq_get_fromid(ctx, virq_handle);
 	if (dbl == NULL) {
@@ -233,23 +241,24 @@ int hab_virq_unregister(struct virq_uhab_context *ctx,
 		return -EINVAL;
 	}
 
-	if (HABMM_VIRQ_FLAGS_TX & flags) {
+	if ((HABMM_VIRQ_FLAGS_TX & flags) != 0U) {
 		ret = habhyp_virq_tx_unregister(dbl);
-		if (ret) {
+		if (ret != 0) {
 			pr_err("failed to unregister dbl id %d ret is %d\n", dbl->id, ret);
 			hab_virq_put(dbl);
 			return ret;
 		}
-	} else if (HABMM_VIRQ_FLAGS_RX & flags) {
+	} else if ((HABMM_VIRQ_FLAGS_RX & flags) != 0U) {
 		ret = habhyp_virq_rx_unregister(dbl);
-		if (ret) {
+		if (ret != 0) {
 			pr_err("failed to unregister dbl id %d ret is %d\n", dbl->id, ret);
 			hab_virq_put(dbl);
 			return ret;
 		}
 
-		if (dbl->client_cb != NULL)
+		if (dbl->client_cb != NULL) {
 			dbl->client_cb = NULL;
+		}
 
 		if (dbl->efd != NULL) {
 			eventfd_ctx_put(dbl->efd);
@@ -358,21 +367,22 @@ static int hab_virq_release(struct inode *inodep, struct file *filep)
 static long hab_virq_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 {
 	struct virq_uhab_context *ctx = (struct virq_uhab_context *)filep->private_data;
-	struct hab_virq *send_virq_param = NULL;
-	struct hab_virq_register *virq_register_param = NULL;
-	struct hab_virq_unregister *virq_unregister_param = NULL;
+	struct hab_virq *send_virq_param;
+	struct hab_virq_register *virq_register_param;
+	struct hab_virq_unregister *virq_unregister_param;
 	unsigned char data[256] = { 0 };
-	long ret = 0;
+	long ret;
 
-	if (_IOC_SIZE(cmd) && (cmd & IOC_INOUT)) {
+	if ((_IOC_SIZE(cmd) != 0U) && ((cmd & IOC_INOUT) != 0U)) {
 		if (_IOC_SIZE(cmd) > sizeof(data))
 			return -EINVAL;
 
-		if ((cmd & IOC_IN) != 0U)
+		if ((cmd & IOC_IN) != 0U) {
 			if (copy_from_user(data, (void __user *)arg, _IOC_SIZE(cmd))) {
 				pr_err("copy_from_user failed cmd=%x size=%d\n",
 						cmd, _IOC_SIZE(cmd));
 				return -EFAULT;
+			}
 			}
 	}
 
@@ -399,11 +409,12 @@ static long hab_virq_ioctl(struct file *filep, unsigned int cmd, unsigned long a
 		break;
 	}
 
-	if ((ret != -ENOIOCTLCMD) && _IOC_SIZE(cmd) && (cmd & IOC_OUT))
+	if ((ret != -ENOIOCTLCMD) && (_IOC_SIZE(cmd) != 0U) && ((cmd & IOC_OUT) != 0U)) {
 		if (copy_to_user((void __user *) arg, data, _IOC_SIZE(cmd))) {
 			pr_err("copy_to_user failed cmd=%x\n", cmd);
 			ret = -EFAULT;
 		}
+	}
 
 	return ret;
 }
@@ -437,7 +448,7 @@ int hab_create_virq_cdev_node(int index)
 	dev_no = MKDEV(hab_driver.major, index);
 
 	result = cdev_add(&(hab_driver.cdev[index]), dev_no, 1);
-	if (result) {
+	if (result != 0) {
 		pr_err("cdev_add failed for index %d %d\n", index, result);
 		return result;
 	}
@@ -455,7 +466,7 @@ int hab_create_virq_cdev_node(int index)
 	}
 
 	result = habhyp_init_virt_irq();
-	if (result)
+	if (result != 0)
 		pr_err("virq platform registration failed %d\n", result);
 
 	pr_debug("create char device for /dev/hab-virq successful\n");

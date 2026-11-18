@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "Minidump: " fmt
@@ -312,6 +312,10 @@ static int msm_minidump_add_header(void)
 	char *banner, *linux_banner;
 
 	linux_banner = DEBUG_SYMBOL_LOOKUP(linux_banner);
+	if (!linux_banner) {
+		pr_err("minidump: failed to lookup linux_banner symbol\n");
+		return -ENODATA;
+	}
 	/* Header buffer contains:
 	 * elf header, MAX_NUM_ENTRIES+4 of section and program elf headers,
 	 * string table section and linux banner.

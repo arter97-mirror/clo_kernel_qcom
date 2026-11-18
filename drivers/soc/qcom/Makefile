@@ -95,6 +95,10 @@ obj-$(CONFIG_QCOM_PCIE_PDC) += pcie-pdc.o
 
 obj-$(CONFIG_MSM_POWER_STATE) += power_state.o
 
+obj-$(CONFIG_QCOM_POWER_MODE) += power_mode.o
+
+obj-$(CONFIG_QCOM_PDR_MONITOR) += pdr_monitor.o
+
 obj-$(CONFIG_QCOM_PD_MAPPER) += qcom_pd_mapper.o
 
 obj-$(CONFIG_QCOM_PDR_MSG) += qcom_pdr_msg.o
@@ -185,6 +189,8 @@ obj-$(CONFIG_QCOM_SYSMON_SUBSYSTEM_STATS) += sysmon_subsystem_stats.o
 
 obj-$(CONFIG_QTI_SYS_PM_VX) += sys_pm_vx.o
 
+obj-$(CONFIG_QTI_SYS_PM_VX_V2) += sys_pm_vx_v2.o
+
 obj-$(CONFIG_QCOM_WCD_USBSS_I2C) += wcd_usbss_i2c.o
 wcd_usbss_i2c-objs += wcd-usbss-regmap.o wcd-usbss-tables.o wcd-usbss-utils.o wcd939x-i2c.o
 
@@ -236,4 +242,6 @@ obj-$(CONFIG_QCOM_PBS) += qcom-pbs.o
 obj-$(CONFIG_MSM_BAM_DMUX) += bam_dmux.o
 
 obj-$(CONFIG_QCOM_POWER_MODE) += power_mode.o
+
+obj-$(CONFIG_QCOM_WEAR_CONFIG) += wear_config.o
 

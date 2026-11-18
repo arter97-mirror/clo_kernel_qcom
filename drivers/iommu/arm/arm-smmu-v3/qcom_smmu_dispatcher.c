@@ -27,31 +27,59 @@ static unsigned long                   pkvm_module_token;
 int kvm_nvhe_sym(qcom_smmu_nesting_init_module)(const struct pkvm_module_ops *ops);
 extern struct kvm_iommu_ops kvm_nvhe_sym(qcom_smmu_hyp_nesting_ops);
 
+static int atomic_pages;
+module_param(atomic_pages, int, 0);
+
 static int smmu_alloc_atomic_mc(struct kvm_hyp_memcache *atomic_mc)
 {
 	int ret;
-	int atomic_pages = 6000; /* arbitrary for now. */
 	int nr_smmus = 2; /* assumption for now */
-#ifndef MODULE
-	u64 i;
-	phys_addr_t start, end;
 
-	/*
-	 * Allocate pages to cover mapping with PAGE_SIZE for all memory
-	 * Then allocate extra for 1GB of MMIO.
-	 * Add 10 extra pages as we map the rest with first level blocks
-	 * for PAGE_SIZE = 4KB, that should cover 5TB of address space.
-	 */
-	for_each_mem_range(i, &start, &end) {
-		atomic_pages += __hyp_pgtable_max_pages((end - start) >> PAGE_SHIFT);
+	if (!atomic_pages) {
+		struct device_node *np = NULL;
+		u64 total_ram = 0;
+		unsigned long mmio_pages;
+		int regions = 0;
+
+		/*
+		 * Allocate pages to cover mapping with PAGE_SIZE for all memory
+		 * Then allocate extra for 4GB of MMIO.
+		 * Add 64 extra pages as we map the rest with first level blocks.
+		 */
+		while ((np = of_find_node_by_name(np, "memory"))) {
+			u64 addr, size;
+			int i = 0;
+
+			while (!of_property_read_reg(np, i++, &addr, &size)) {
+				unsigned long reg_pages;
+
+				if (!size)
+					continue;
+
+				reg_pages = __hyp_pgtable_max_pages(size >> PAGE_SHIFT);
+				atomic_pages += reg_pages;
+				total_ram += size;
+				regions++;
+				pr_info("smmuv3: DT memory[%d] [0x%llx-0x%llx] (%llu MiB) -> +%lu atomic_pages\n",
+					regions - 1, addr, addr + size - 1,
+					size >> 20, reg_pages);
+			}
+		}
+
+		if (!atomic_pages) {
+			atomic_pages = __hyp_pgtable_max_pages((32ULL * SZ_1G) >> PAGE_SHIFT);
+			pr_warn("smmuv3: No DT memory nodes found, falling back to 32 GiB (%d atomic_pages)\n",
+				atomic_pages);
+		}
+
+		mmio_pages = __hyp_pgtable_max_pages((4ULL * SZ_1G) >> PAGE_SHIFT) + 64;
+		pr_info("smmuv3: DT total RAM %llu MiB across %d regions (%d pages) + 4 GiB MMIO/extra (%lu pages) = %lu atomic_pages\n",
+			total_ram >> 20, regions, atomic_pages, mmio_pages,
+			atomic_pages + mmio_pages);
+		atomic_pages += mmio_pages;
+	} else {
+		pr_info("smmuv3: Using module_param atomic_pages = %d\n", atomic_pages);
 	}
-
-	atomic_pages += __hyp_pgtable_max_pages(SZ_1G >> PAGE_SHIFT) + 10;
-#endif
-
-	/* Module didn't set that parameter. */
-	if (!atomic_pages)
-		return 0;
 
 	/* For PGD*/
 	ret = topup_hyp_memcache(atomic_mc, 1, 3);
@@ -82,8 +110,9 @@ static int smmu_alloc_atomic_mc(struct kvm_hyp_memcache *atomic_mc)
 	if (ret)
 		return ret;
 
-	pr_info("smmuv3: Allocated %d MiB for atomic usage\n",
-		(atomic_pages << PAGE_SHIFT) / SZ_1M);
+	pr_info("smmuv3: Allocated %d atomic_pages (%lu MiB) for stage-2 pgtable (memcache chunks: %lu)\n",
+		atomic_pages, ((unsigned long)atomic_pages << PAGE_SHIFT) / SZ_1M,
+		atomic_mc->nr_pages);
 
 	return 0;
 }

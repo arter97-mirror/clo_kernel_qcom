@@ -11,5 +11,6 @@ menuconfig ETHERNET
 	  This section contains all the Ethernet device drivers.
 
 if ETHERNET
+source "$(KCONFIG_EXT_PREFIX)drivers/net/ethernet/realtek/Kconfig"
 source "$(KCONFIG_EXT_PREFIX)drivers/net/ethernet/stmicro/Kconfig"
 endif # ETHERNET

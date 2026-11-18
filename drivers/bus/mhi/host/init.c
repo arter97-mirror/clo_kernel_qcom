@@ -1176,7 +1176,7 @@ EXPORT_SYMBOL_GPL(mhi_free_controller);
 int mhi_prepare_for_power_up(struct mhi_controller *mhi_cntrl)
 {
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
-	u32 bhi_off, bhie_off;
+	u32 bhi_off, bhie_off, offset;
 	int ret;
 
 	mutex_lock(&mhi_cntrl->pm_mutex);
@@ -1222,9 +1222,10 @@ int mhi_prepare_for_power_up(struct mhi_controller *mhi_cntrl)
 		 * This controller supports RDDM, so we need to manually clear
 		 * BHIE RX registers since POR values are undefined.
 		 */
-		memset_io(mhi_cntrl->bhie + BHIE_RXVECADDR_LOW_OFFS,
-			  0, BHIE_RXVECSTATUS_OFFS - BHIE_RXVECADDR_LOW_OFFS +
-			  4);
+		for (offset = BHIE_RXVECADDR_LOW_OFFS;
+			offset <= BHIE_RXVECSTATUS_OFFS; offset += sizeof(u32))
+			mhi_write_reg(mhi_cntrl, mhi_cntrl->bhie, offset, 0);
+
 		/*
 		 * Allocate RDDM table for debugging purpose if specified
 		 */

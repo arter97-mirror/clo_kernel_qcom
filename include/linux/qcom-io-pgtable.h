@@ -32,8 +32,10 @@ struct qcom_io_pgtable_info {
 #define to_qcom_io_pgtable_info(x)\
 container_of((x), struct qcom_io_pgtable_info, cfg)
 
+#define IO_PGTABLE_QUIRK_QCOM_OSH_FOR_IOMMU_CACHE BIT(29)
 #define IO_PGTABLE_QUIRK_QCOM_TCR_IRGN_NC	 BIT(30)
 #define IO_PGTABLE_QUIRK_QCOM_USE_LLC_NWA       BIT(31)
+#define IO_PGTABLE_QUIRK_QCOM_USE_LLC_NRA       BIT(28)
 
 #define ARM_V8L_FAST ((unsigned int)-1)
 #define QCOM_ARM_64_LPAE_S1 ((unsigned int)-2)

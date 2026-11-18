@@ -261,6 +261,7 @@ static struct clk_rcg2 audio_core_cc_aif_if3_clk_src = {
 };
 
 static const struct freq_tbl ftbl_audio_core_cc_aud_dma_clk_src[] = {
+	F(38400000, P_AUDIO_CORE_CC_DIG_PLL_OUT_AUX2, 8, 0, 0),
 	F(102400000, P_AUDIO_CORE_CC_DIG_PLL_OUT_AUX2, 3, 0, 0),
 	F(153600000, P_AUDIO_CORE_CC_DIG_PLL_OUT_AUX2, 2, 0, 0),
 	F(307200000, P_AUDIO_CORE_CC_DIG_PLL_OUT_AUX2, 1, 0, 0),
@@ -824,6 +825,10 @@ static const struct qcom_reset_map audio_core_cc_shikra_resets[] = {
 	[AUDIO_CORE_CC_AIF_IF1_BCR] = { 0x10ac },
 	[AUDIO_CORE_CC_AIF_IF2_BCR] = { 0x1110 },
 	[AUDIO_CORE_CC_AIF_IF3_BCR] = { 0x1174 },
+	[AUDIO_CORE_CC_AIF_IF0_CLK_INV_INT] = { 0x3008 },
+	[AUDIO_CORE_CC_AIF_IF1_CLK_INV_INT] = { 0x3014 },
+	[AUDIO_CORE_CC_AIF_IF2_CLK_INV_INT] = { 0x3020 },
+	[AUDIO_CORE_CC_AIF_IF3_CLK_INV_INT] = { 0x3038 },
 	[AUDIO_CORE_CC_AUDIO_CORE_HM_AUD_DMA_BCR] = { 0x1024 },
 	[AUDIO_CORE_CC_AUDIO_CORE_HM_BUS_CLK_BCR] = { 0x1004 },
 	[AUDIO_CORE_CC_CODEC_MCLK_BCR] = { 0x1278 },

@@ -310,8 +310,14 @@ static int glink_pkt_rpdev_probe(struct rpmsg_device *rpdev)
 
 	mutex_lock(&gpdev->lock);
 	gpdev->rpdev = rpdev;
-	gpdev->rx_done = (qcom_glink_rx_done_supported(rpdev->ept) > 0) ? true : false;
-	qcom_glink_register_signals_cb(rpdev->ept, glink_pkt_rpdev_sigs);
+
+	if (!strcmp(gpdev->edge, "slate")) {
+		gpdev->rx_done = false;
+	} else {
+		gpdev->rx_done = (qcom_glink_rx_done_supported(rpdev->ept) > 0) ? true : false;
+		qcom_glink_register_signals_cb(rpdev->ept, glink_pkt_rpdev_sigs);
+	}
+
 	mutex_unlock(&gpdev->lock);
 
 	dev_set_drvdata(&rpdev->dev, gpdev);
@@ -678,6 +684,9 @@ static int glink_pkt_tiocmset(struct glink_pkt_device *gpdev, unsigned int cmd,
 	u32 set, clear, val;
 	int ret;
 
+	if (!strcmp(gpdev->edge, "slate"))
+		return -ENOIOCTLCMD;
+
 	ret = get_user(val, arg);
 	if (ret)
 		return ret;
@@ -1005,6 +1014,11 @@ static long glink_pkt_ioctl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case TIOCMGET:
+		if (!strcmp(gpdev->edge, "slate")) {
+			ret = -ENOIOCTLCMD;
+			break;
+		}
+
 		spin_lock_irqsave(&gpdev->queue_lock, flags);
 		gpdev->sig_change = false;
 		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
@@ -1012,6 +1026,7 @@ static long glink_pkt_ioctl(struct file *file, unsigned int cmd,
 		ret = qcom_glink_get_signals(gpdev->rpdev->ept);
 		if (ret >= 0)
 			ret = put_user(ret, (int __user *)arg);
+
 		break;
 	case TIOCMSET:
 	case TIOCMBIS:

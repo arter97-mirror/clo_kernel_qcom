@@ -4,3 +4,8 @@
 #
 
 source "$(KCONFIG_EXT_PREFIX)drivers/net/phy/aquantia/Kconfig"
+
+config DP83867_PHY
+	tristate "Texas Instruments DP83867 Gigabit PHY"
+	help
+	  Currently supports the DP83867 PHY.

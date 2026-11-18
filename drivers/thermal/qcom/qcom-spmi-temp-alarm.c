@@ -674,12 +674,14 @@ static int qpnp_tm_init(struct qpnp_tm_chip *chip)
 		chip->temp = qpnp_tm_decode_temp(chip, stage);
 
 	if (chip->subtype == QPNP_TM_SUBTYPE_LITE) {
+		chip->ntrips = 0;
 		mutex_unlock(&chip->lock);
 		ret = qpnp_tm_temp_lite_update_trip_temps(chip);
 		if (ret < 0)
 			return ret;
 		mutex_lock(&chip->lock);
 	} else if (chip->has_temp_dac) {
+		chip->ntrips = 0;
 		mutex_unlock(&chip->lock);
 		ret = qpnp_tm_temp_dac_update_trip_temps(chip);
 		if (ret < 0)

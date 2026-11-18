@@ -612,8 +612,11 @@ void deinit_aes_encrypt(void)
 	}
 
 	memset(key, 0, AES256_KEY_SIZE);
-	memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
-	kfree(params);
+	if (params) {
+		memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
+		kfree(params);
+		params = NULL;
+	}
 }
 
 static void cleanup_cmp_blk_array(void)
@@ -688,12 +691,15 @@ static int hibernate_pm_notifier(struct notifier_block *nb,
 
 err_authslot:
 	free_pages((unsigned long)temp_out_buf, 1);
+	temp_out_buf = NULL;
 err_setkey:
 	memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
 	memset(key, 0, AES256_KEY_SIZE);
 	crypto_free_aead(tfm);
+	tfm = NULL;
 err_aead:
 	kfree(params);
+	params = NULL;
 	return NOTIFY_BAD;
 }
 
@@ -727,7 +733,9 @@ err_auth:
 	memset(params->key_blob, 0, WRAPPED_KEY_SIZE);
 	memset(key, 0, AES256_KEY_SIZE);
 	crypto_free_aead(tfm);
+	tfm = NULL;
 	kfree(params);
+	params = NULL;
 }
 
 /*
@@ -748,16 +756,18 @@ static void hibernated_do_mem_alloc(void *data, unsigned long pages,
 	if (!(swsusp_header_flags & SF_NOCOMPRESS_MODE)) {
 		size = get_size_of_compression_block_array(pages);
 
-		compressed_blk_array = kvzalloc(size, GFP_KERNEL);
+		compressed_blk_array = kvzalloc(size, GFP_ATOMIC);
 		if (!compressed_blk_array) {
 			*ret = -ENOMEM;
 			return;
 		}
 
 		/* Allocate memory to hold authentication slot start */
-		auth_slot = (void *)get_zeroed_page(GFP_KERNEL);
+		auth_slot = (void *)get_zeroed_page(GFP_ATOMIC);
 		if (!auth_slot) {
 			pr_err("Failed to allocate page for storing authentication tag slot number\n");
+			kvfree((void *)compressed_blk_array);
+			compressed_blk_array = NULL;
 			*ret = -ENOMEM;
 		}
 	}

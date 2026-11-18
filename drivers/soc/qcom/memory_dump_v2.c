@@ -137,6 +137,8 @@ static int dynamic_memdump_enable;
 #if defined(CONFIG_DEEPSLEEP) || defined(CONFIG_HIBERNATION)
 static size_t total_size;
 static phys_addr_t global_mini_phys_addr;
+static u64 mem_dump_shm_bridge_handle;
+static bool mem_dump_shm_bridge_registered;
 #endif
 /**
  * reset_sprs_dump_table - reset the sprs dump table
@@ -1581,14 +1583,22 @@ static int mem_dump_alloc_with_rmem(struct platform_device *pdev,
 			dev_err(&pdev->dev, "Failed to create shm bridge.ret=%d\n", ret);
 			return ret;
 		}
+#if defined(CONFIG_DEEPSLEEP) || defined(CONFIG_HIBERNATION)
+		mem_dump_shm_bridge_handle = shm_bridge_handle;
+		mem_dump_shm_bridge_registered = true;
+#endif
 	}
 
 	ret = qcom_scm_assign_dump_table_region(1, phys_addr, used_size);
 	if (ret) {
 		ret = init_memdump_imem_area(used_size);
 		if (ret) {
-			if (qtee_shmbridge_is_enabled())
+			if (qtee_shmbridge_is_enabled()) {
 				qtee_shmbridge_deregister(shm_bridge_handle);
+#if defined(CONFIG_DEEPSLEEP) || defined(CONFIG_HIBERNATION)
+				mem_dump_shm_bridge_registered = false;
+#endif
+			}
 			return ret;
 		}
 	}
@@ -1608,24 +1618,37 @@ static int mem_dump_alloc_with_rmem(struct platform_device *pdev,
 }
 
 #if defined(CONFIG_DEEPSLEEP) || defined(CONFIG_HIBERNATION)
+static int mem_dump_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	if (mem_dump_shm_bridge_registered) {
+		qtee_shmbridge_deregister(mem_dump_shm_bridge_handle);
+		mem_dump_shm_bridge_registered = false;
+	}
+
+	return 0;
+}
+
 static int mem_dump_resume(struct platform_device *pdev)
 {
 	int ret;
-	u64 shm_bridge_handle;
+	u64 shm_bridge_handle = 0;
 	uint32_t ns_vmids[] = {VMID_HLOS};
 	uint32_t ns_vm_perms[] = {PERM_READ | PERM_WRITE};
 
-	if (!is_memdump_imem_area_intact(pdev, total_size)) {
-		if (qtee_shmbridge_is_enabled()) {
-			ret = qtee_shmbridge_register(global_mini_phys_addr, total_size,
-				ns_vmids, ns_vm_perms, 1, PERM_READ|PERM_WRITE,
-				&shm_bridge_handle);
-			if (ret) {
-				dev_err(&pdev->dev,
-				"Failed to create shm bridge,ret=%d\n", ret);
-				return ret;
-			}
+	if (qtee_shmbridge_is_enabled() && !mem_dump_shm_bridge_registered) {
+		ret = qtee_shmbridge_register(global_mini_phys_addr, total_size,
+			ns_vmids, ns_vm_perms, 1, PERM_READ|PERM_WRITE,
+			&shm_bridge_handle);
+		if (ret)
+			dev_warn(&pdev->dev,
+			"Failed to create shm bridge, ret=%d, continuing without it\n", ret);
+		else {
+			mem_dump_shm_bridge_handle = shm_bridge_handle;
+			mem_dump_shm_bridge_registered = true;
 		}
+	}
+
+	if (!is_memdump_imem_area_intact(pdev, total_size)) {
 		ret = qcom_scm_assign_dump_table_region(1, global_mini_phys_addr,
 							total_size);
 		if (ret) {
@@ -1633,8 +1656,10 @@ static int mem_dump_resume(struct platform_device *pdev)
 			if (ret) {
 				dev_err(&pdev->dev,
 					"init memdump imem area failed, ret=%d\n", ret);
-				if (qtee_shmbridge_is_enabled())
-					qtee_shmbridge_deregister(shm_bridge_handle);
+				if (mem_dump_shm_bridge_registered) {
+					qtee_shmbridge_deregister(mem_dump_shm_bridge_handle);
+					mem_dump_shm_bridge_registered = false;
+				}
 				return ret;
 			}
 		}
@@ -1643,6 +1668,11 @@ static int mem_dump_resume(struct platform_device *pdev)
 	return 0;
 }
 #else
+static int mem_dump_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	return 0;
+}
+
 static int mem_dump_resume(struct platform_device *pdev)
 {
 	return 0;
@@ -1777,6 +1807,7 @@ static const struct of_device_id mem_dump_match_table[] = {
 
 static struct platform_driver mem_dump_driver = {
 	.probe = mem_dump_probe,
+	.suspend = mem_dump_suspend,
 	.resume = mem_dump_resume,
 	.driver = {
 		.name = "msm_mem_dump",

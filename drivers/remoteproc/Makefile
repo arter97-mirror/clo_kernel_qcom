@@ -15,3 +15,5 @@ obj-$(CONFIG_QCOM_SYSMON) += qcom_sysmon.o
 obj-$(CONFIG_QCOM_RPROC_COMMON) += rproc_qcom_common.o
 rproc_qcom_common-objs += qcom_common.o qcom_tracepoints.o
 
+obj-$(CONFIG_QCOM_RPROC_SLATE)               += qcom_rproc_slate.o
+

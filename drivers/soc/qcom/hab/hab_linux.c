@@ -373,9 +373,9 @@ static int hab_release(struct inode *inodep, struct file *filep)
 static long hab_copy_data(struct hab_message *msg, struct hab_recv *recv_param)
 {
 	long ret = 0;
-	int i = 0;
+	int i;
 	void **scatter_buf = (void **)msg->data;
-	uint64_t dest = 0U;
+	uint64_t dest;
 
 	if (unlikely(msg->scatter)) {
 		/* The maximum size of msg is limited in hab_msg_alloc */
@@ -635,8 +635,8 @@ static struct notifier_block hab_reboot_notifier = {
 static void reclaim_cleanup(struct work_struct *reclaim_work)
 {
 	struct export_desc *exp = NULL, *exp_tmp = NULL;
-	struct export_desc_super *exp_super = NULL;
-	struct physical_channel *pchan = NULL;
+	struct export_desc_super *exp_super;
+	struct physical_channel *pchan;
 	LIST_HEAD(free_list);
 
 	pr_debug("reclaim worker called\n");
@@ -810,7 +810,7 @@ int hab_create_cdev_node(int mmid_grp_index)
 int hab_driver_init(void)
 {
 	int result;
-	dev_t dev_no;
+	dev_t dev_no = 0;
 
 	/* prepare resources for creating hab char devices */
 	result = alloc_chrdev_region(&dev_no, 0, CDEV_NUM_MAX, "hab");

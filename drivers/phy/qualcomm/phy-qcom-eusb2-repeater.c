@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2023, Linaro Limited
- * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/module.h>
@@ -95,6 +95,13 @@ static const u32 smb2360_init_tbl[NUM_TUNE_FIELDS] = {
 	[TUNE_USB2_PREEM] = 0x2,
 };
 
+static const u32 smb2370_init_tbl[NUM_TUNE_FIELDS] = {
+	[TUNE_IUSB2] = 0x4,
+	[TUNE_SQUELCH_U] = 0x3,
+	[TUNE_USB2_SLEW] = 0x7,
+	[TUNE_USB2_PREEM] = 0x0,
+};
+
 static const struct eusb2_repeater_cfg pm8550b_eusb2_cfg = {
 	.init_tbl	= pm8550b_init_tbl,
 	.init_tbl_num	= ARRAY_SIZE(pm8550b_init_tbl),
@@ -107,6 +114,13 @@ static const struct eusb2_repeater_cfg smb2360_eusb2_cfg = {
 	.init_tbl_num	= ARRAY_SIZE(smb2360_init_tbl),
 	.vreg_list	= pm8550b_vreg_l,
 	.num_vregs	= ARRAY_SIZE(pm8550b_vreg_l),
+};
+
+static const struct eusb2_repeater_cfg smb2370_eusb2_cfg = {
+	.init_tbl       = smb2370_init_tbl,
+	.init_tbl_num   = ARRAY_SIZE(smb2370_init_tbl),
+	.vreg_list      = pm8550b_vreg_l,
+	.num_vregs      = ARRAY_SIZE(pm8550b_vreg_l),
 };
 
 static int eusb2_repeater_init_vregs(struct eusb2_repeater *rptr)
@@ -288,6 +302,10 @@ static const struct of_device_id eusb2_repeater_of_match_table[] = {
 	{
 		.compatible = "qcom,smb2360-eusb2-repeater",
 		.data = &smb2360_eusb2_cfg,
+	},
+	{
+		.compatible = "qcom,smb2370-eusb2-repeater",
+		.data = &smb2370_eusb2_cfg,
 	},
 	{ },
 };

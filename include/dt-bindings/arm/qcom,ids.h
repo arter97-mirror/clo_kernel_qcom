@@ -277,7 +277,6 @@
 #define QCOM_ID_SM8650			557
 #define QCOM_ID_KHAJEP			561
 #define QCOM_ID_KHAJEQ			562
-#define QCOM_ID_SM4450			568
 #define QCOM_ID_RAVELIN			568
 #define QCOM_ID_QCS5430			575
 #define QCOM_ID_QCM5430			576
@@ -302,6 +301,7 @@
 #define QCOM_ID_SUNP			639
 #define QCOM_ID_IPQ5300			624
 #define QCOM_ID_X1P42100		635
+#define QCOM_ID_X1P42100_CANIM		799
 #define QCOM_ID_IPQ5321			650
 #define QCOM_ID_SG_RAVELIN		653
 #define QCOM_ID_SG_RAVELINP		654
@@ -309,6 +309,8 @@
 #define QCOM_ID_QCS8845			764
 #define QCOM_ID_CANOEP			661
 #define QCOM_ID_SERAPH			672
+#define QCOM_ID_SERAPHP                 673
+#define QCOM_ID_SERAPH_MEP_POP          792
 #define QCOM_ID_QCS_KALAMAP_N		668
 #define QCOM_ID_VIENNA			669
 #define QCOM_ID_VIENNAP			670
@@ -324,6 +326,9 @@
 #define QCOM_ID_CHORAP			744
 #define QCOM_ID_MALABAR			733
 #define QCOM_ID_PIKACHU			736
+#define QCOM_ID_PIKACHUP                737
+#define QCOM_ID_PIKACHUS                784
+#define QCOM_ID_PIKACHUPS               783
 #define QCOM_ID_CANOEPSG		743
 #define QCOM_ID_SHIKRA			756
 #define QCOM_ID_MALABARP                757

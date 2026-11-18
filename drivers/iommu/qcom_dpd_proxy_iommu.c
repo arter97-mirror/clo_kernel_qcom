@@ -270,6 +270,9 @@ static void dpd_smmu_release_device(struct device *dev)
 	struct dpd_smmu *smmu = container_of(dev->iommu->iommu_dev, struct dpd_smmu, iommu);
 	int i;
 
+	if (!fwspec)
+		return;
+
 	mutex_lock(&smmu->streams_lock);
 	for (i = 0; i < fwspec->num_ids; i++)
 		xa_erase(&smmu->streams, fwspec->ids[i]);
@@ -519,17 +522,17 @@ dpd_alloc_cookie_sg(unsigned long iova, int prot, unsigned int nents, gfp_t gfp)
 static int dpd_add_deferred_map_sg(struct iommu_map_cookie_sg *cookie,
 				   phys_addr_t paddr, size_t pgsize, size_t pgcount)
 {
+	int ret = 0;
 	struct dpd_map_walk *w = container_of(cookie, struct dpd_map_walk, cookie);
 
-	dpd_map_walk(w, paddr, pgsize, pgcount);
+	ret = dpd_map_walk(w, paddr, pgsize, pgcount);
 
 	/*
-	 * Android 6.12 doesn't call ops->consume_deferred_map_sg if
+	 * Android 6.12 calls ops->consume_deferred_map_sg if
 	 * ops->add_deferred_map_sg fails.
-	 * Therefore return success here & return failure at
-	 * consume_deferred_map_sg instead.
+	 * Therefore return error here.
 	 */
-	return 0;
+	return ret;
 }
 
 static size_t dpd_consume_deferred_map_sg(struct iommu_map_cookie_sg *cookie)
@@ -694,7 +697,7 @@ static int si_cbo_dispatch(unsigned int context_id, struct si_object *object,
 	struct dpd_smmu *smmu;
 	struct imm_fault_info *cfi;
 	struct device *client;
-	struct iommu_domain *domain;
+	struct iommu_domain *domain = NULL;
 	static DEFINE_RATELIMIT_STATE(_rs,
 				      DEFAULT_RATELIMIT_INTERVAL,
 				      DEFAULT_RATELIMIT_BURST);

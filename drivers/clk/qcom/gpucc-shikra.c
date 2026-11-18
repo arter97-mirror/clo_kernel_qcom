@@ -355,14 +355,14 @@ static struct gdsc gpu_cc_cx_smmu_gdsc = {
 	.parent = &gpu_cc_cx_gdsc.pd,
 };
 
-static struct gdsc gpu_cc_cx_gmu_gdsc = {
+static struct gdsc gpu_cc_cx_gpu_gdsc = {
 	.gdscr = 0x106c,
 	.gds_hw_ctrl = 0x1540,
 	.en_rest_wait_val = 0x2,
 	.en_few_wait_val = 0x2,
 	.clk_dis_wait_val = 0x2,
 	.pd = {
-		.name = "gpu_cc_cx_gmu_gdsc",
+		.name = "gpu_cc_cx_gpu_gdsc",
 		.power_on = gdsc_cx_do_nothing,
 		.power_off = gdsc_cx_do_nothing,
 	},
@@ -406,7 +406,7 @@ static struct clk_regmap *gpu_cc_shikra_clocks[] = {
 static struct gdsc *gpu_cc_shikra_gdscs[] = {
 	[GPU_CC_CX_GDSC] = &gpu_cc_cx_gdsc,
 	[GPU_CC_CX_SMMU_GDSC] = &gpu_cc_cx_smmu_gdsc,
-	[GPU_CC_CX_GMU_GDSC] = &gpu_cc_cx_gmu_gdsc,
+	[GPU_CC_CX_GPU_GDSC] = &gpu_cc_cx_gpu_gdsc,
 	[GPU_CC_GX_GDSC] = &gpu_cc_gx_gdsc,
 };
 

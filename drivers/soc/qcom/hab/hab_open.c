@@ -25,16 +25,17 @@ void hab_open_request_init(struct hab_open_request *request,
 int hab_open_request_send(struct hab_open_request *request)
 {
 	struct hab_header header = HAB_HEADER_INITIALIZER;
-	int ret = 0;
+	int ret;
 
 	HAB_HEADER_SET_SIZE(header, sizeof(struct hab_open_send_data));
 	HAB_HEADER_SET_TYPE(header, request->type);
 
 	ret = physical_channel_send(request->pchan, &header, &request->xdata,
 			HABMM_SOCKET_SEND_FLAGS_NON_BLOCKING);
-	if (ret != 0)
+	if (ret != 0) {
 		pr_err("pchan %s failed to send open req msg %d\n",
 			request->pchan->name, ret);
+	}
 
 	return ret;
 }
@@ -48,10 +49,10 @@ int hab_open_request_add(struct physical_channel *pchan,
 			size_t sizebytes, int request_type)
 {
 	struct hab_open_node *node;
-	struct hab_device *dev = pchan->habdev;
+	struct hab_device * const dev = pchan->habdev;
 	struct hab_open_request *request;
 	struct timespec64 ts = {0};
-	int irqs_disabled = irqs_disabled();
+	const int disabled_irqs = irqs_disabled();
 
 	node = kzalloc(sizeof(*node), GFP_ATOMIC);
 	if (!node)
@@ -67,20 +68,20 @@ int hab_open_request_add(struct physical_channel *pchan,
 
 	ktime_get_ts64(&ts);
 	node->age = ts.tv_sec + HAB_OPEN_REQ_EXPIRE_TIME_S +
-		ts.tv_nsec/NSEC_PER_SEC;
+		((u64)ts.tv_nsec / NSEC_PER_SEC);
 
 	hab_pchan_get(pchan);
 
-	hab_spin_lock(&dev->openlock, irqs_disabled);
+	hab_spin_lock(&dev->openlock, disabled_irqs);
 	list_add_tail(&node->node, &dev->openq_list);
 	dev->openq_cnt++;
-	hab_spin_unlock(&dev->openlock, irqs_disabled);
+	hab_spin_unlock(&dev->openlock, disabled_irqs);
 
 	return 0;
 }
 
 /* local only */
-static int hab_open_request_find(struct uhab_context *ctx,
+static int hab_open_request_find(const struct uhab_context *ctx,
 		struct hab_device *dev,
 		struct hab_open_request *listen,
 		struct hab_open_request **recv_request)
@@ -90,34 +91,34 @@ static int hab_open_request_find(struct uhab_context *ctx,
 	struct timespec64 ts = {0};
 	int ret = 0;
 
-	if (ctx->closing ||
-		(listen->pchan && listen->pchan->closed)) {
+	if ((ctx->closing != 0) ||
+		(listen->pchan && (listen->pchan->closed != 0))) {
 		*recv_request = NULL;
 		return 1;
 	}
 
 	spin_lock_bh(&dev->openlock);
-	if (list_empty(&dev->openq_list))
+	if (list_empty(&dev->openq_list) != 0)
 		goto done;
 
 	ktime_get_ts64(&ts);
 
 	list_for_each_entry_safe(node, tmp, &dev->openq_list, node) {
 		request = (struct hab_open_request *)node;
-		if  ((request->type == listen->type ||
-			  request->type == HAB_PAYLOAD_TYPE_INIT_CANCEL) &&
+		if  (((request->type == listen->type) ||
+			  (request->type == HAB_PAYLOAD_TYPE_INIT_CANCEL)) &&
 			(request->xdata.sub_id == listen->xdata.sub_id) &&
-			(!listen->xdata.open_id ||
-			request->xdata.open_id == listen->xdata.open_id) &&
-			(!listen->pchan   ||
-			request->pchan == listen->pchan)) {
+			((listen->xdata.open_id == 0) ||
+			(request->xdata.open_id == listen->xdata.open_id)) &&
+			((listen->pchan == NULL) ||
+			(request->pchan == listen->pchan))) {
 			list_del(&node->node);
 			dev->openq_cnt--;
 			*recv_request = request;
 			ret = 1;
 			break;
 		}
-		if (node->age < (int64_t)ts.tv_sec + ts.tv_nsec/NSEC_PER_SEC) {
+		if (node->age < ((int64_t)ts.tv_sec + ((u64)ts.tv_nsec / NSEC_PER_SEC))) {
 			pr_warn("open request type %d sub %d open %d\n",
 					request->type, request->xdata.sub_id,
 					request->xdata.sub_id);
@@ -136,8 +137,9 @@ void hab_open_request_free(struct hab_open_request *request)
 	if (request) {
 		hab_pchan_put(request->pchan);
 		kfree(request);
-	} else
+	} else {
 		pr_err("empty request found\n");
+	}
 }
 
 int hab_open_listen(struct uhab_context *ctx,
@@ -151,7 +153,7 @@ int hab_open_listen(struct uhab_context *ctx,
 
 	unsigned int uninterruptible = 0;
 
-	if (!ctx || !listen || !recv_request) {
+	if ((!ctx) || (!listen) || (!recv_request)) {
 		pr_err("listen failed ctx %pK listen %pK request %pK\n",
 			ctx, listen, recv_request);
 		return -EINVAL;
@@ -160,7 +162,7 @@ int hab_open_listen(struct uhab_context *ctx,
 	/* This flag is for HAB clients in kernel space only, to avoid calling any
 	 * unexpected uninterruptible habmm_socket_open() since it is not killable.
 	 */
-	if (ctx->kernel)
+	if (ctx->kernel != 0)
 		uninterruptible = (flags & HABMM_SOCKET_OPEN_FLAGS_UNINTERRUPTIBLE);
 
 	*recv_request = NULL;
@@ -180,17 +182,17 @@ int hab_open_listen(struct uhab_context *ctx,
 		} else if (ret > 0)
 			ret = 0; /* condition met */
 	} else { /* fe case */
-		if (uninterruptible) { /* fe uinterruptible case */
+		if (uninterruptible != 0U) { /* fe uinterruptible case */
 			wait_event(dev->openq,
 			hab_open_request_find(ctx, dev, listen, recv_request));
-			if (ctx->closing) {
+			if (ctx->closing != 0) {
 				pr_warn("local closing during open ret %d\n", ret);
 				ret = -ENODEV;
 			}
 		} else { /* fe interruptible case  */
 			ret = wait_event_interruptible(dev->openq,
 				hab_open_request_find(ctx, dev, listen, recv_request));
-			if (ctx->closing) {
+			if (ctx->closing != 0) {
 				pr_warn("local closing during open ret %d\n", ret);
 				ret = -ENODEV;
 			} else if (-ERESTARTSYS == ret) {
@@ -212,23 +214,23 @@ int hab_open_listen(struct uhab_context *ctx,
 int hab_open_receive_cancel(struct physical_channel *pchan,
 		size_t sizebytes)
 {
-	struct hab_device *dev = pchan->habdev;
+	struct hab_device * const dev = pchan->habdev;
 	struct hab_open_send_data data = {0};
 	struct hab_open_request *request;
 	struct hab_open_node *node, *tmp;
 	int bfound = 0;
 	struct timespec64 ts = {0};
-	int irqs_disabled = irqs_disabled();
+	const int disabled_irqs = irqs_disabled();
 
 	if (physical_channel_read(pchan, &data, sizebytes) != sizebytes)
 		return -EIO;
 
-	hab_spin_lock(&dev->openlock, irqs_disabled);
+	hab_spin_lock(&dev->openlock, disabled_irqs);
 	list_for_each_entry_safe(node, tmp, &dev->openq_list, node) {
 		request = &node->request;
 		/* check if open request has been serviced or not */
-		if  ((request->type == HAB_PAYLOAD_TYPE_INIT ||
-			  request->type == HAB_PAYLOAD_TYPE_INIT_ACK) &&
+		if  (((request->type == HAB_PAYLOAD_TYPE_INIT) ||
+			  (request->type == HAB_PAYLOAD_TYPE_INIT_ACK)) &&
 			 (request->xdata.sub_id == data.sub_id) &&
 			(request->xdata.open_id == data.open_id) &&
 			(request->xdata.vchan_id == data.vchan_id)) {
@@ -243,9 +245,9 @@ int hab_open_receive_cancel(struct physical_channel *pchan,
 			break;
 		}
 	}
-	hab_spin_unlock(&dev->openlock, irqs_disabled);
+	hab_spin_unlock(&dev->openlock, disabled_irqs);
 
-	if (!bfound) {
+	if (bfound == 0) {
 		pr_info("init waiting is in-flight. vcid %x sub %d open %d\n",
 				data.vchan_id, data.sub_id, data.open_id);
 		/* add cancel to the openq to let the waiting open bail out */
@@ -264,14 +266,14 @@ int hab_open_receive_cancel(struct physical_channel *pchan,
 
 		ktime_get_ts64(&ts);
 		node->age = ts.tv_sec + HAB_OPEN_REQ_EXPIRE_TIME_S +
-			ts.tv_nsec/NSEC_PER_SEC;
+			((u64)ts.tv_nsec / NSEC_PER_SEC);
 		/* put when this node is handled in open path */
 		hab_pchan_get(pchan);
 
-		hab_spin_lock(&dev->openlock, irqs_disabled);
+		hab_spin_lock(&dev->openlock, disabled_irqs);
 		list_add_tail(&node->node, &dev->openq_list);
 		dev->openq_cnt++;
-		hab_spin_unlock(&dev->openlock, irqs_disabled);
+		hab_spin_unlock(&dev->openlock, disabled_irqs);
 
 		wake_up(&dev->openq);
 	}
@@ -283,16 +285,17 @@ int hab_open_receive_cancel(struct physical_channel *pchan,
 int hab_open_cancel_notify(struct hab_open_request *request)
 {
 	struct hab_header header = HAB_HEADER_INITIALIZER;
-	int ret = 0;
+	int ret;
 
 	HAB_HEADER_SET_SIZE(header, sizeof(struct hab_open_send_data));
 	HAB_HEADER_SET_TYPE(header, HAB_PAYLOAD_TYPE_INIT_CANCEL);
 
 	ret = physical_channel_send(request->pchan, &header, &request->xdata,
 			HABMM_SOCKET_SEND_FLAGS_NON_BLOCKING);
-	if (ret != 0)
+	if (ret != 0) {
 		pr_err("pchan %s failed to send open cancel msg %d\n",
 			request->pchan->name, ret);
+	}
 
 	return ret;
 }

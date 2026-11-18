@@ -175,23 +175,103 @@ static int qcom_smmu_nestinc_init_pgt(struct smmu_nested_domain *smmu_domain)
 
 static struct kvm_hyp_iommu *qcom_nesting_id_to_iommu(pkvm_handle_t smmu_id)
 {
+	struct kvm_hyp_iommu *iommu;
+	int i;
+
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->get_iommu_by_id)
+			continue;
+
+		iommu = registered_drivers[i]->callbacks->get_iommu_by_id(smmu_id);
+		if (iommu)
+			return iommu;
+	}
+
 	return NULL;
+}
+
+static int qcom_nesting_id_to_token(pkvm_handle_t smmu_id, u64 *out_token)
+{
+	int i, ret = -ENODEV;
+
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->get_iommu_token_by_id)
+			continue;
+
+		ret = registered_drivers[i]->callbacks->get_iommu_token_by_id(smmu_id, out_token);
+		if (ret != -ENODEV)
+			return ret;
+	}
+
+	return ret;
 }
 
 static int qcom_smmu_nesting_alloc_domain(struct kvm_hyp_iommu_domain *domain, int type)
 {
+	struct smmu_nested_guest_domain *guest_domain;
+
+	if (type >= KVM_ARM_SMMU_DOMAIN_MAX)
+		return -EINVAL;
+
+	guest_domain = hyp_alloc(sizeof(*guest_domain));
+	if (!guest_domain)
+		return -ENOMEM;
+
+	/*
+	 * The SMMU version (v2/v3) is not known here, so the page table and
+	 * the SMMU binding are deferred to attach_dev, which supplies the
+	 * version-specific TLB ops. Keep them unset until then.
+	 */
+	guest_domain->domain = domain;
+	guest_domain->iommu = NULL;
+	guest_domain->cb_idx = -1;
+	guest_domain->pgtable = NULL;
+	hyp_spin_lock_init(&guest_domain->pgt_lock);
+
+	domain->priv = guest_domain;
+
 	return 0;
 }
 
 static void qcom_smmu_nesting_free_domain(struct kvm_hyp_iommu_domain *domain)
 {
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+
+	if (!guest_domain)
+		return;
+
+	/* Page table is allocated at attach_dev; NULL if never attached. */
+	if (guest_domain->pgtable)
+		kvm_arm_io_pgtable_free(guest_domain->pgtable);
+
+	/*
+	 * TODO: force_free_domain can free a domain with attached devices
+	 * (i.e. no detach_dev). Reclaim the guest CB/SMR pool slots here when
+	 * guest_domain->iommu != NULL, else a crashing pVM leaks them.
+	 */
+
+	hyp_free(guest_domain);
+	domain->priv = NULL;
 }
 
 static int qcom_smmu_nesting_detach_dev(struct kvm_hyp_iommu *iommu,
 					struct kvm_hyp_iommu_domain *domain,
 					u32 sid, u32 pasid)
 {
-	return 0;
+	int i, ret = -ENODEV;
+
+	/* Route to the vendor that owns this iommu (returns -ENODEV if not). */
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->detach_dev)
+			continue;
+
+		ret = registered_drivers[i]->callbacks->detach_dev(iommu, domain,
+								   sid, pasid);
+		if (ret != -ENODEV)
+			return ret;
+	}
+
+	return ret;
 }
 
 static int qcom_smmu_nesting_attach_dev(struct kvm_hyp_iommu *iommu,
@@ -199,7 +279,76 @@ static int qcom_smmu_nesting_attach_dev(struct kvm_hyp_iommu *iommu,
 					u32 endpoint_id, u32 pasid, u32 pasid_bits,
 					unsigned long flags)
 {
-	return 0;
+	int i, ret = -ENODEV;
+
+	/* Route to the vendor that owns this iommu (returns -ENODEV if not). */
+	for (i = 0; i < num_registered_drivers; i++) {
+		if (!registered_drivers[i]->callbacks->attach_dev)
+			continue;
+
+		ret = registered_drivers[i]->callbacks->attach_dev(iommu, domain,
+								   endpoint_id, pasid,
+								   pasid_bits, flags);
+		if (ret != -ENODEV)
+			return ret;
+	}
+
+	return ret;
+}
+
+static int qcom_smmu_nesting_map_pages(struct kvm_hyp_iommu_domain *domain,
+				       unsigned long iova, phys_addr_t paddr,
+				       size_t pgsize, size_t pgcount, int prot,
+				       size_t *total_mapped)
+{
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+	struct io_pgtable *pgtable;
+	int ret;
+
+	/*
+	 * The core only holds a domain refcount here, so concurrent
+	 * map/unmap hypercalls from sibling vCPUs can reach the same
+	 * page table. Serialize them.
+	 */
+	hyp_spin_lock(&guest_domain->pgt_lock);
+
+	pgtable = guest_domain->pgtable;
+	if (!pgtable) {
+		hyp_spin_unlock(&guest_domain->pgt_lock);
+		return -EINVAL;
+	}
+
+	ret = pgtable->ops.map_pages(&pgtable->ops, iova, paddr,
+				     pgsize, pgcount, prot, 0, total_mapped);
+
+	hyp_spin_unlock(&guest_domain->pgt_lock);
+
+	return ret;
+}
+
+static size_t qcom_smmu_nesting_unmap_pages(struct kvm_hyp_iommu_domain *domain,
+					    unsigned long iova,
+					    size_t pgsize, size_t pgcount,
+					    struct iommu_iotlb_gather *iotlb_gather)
+{
+	struct smmu_nested_guest_domain *guest_domain = domain->priv;
+	struct io_pgtable *pgtable;
+	size_t unmapped;
+
+	hyp_spin_lock(&guest_domain->pgt_lock);
+
+	pgtable = guest_domain->pgtable;
+	if (!pgtable) {
+		hyp_spin_unlock(&guest_domain->pgt_lock);
+		return 0;
+	}
+
+	unmapped = pgtable->ops.unmap_pages(&pgtable->ops, iova,
+					    pgsize, pgcount, iotlb_gather);
+
+	hyp_spin_unlock(&guest_domain->pgt_lock);
+
+	return unmapped;
 }
 
 static int qcom_smmu_nesting_init(void)
@@ -259,7 +408,7 @@ static size_t smmu_pgsize_idmap(size_t size, u64 paddr, size_t pgsize_bitmap)
 static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 				    phys_addr_t start, phys_addr_t end, int prot)
 {
-	size_t size = end - start;
+	size_t size;
 	size_t pgsize, pgcount;
 	size_t mapped, unmapped;
 	int ret;
@@ -271,6 +420,7 @@ static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 	end = min(end, BIT(pgtable->cfg.oas));
 	if (start >= end)
 		return;
+	size = end - start;
 
 	if (prot) {
 		if (!(prot & IOMMU_MMIO) && pgtable->cfg.coherent_walk)
@@ -283,10 +433,15 @@ static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 
 			ret = pgtable->ops.map_pages(&pgtable->ops, start, start,
 						     pgsize, pgcount, prot, 0, &mapped);
+			/*
+			 * Failing to map isn't compromising security. Make sure we don't crash for
+			 * that.
+			 */
+			if (ret || !mapped)
+				return;
+
 			size -= mapped;
 			start += mapped;
-			if (!mapped || ret)
-				return;
 		}
 	} else {
 		while (size) {
@@ -295,11 +450,14 @@ static void qcom_smmu_nesting_idmap(struct kvm_hyp_iommu_domain *domain,
 			pgcount = size / pgsize;
 			unmapped = pgtable->ops.unmap_pages(&pgtable->ops, start,
 							    pgsize, pgcount, &gather);
+			if (!unmapped)
+				break;
+
 			size -= unmapped;
 			start += unmapped;
-			if (!unmapped)
-				return;
 		}
+		/* Some memory were not unmapped. */
+		WARN_ON(size);
 	}
 }
 
@@ -322,11 +480,14 @@ bool qcom_dispatcher_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 struct kvm_iommu_ops qcom_smmu_hyp_nesting_ops = {
 	.init				= qcom_smmu_nesting_init,
 	.get_iommu_by_id		= qcom_nesting_id_to_iommu,
+	.get_iommu_token_by_id		= qcom_nesting_id_to_token,
 	.alloc_domain			= qcom_smmu_nesting_alloc_domain,
 	.free_domain			= qcom_smmu_nesting_free_domain,
 	.dabt_handler                   = qcom_dispatcher_dabt_handler,
 	.attach_dev			= qcom_smmu_nesting_attach_dev,
 	.detach_dev			= qcom_smmu_nesting_detach_dev,
+	.map_pages			= qcom_smmu_nesting_map_pages,
+	.unmap_pages			= qcom_smmu_nesting_unmap_pages,
 	.suspend			= qcom_smmu_nesting_suspend,
 	.resume				= qcom_smmu_nesting_resume,
 	.host_stage2_idmap		= qcom_smmu_nesting_idmap,

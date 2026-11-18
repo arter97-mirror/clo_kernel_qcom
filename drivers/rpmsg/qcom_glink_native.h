@@ -15,6 +15,7 @@
 #define GLINK_FEATURE_TRACER_PKT	BIT(2)
 #define GLINK_FEATURE_ZERO_COPY		BIT(3)
 #define GLINK_FEATURE_ZERO_COPY_POOLS	BIT(4)
+#define GLINK_FEATURE_SHORT_CMD         BIT(8)
 
 /**
  * rpmsg rx callback return definitions

@@ -135,7 +135,7 @@ static struct subsystem_data subsystems[] = {
 	{ "dcp", 607, 22 },
 	{ "am", 679, 24 },
 	{ "wm", 678, 23 },
-	{ "lmcu", 607, 2 },
+	{ "lmcu", 607, 26 },
 };
 
 struct stats_config {
@@ -275,6 +275,21 @@ void subsystem_sleep_debug_enable(bool enable)
 	subsystem_stats_debug_on = enable;
 }
 EXPORT_SYMBOL_GPL(subsystem_sleep_debug_enable);
+
+uint64_t get_aosd_sleep_exit_time(void)
+{
+	struct sleep_stats stat;
+
+	if (!drv || !drv->config || !drv->config->num_records)
+		return 0;
+
+	if (!drv->d[0].base)
+		return 0;
+
+	memcpy_fromio(&stat, drv->d[0].base, sizeof(stat));
+	return stat.last_exited_at;
+}
+EXPORT_SYMBOL_GPL(get_aosd_sleep_exit_time);
 
 static inline int qcom_stats_copy_to_user(unsigned long arg, struct sleep_stats *stats,
 					  unsigned long size)

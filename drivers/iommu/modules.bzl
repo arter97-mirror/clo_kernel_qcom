@@ -35,11 +35,22 @@ def register_modules(registry):
             "drivers/iommu/qcom-iommu-debug-user.c",
             "drivers/iommu/qcom-iommu-debug.c",
             "drivers/iommu/qcom-iommu-debug.h",
+            "drivers/iommu/qcom-iommu-debug-alloc.c",
+            "drivers/iommu/qcom-iommu-debug-alloc.h",
         ],
+        conditional_srcs = {
+            "CONFIG_QCOM_DPD_PROXY": {
+                True: [
+                    # do not sort
+                    "drivers/iommu/qcom-iommu-debug-dpd.c",
+                ],
+            },
+        },
         deps = [
             # do not sort
             "drivers/iommu/qcom_iommu_util",
             "drivers/firmware/qcom/qcom-scm",
+            "drivers/soc/qcom/secure_buffer",
             "drivers/virt/gunyah/gh_rm_drv",
             "drivers/virt/gunyah/gh_msgq",
             "drivers/virt/gunyah/gh_dbl",

@@ -572,6 +572,8 @@ static void *qcom_smem_get_global(struct qcom_smem *smem,
 	unsigned i;
 
 	header = smem->regions[0].virt_base;
+	if (item >= SMEM_ITEM_COUNT)
+		return ERR_PTR(-EINVAL);
 	entry = &header->toc[item];
 	if (!entry->allocated)
 		return ERR_PTR(-ENXIO);

@@ -54,37 +54,45 @@ EXPORT_SYMBOL(habmm_socket_send);
 int32_t habmm_socket_recv(int32_t handle, void *dst_buff, uint32_t *size_bytes,
 		uint32_t timeout, uint32_t flags)
 {
-	int ret = 0;
-	struct hab_message *msg = NULL;
-	void **scatter_buf = NULL;
-	int i = 0;
+	int ret;
+	struct hab_message *msg;
+	void **scatter_buf;
+	int i;
 
-	if (!size_bytes || !dst_buff)
+	if ((!size_bytes) || (!dst_buff))
 		return -EINVAL;
 
-	ret = hab_vchan_recv(hab_driver.kctx, &msg, handle, size_bytes, timeout, flags);
+	ret = hab_vchan_recv(hab_driver.kctx, &msg, handle, size_bytes,
+			timeout, flags);
 
-	if (ret == 0 && msg) {
+	if ((ret == 0) && (msg != NULL)) {
 		if (unlikely(msg->scatter)) {
 			scatter_buf = (void **)msg->data;
 
-			/* The maximum size of msg is limited in hab_msg_alloc*/
-			for (i = 0; i < msg->sizebytes / PAGE_SIZE; i++)
-				memcpy((char *)((uint64_t)dst_buff
-					+ (uint64_t)(i * PAGE_SIZE)), scatter_buf[i], PAGE_SIZE);
+			/* The maximum size of msg is limited in hab_msg_alloc */
+			for (i = 0; i < (int)(msg->sizebytes / PAGE_SIZE); i++) {
+				memcpy((char *)dst_buff + ((size_t)i * PAGE_SIZE),
+					scatter_buf[i], PAGE_SIZE);
+			}
 
-			if (msg->sizebytes % PAGE_SIZE)
-				memcpy((char *)((uint64_t)dst_buff
-					+ (uint64_t)(i * PAGE_SIZE)), scatter_buf[i],
+			if ((msg->sizebytes % PAGE_SIZE) != 0U) {
+				memcpy((char *)dst_buff + ((size_t)i * PAGE_SIZE),
+					scatter_buf[i],
 					msg->sizebytes % PAGE_SIZE);
-		} else
+			} else {
+				/* no remainder bytes to copy */
+			}
+		} else {
 			memcpy(dst_buff, msg->data, msg->sizebytes);
-	} else if (ret && msg) {
+		}
+	} else if ((ret != 0) && (msg != NULL)) {
 		pr_warn("vcid %X recv failed %d but msg is still received %zd bytes\n",
 				handle, ret, msg->sizebytes);
+	} else {
+		/* ret != 0 and msg == NULL: normal error path, nothing to do */
 	}
 
-	if (msg)
+	if (msg != NULL)
 		hab_msg_free(msg);
 
 	return ret;
@@ -166,19 +174,21 @@ int32_t habmm_socket_query(int32_t handle,
 {
 	int ret;
 	uint64_t ids;
-	char nm[VMNAME_SIZE * 2];
+	char nm[VMNAME_SIZE * 2U];
 
 	if (!info)
 		return -EINVAL;
 
 	ret = hab_vchan_query(hab_driver.kctx, handle, &ids, nm, sizeof(nm), 1);
 	if (!ret) {
-		info->vmid_local = ids & 0xFFFFFFFF;
-		info->vmid_remote = (ids & 0xFFFFFFFF00000000UL) > 32;
+		info->vmid_local = (uint32_t)(ids & 0xFFFFFFFFUL);
+		info->vmid_remote = (uint32_t)((ids & 0xFFFFFFFF00000000UL) >> 32U);
 
-		strscpy(info->vmname_local, nm, sizeof(info->vmname_local));
-		strscpy(info->vmname_remote, &nm[sizeof(info->vmname_local)],
+		(void)strscpy(info->vmname_local, nm, sizeof(info->vmname_local));
+		(void)strscpy(info->vmname_remote, &nm[sizeof(info->vmname_local)],
 			sizeof(info->vmname_remote));
+	} else {
+		/* query failed, info fields not populated */
 	}
 	return ret;
 }

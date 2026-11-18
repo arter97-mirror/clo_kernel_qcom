@@ -109,8 +109,7 @@
 #define VIRQ_CAM   2001
 #define VIRQ_DISP1 3001
 #define VIRQ_DISP2 3002
-#define VIRQ_DPRX1 3003
-#define VIRQ_DPRX2 3004
+#define VIRQ_DPRX  3003
 #define VIRQ_GFX   4001
 #define VIRQ_VID   5001
 #define VIRQ_MISC  6001

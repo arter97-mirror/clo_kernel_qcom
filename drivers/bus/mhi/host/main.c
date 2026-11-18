@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  */
 
@@ -128,6 +128,8 @@ void mhi_ring_cmd_db(struct mhi_controller *mhi_cntrl, struct mhi_cmd *mhi_cmd)
 	struct mhi_ring *ring = &mhi_cmd->ring;
 
 	db = ring->iommu_base + (ring->wp - ring->base);
+	/* Ensure context writes are visible to device before doorbell */
+	dma_wmb();
 	*ring->ctxt_wp = cpu_to_le64(db);
 	mhi_write_db(mhi_cntrl, ring->db_addr, db);
 }
@@ -761,6 +763,7 @@ static int parse_rsc_event(struct mhi_controller *mhi_cntrl,
 			   struct mhi_ring_element *event,
 			   struct mhi_chan *mhi_chan)
 {
+	struct device *dev = &mhi_cntrl->mhi_dev->dev;
 	struct mhi_ring *buf_ring, *tre_ring;
 	struct mhi_buf_info *buf_info;
 	struct mhi_result result;
@@ -775,8 +778,21 @@ static int parse_rsc_event(struct mhi_controller *mhi_cntrl,
 	cookie = MHI_TRE_GET_EV_COOKIE(event);
 	xfer_len = MHI_TRE_GET_EV_LEN(event);
 
-	/* Received out of bound cookie */
-	WARN_ON(cookie >= buf_ring->len);
+	/*
+	 * Received out of bound cookie. Device is not honoring the
+	 * buf_ring bounds it was configured with, treat it as
+	 * misbehaving and force it into SYS ERR so it can be RDDM'd
+	 * and reset instead of dereferencing an out-of-bound pointer.
+	 */
+	if (cookie >= buf_ring->len) {
+		MHI_ERR(dev, "chan:%d cookie:0x%x out of bound buf_ring len:0x%zx\n",
+			mhi_chan->chan, cookie, buf_ring->len);
+		read_lock_bh(&mhi_cntrl->pm_lock);
+		if (MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
+			mhi_set_mhi_state(mhi_cntrl, MHI_STATE_SYS_ERR);
+		read_unlock_bh(&mhi_cntrl->pm_lock);
+		return -EIO;
+	}
 
 	buf_info = buf_ring->base + cookie;
 
@@ -1054,7 +1070,7 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 	struct mhi_event_ctxt *er_ctxt =
 		&mhi_cntrl->mhi_ctxt->er_ctxt[mhi_event->er_index];
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
-	int count = 0;
+	int count = 0, ret;
 	u32 chan;
 	struct mhi_chan *mhi_chan;
 	dma_addr_t ptr = le64_to_cpu(er_ctxt->rp);
@@ -1094,8 +1110,11 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 			if (likely(type == MHI_PKT_TYPE_TX_EVENT)) {
 				parse_xfer_event(mhi_cntrl, local_rp, mhi_chan);
 				event_quota--;
-			} else if (type == MHI_PKT_TYPE_RSC_TX_EVENT) {
-				parse_rsc_event(mhi_cntrl, local_rp, mhi_chan);
+			} else if (type == MHI_PKT_TYPE_RSC_TX_EVENT &&
+				   mhi_chan->type == MHI_CH_TYPE_INBOUND_COALESCED) {
+				ret = parse_rsc_event(mhi_cntrl, local_rp, mhi_chan);
+				if (ret)
+					return ret;
 				event_quota--;
 			}
 		}
@@ -1871,3 +1890,23 @@ int mhi_get_channel_doorbell_offset(struct mhi_controller *mhi_cntrl, u32 *chdb_
 	return 0;
 }
 EXPORT_SYMBOL_GPL(mhi_get_channel_doorbell_offset);
+
+int mhi_poll(struct mhi_device *mhi_dev, u32 budget)
+{
+	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
+	struct mhi_chan *mhi_chan = mhi_dev->dl_chan;
+	struct mhi_event *mhi_event = &mhi_cntrl->mhi_event[mhi_chan->er_index];
+	int ret;
+
+	spin_lock_bh(&mhi_event->lock);
+	ret = mhi_event->process_event(mhi_cntrl, mhi_event, budget);
+	spin_unlock_bh(&mhi_event->lock);
+
+	if (ret < 0)
+		dev_dbg(&mhi_cntrl->mhi_dev->dev,
+			"Failed to process events for chan %s (er_index %u): %d\n",
+			mhi_chan->name, mhi_chan->er_index, ret);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mhi_poll);

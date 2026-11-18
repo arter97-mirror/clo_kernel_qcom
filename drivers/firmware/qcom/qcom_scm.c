@@ -630,7 +630,7 @@ int qcom_scm_disable_sdi(void)
 	ret = qcom_scm_clk_enable();
 	if (ret)
 		return ret;
-	ret = qcom_scm_call(__scm->dev, &desc, &res);
+	ret = qcom_scm_call_atomic(__scm ? __scm->dev : NULL, &desc, &res);
 
 	qcom_scm_clk_disable();
 
@@ -3370,10 +3370,12 @@ static int qcom_scm_probe(struct platform_device *pdev)
 				     "Failed to enable the TrustZone memory allocator\n");
 
 	memset(&pool_config, 0, sizeof(pool_config));
-	pool_config.initial_size = 0;
-	pool_config.policy = QCOM_TZMEM_POLICY_ON_DEMAND;
-	pool_config.max_size = SZ_256K;
-
+	if (IS_ENABLED(CONFIG_QCOM_TZMEM_LOW_MEMORY))
+		pool_config.initial_size = SZ_16K;
+	else
+		pool_config.initial_size = SZ_512K;
+	pool_config.policy = QCOM_TZMEM_POLICY_STATIC;
+	pool_config.max_size = pool_config.initial_size;
 	__scm->mempool = devm_qcom_tzmem_pool_new(__scm->dev, &pool_config);
 	if (IS_ERR(__scm->mempool))
 		return dev_err_probe(__scm->dev, PTR_ERR(__scm->mempool),
@@ -3397,7 +3399,6 @@ static int qcom_scm_probe(struct platform_device *pdev)
 
 static void qcom_scm_shutdown(struct platform_device *pdev)
 {
-	idr_destroy(&__scm->waitq.idr);
 	qcom_scm_disable_sdi();
 	qcom_scm_halt_spmi_pmic_arbiter();
 	/* Clean shutdown, disable download mode to allow normal restart */

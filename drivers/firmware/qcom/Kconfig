@@ -23,6 +23,18 @@ config QCOM_TZMEM_FFA
 	  With this, traditional method of memory sharing will be replaced with
 	  FFA based implementation.
 
+config QCOM_TZMEM_LOW_MEMORY
+	bool "Enable low memory mode for QCOM TZMEM"
+	depends on QCOM_TZMEM
+	default n
+	help
+	  This option enables low-memory behavior for qcom_tzmem users.
+	  When enabled, smaller pool sizes are used in initialization
+	  paths(like scm and shmbridge), and runtime fallback allocation from qcom_tzmem
+	  is disabled once the pool memory is exhausted.
+
+	  Say 'Y' here for low-memory targets (QTVM, for example).
+
 config QTEE_SHM_BRIDGE
 	bool "QTI TEE shared memory bridge"
 	depends on QCOM_SCM && QCOM_TZMEM

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <asm/arch_timer.h>
@@ -20,6 +20,7 @@
 #include <linux/delay.h>
 #include <linux/completion.h>
 #include <linux/sched/clock.h>
+#include <linux/mm.h>
 #include <linux/ipc_logging.h>
 #include <soc/qcom/minidump.h>
 
@@ -131,18 +132,39 @@ static struct ipc_log_page *get_next_page(struct ipc_log_context *ilctxt,
 	return pg;
 }
 
+static phys_addr_t minidump_virt_to_phys(uint64_t virt_addr)
+{
+	struct page *page;
+
+	if (is_vmalloc_or_module_addr((void *)virt_addr)) {
+		page = vmalloc_to_page((void *)virt_addr);
+		if (!page) {
+			pr_warn("%s: Cannot get page for address 0x%llx\n",
+				__func__, virt_addr);
+			return 0;
+		}
+		return page_to_phys(page) + offset_in_page(virt_addr);
+	}
+
+	return virt_to_phys((void *)virt_addr);
+}
+
 static void register_minidump(u64 vaddr, u64 size,
 			      const char *buf_name, int index)
 {
 	struct md_region md_entry;
+	phys_addr_t phys;
 	int ret;
 
 	if (msm_minidump_enabled()
 	    && (minidump_buf_cnt < MAX_MINIDUMP_BUFFERS)) {
+		phys = minidump_virt_to_phys(vaddr);
+		if (!phys)
+			return;
 		scnprintf(md_entry.name, sizeof(md_entry.name), "%s_%d",
 			  buf_name, index);
 		md_entry.virt_addr = vaddr;
-		md_entry.phys_addr = virt_to_phys((void *)vaddr);
+		md_entry.phys_addr = phys;
 		md_entry.size = size;
 
 		ret = msm_minidump_add_region(&md_entry);

@@ -2443,6 +2443,15 @@ static int spi_geni_unprepare_transfer_hardware(struct spi_controller *spi)
 	return 0;
 }
 
+static bool set_fragmentation(struct spi_transfer *xfer, struct spi_controller *spi)
+{
+	if (spi->cs_gpiods)
+		return false;
+
+	return xfer->cs_change ==
+		list_is_last(&xfer->transfer_list, &spi->cur_msg->transfers);
+}
+
 static int setup_fifo_xfer(struct spi_transfer *xfer, struct spi_geni_master *mas,
 			   u16 mode, struct spi_controller *spi)
 {
@@ -2500,11 +2509,8 @@ static int setup_fifo_xfer(struct spi_transfer *xfer, struct spi_geni_master *ma
 		trans_len = (xfer->len / bytes_per_word) & TRANS_LEN_MSK;
 	}
 
-	if (!spi->cs_gpiods && !xfer->cs_change) {
-		if (!list_is_last(&xfer->transfer_list,
-					&spi->cur_msg->transfers))
-			m_param |= FRAGMENTATION;
-	}
+	if (set_fragmentation(xfer, spi))
+		m_param |= FRAGMENTATION;
 
 	mas->cur_xfer = xfer;
 	if (m_cmd & SPI_TX_ONLY) {
@@ -2525,9 +2531,9 @@ static int setup_fifo_xfer(struct spi_transfer *xfer, struct spi_geni_master *ma
 	 * mode for transfers or select the mode dynamically based on
 	 * size of data.
 	 */
-	if (spi->target)
-		mas->cur_xfer_mode = GENI_SE_DMA;
-	if (mas->disable_dma || trans_len <= fifo_size)
+	mas->cur_xfer_mode = GENI_SE_DMA;
+
+	if (!spi->target && (mas->disable_dma || trans_len <= fifo_size))
 		mas->cur_xfer_mode = GENI_SE_FIFO;
 	geni_se_select_mode(&mas->spi_rsc, mas->cur_xfer_mode);
 
@@ -2834,6 +2840,36 @@ static void spi_geni_set_cs(struct spi_device *spi_slv, bool cs_active)
 	}
 }
 
+static int spi_geni_deassert_cs(struct spi_device *spi)
+{
+	struct spi_geni_master *mas = spi_controller_get_devdata(spi->controller);
+	struct geni_se *se = &mas->spi_rsc;
+	unsigned long time_left;
+	unsigned long cs_timeout = msecs_to_jiffies(SPI_XFER_TIMEOUT_MS);
+
+	if (mas->cur_xfer_mode == GENI_GPI_DMA) {
+		dev_info(mas->dev, "set_cs not available for GPI mode\n");
+		return 0;
+	}
+
+	/*
+	 * Set xfer_mode to FIFO to complete xfer_done in isr.
+	 * Dynamic switch will happen later as required.
+	 */
+	if (mas->cur_xfer_mode != GENI_SE_FIFO) {
+		geni_se_select_mode(se, GENI_SE_FIFO);
+		mas->cur_xfer_mode = GENI_SE_FIFO;
+	}
+
+	reinit_completion(&mas->xfer_done);
+	geni_se_setup_m_cmd(se, SPI_CS_DEASSERT, 0);
+	time_left = wait_for_completion_timeout(&mas->xfer_done, cs_timeout);
+	if (!time_left)
+		return -ETIMEDOUT;
+
+	return 0;
+}
+
 /*
  * spi_geni_transfer_one_message - Transfer an entire spi message.
  * @spi - pointer to the spi controller structure.
@@ -2885,12 +2921,25 @@ static int spi_geni_transfer_one_message(struct spi_controller *spi, struct spi_
 			}
 		}
 
-		ret = spi_geni_transfer_one(spi, msg->spi, xfer, xfer_tx_rx);
-		if (ret < 0) {
-			SPI_LOG_ERR(mas->ipc, true, mas->dev,
-				    "SPI transfer failed: %d\n", ret);
-			goto out;
+		if (xfer->tx_buf || xfer->rx_buf) {
+			ret = spi_geni_transfer_one(spi, msg->spi, xfer, xfer_tx_rx);
+			if (ret < 0) {
+				SPI_LOG_ERR(mas->ipc, true, mas->dev,
+						"SPI transfer failed: %d\n", ret);
+				goto out;
+			}
+		} else {
+			/* non data transfer */
+			if (!xfer->cs_change && !spi_is_csgpiod(msg->spi)) {
+				ret = spi_geni_deassert_cs(msg->spi);
+				if (ret < 0) {
+					dev_warn(mas->dev, "Timeout doing DEASSERT\n");
+					handle_fifo_timeout(spi, xfer);
+					goto out;
+				}
+			}
 		}
+
 		msg->actual_length += xfer->len;
 
 		if (mas->is_tx_rx && xfer_tx_rx) {

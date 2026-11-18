@@ -1422,6 +1422,45 @@ static struct clk_regmap_mux gcc_usb4_2_phy_sys_clk_src = {
 	},
 };
 
+static const struct freq_tbl ftbl_gcc_qspi_core_clk_src[] = {
+	F(19200000, P_BI_TCXO, 1, 0, 0),
+	F(75000000, P_GCC_GPLL0_OUT_EVEN, 4, 0, 0),
+	F(150000000, P_GCC_GPLL0_OUT_EVEN, 2, 0, 0),
+	F(171428571, P_GCC_GPLL0_OUT_MAIN, 3.5, 0, 0),
+	F(201500000, P_GCC_GPLL4_OUT_MAIN, 4, 0, 0),
+	F(240000000, P_GCC_GPLL0_OUT_MAIN, 2.5, 0, 0),
+	F(268666667, P_GCC_GPLL4_OUT_MAIN, 3, 0, 0),
+	F(300000000, P_GCC_GPLL0_OUT_MAIN, 2, 0, 0),
+	F(403000000, P_GCC_GPLL4_OUT_MAIN, 2, 0, 0),
+	{ }
+};
+
+static struct clk_rcg2 gcc_qspi_core_clk_src = {
+	.cmd_rcgr = 0x4b00c,
+	.mnd_width = 0,
+	.hid_width = 5,
+	.parent_map = gcc_parent_map_7,
+	.freq_tbl = ftbl_gcc_qspi_core_clk_src,
+	.enable_safe_config = true,
+	.flags = HW_CLK_CTRL_MODE,
+	.clkr.hw.init = &(const struct clk_init_data) {
+		.name = "gcc_qspi_core_clk_src",
+		.parent_data = gcc_parent_data_7,
+		.num_parents = ARRAY_SIZE(gcc_parent_data_7),
+		.flags = CLK_SET_RATE_PARENT,
+		.ops = &clk_rcg2_ops,
+	},
+	.clkr.vdd_data = {
+		.vdd_class = &vdd_cx,
+		.num_rate_max = VDD_NUM,
+		.rate_max = (unsigned long[VDD_NUM]) {
+			[VDD_LOWER] = 150000000,
+			[VDD_LOW]   = 201500000,
+			[VDD_NOMINAL] = 403000000,
+		},
+	},
+};
+
 static const struct freq_tbl ftbl_gcc_gp1_clk_src[] = {
 	F(50000000, P_GCC_GPLL0_OUT_EVEN, 6, 0, 0),
 	F(100000000, P_GCC_GPLL0_OUT_MAIN, 6, 0, 0),
@@ -5739,6 +5778,39 @@ static struct clk_branch gcc_qmip_video_v_cpu_ahb_clk = {
 	},
 };
 
+static struct clk_branch gcc_qspi_cnoc_periph_ahb_clk = {
+	.halt_reg = 0x4b004,
+	.halt_check = BRANCH_HALT_VOTED,
+	.hwcg_reg = 0x4b004,
+	.hwcg_bit = 1,
+	.clkr = {
+		.enable_reg = 0x4b004,
+		.enable_mask = BIT(0),
+		.hw.init = &(const struct clk_init_data) {
+			.name = "gcc_qspi_cnoc_periph_ahb_clk",
+			.ops = &clk_branch2_ops,
+		},
+	},
+};
+
+static struct clk_branch gcc_qspi_core_clk = {
+	.halt_reg = 0x4b008,
+	.halt_check = BRANCH_HALT,
+	.clkr = {
+		.enable_reg = 0x4b008,
+		.enable_mask = BIT(0),
+		.hw.init = &(const struct clk_init_data) {
+			.name = "gcc_qspi_core_clk",
+			.parent_hws = (const struct clk_hw*[]) {
+				&gcc_qspi_core_clk_src.clkr.hw,
+			},
+			.num_parents = 1,
+			.flags = CLK_SET_RATE_PARENT,
+			.ops = &clk_branch2_ops,
+		},
+	},
+};
+
 static struct clk_branch gcc_qmip_video_vcodec_ahb_clk = {
 	.halt_reg = 0x3200c,
 	.halt_check = BRANCH_HALT_VOTED,
@@ -7924,7 +7996,6 @@ static struct gdsc gcc_pcie_0_tunnel_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_1_tunnel_gdsc = {
@@ -7937,7 +8008,6 @@ static struct gdsc gcc_pcie_1_tunnel_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_2_tunnel_gdsc = {
@@ -7950,7 +8020,6 @@ static struct gdsc gcc_pcie_2_tunnel_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_3_gdsc = {
@@ -7963,7 +8032,6 @@ static struct gdsc gcc_pcie_3_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_3_phy_gdsc = {
@@ -7976,7 +8044,6 @@ static struct gdsc gcc_pcie_3_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_4_gdsc = {
@@ -7989,7 +8056,6 @@ static struct gdsc gcc_pcie_4_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_4_phy_gdsc = {
@@ -8002,7 +8068,6 @@ static struct gdsc gcc_pcie_4_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_5_gdsc = {
@@ -8015,7 +8080,6 @@ static struct gdsc gcc_pcie_5_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_5_phy_gdsc = {
@@ -8028,7 +8092,6 @@ static struct gdsc gcc_pcie_5_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_6_phy_gdsc = {
@@ -8041,7 +8104,6 @@ static struct gdsc gcc_pcie_6_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_6a_gdsc = {
@@ -8054,7 +8116,6 @@ static struct gdsc gcc_pcie_6a_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_pcie_6b_gdsc = {
@@ -8067,7 +8128,6 @@ static struct gdsc gcc_pcie_6b_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | VOTABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_ufs_mem_phy_gdsc = {
@@ -8080,7 +8140,6 @@ static struct gdsc gcc_ufs_mem_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_ufs_phy_gdsc = {
@@ -8093,7 +8152,6 @@ static struct gdsc gcc_ufs_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb20_prim_gdsc = {
@@ -8106,7 +8164,6 @@ static struct gdsc gcc_usb20_prim_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb30_mp_gdsc = {
@@ -8119,7 +8176,6 @@ static struct gdsc gcc_usb30_mp_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb30_prim_gdsc = {
@@ -8132,7 +8188,6 @@ static struct gdsc gcc_usb30_prim_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb30_sec_gdsc = {
@@ -8145,7 +8200,6 @@ static struct gdsc gcc_usb30_sec_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb30_tert_gdsc = {
@@ -8158,7 +8212,6 @@ static struct gdsc gcc_usb30_tert_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb3_mp_ss0_phy_gdsc = {
@@ -8171,7 +8224,6 @@ static struct gdsc gcc_usb3_mp_ss0_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb3_mp_ss1_phy_gdsc = {
@@ -8184,7 +8236,6 @@ static struct gdsc gcc_usb3_mp_ss1_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb4_0_gdsc = {
@@ -8197,7 +8248,6 @@ static struct gdsc gcc_usb4_0_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = HW_CTRL_TRIGGER | POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb4_1_gdsc = {
@@ -8210,7 +8260,6 @@ static struct gdsc gcc_usb4_1_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = HW_CTRL_TRIGGER | POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb4_2_gdsc = {
@@ -8223,7 +8272,6 @@ static struct gdsc gcc_usb4_2_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = HW_CTRL_TRIGGER | POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb_0_phy_gdsc = {
@@ -8236,7 +8284,6 @@ static struct gdsc gcc_usb_0_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb_1_phy_gdsc = {
@@ -8249,7 +8296,6 @@ static struct gdsc gcc_usb_1_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct gdsc gcc_usb_2_phy_gdsc = {
@@ -8262,7 +8308,6 @@ static struct gdsc gcc_usb_2_phy_gdsc = {
 	},
 	.pwrsts = PWRSTS_OFF_ON,
 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
-	.supply = "vdd_cx",
 };
 
 static struct clk_regmap *gcc_x1p42100_clocks[] = {
@@ -8428,6 +8473,9 @@ static struct clk_regmap *gcc_x1p42100_clocks[] = {
 	[GCC_QMIP_VIDEO_CVP_AHB_CLK] = &gcc_qmip_video_cvp_ahb_clk.clkr,
 	[GCC_QMIP_VIDEO_V_CPU_AHB_CLK] = &gcc_qmip_video_v_cpu_ahb_clk.clkr,
 	[GCC_QMIP_VIDEO_VCODEC_AHB_CLK] = &gcc_qmip_video_vcodec_ahb_clk.clkr,
+	[GCC_QSPI_CNOC_PERIPH_AHB_CLK] = &gcc_qspi_cnoc_periph_ahb_clk.clkr,
+	[GCC_QSPI_CORE_CLK] = &gcc_qspi_core_clk.clkr,
+	[GCC_QSPI_CORE_CLK_SRC] = &gcc_qspi_core_clk_src.clkr,
 	[GCC_QUPV3_WRAP0_CORE_2X_CLK] = &gcc_qupv3_wrap0_core_2x_clk.clkr,
 	[GCC_QUPV3_WRAP0_CORE_CLK] = &gcc_qupv3_wrap0_core_clk.clkr,
 	[GCC_QUPV3_WRAP0_QSPI_S2_CLK] = &gcc_qupv3_wrap0_qspi_s2_clk.clkr,
@@ -8736,6 +8784,7 @@ static const struct qcom_reset_map gcc_x1p42100_resets[] = {
 	[GCC_PCIE_PHY_COM_BCR] = { 0x6f010 },
 	[GCC_PCIE_RSCC_BCR] = { 0xa4000 },
 	[GCC_PDM_BCR] = { 0x33000 },
+	[GCC_QSPI_BCR] = { 0x4b000 },
 	[GCC_QUPV3_WRAPPER_0_BCR] = { 0x42000 },
 	[GCC_QUPV3_WRAPPER_1_BCR] = { 0x18000 },
 	[GCC_QUPV3_WRAPPER_2_BCR] = { 0x1e000 },

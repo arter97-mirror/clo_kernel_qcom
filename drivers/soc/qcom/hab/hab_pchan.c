@@ -22,7 +22,7 @@ static void hab_pchan_oom_killer(struct work_struct *work)
 	struct virtual_channel *vchan, *vchan_max = NULL;
 	struct hab_message *message, *msg_tmp;
 	int sz, max_sz = 0, total_sz = 0;
-	int irqs_disabled = irqs_disabled();
+	const int disabled_irqs = irqs_disabled();
 	int found = 0;
 
 	/* find the vc who has the biggest pending msg sz */
@@ -36,16 +36,18 @@ static void hab_pchan_oom_killer(struct work_struct *work)
 		}
 	}
 	if ((vchan_max != NULL) &&
-	    (total_sz > pchan->rx_pending_sz_max) &&
-	    (kref_get_unless_zero(&vchan_max->refcount) != 0)) {
-		hab_vchan_stop_notify(vchan_max);
-		pr_warn("discard %u bytes msg on vc %x\n", vchan_max->rx_pending_sz, vchan_max->id);
-		found = 1;
+	    (total_sz > pchan->rx_pending_sz_max)) {
+		if (kref_get_unless_zero(&vchan_max->refcount) != 0) {
+			hab_vchan_stop_notify(vchan_max);
+			pr_warn("discard %u bytes msg on vc %x\n",
+				vchan_max->rx_pending_sz, vchan_max->id);
+			found = 1;
+		}
 	}
 	read_unlock(&pchan->vchans_lock);
 
 	if (found == 1) {
-		hab_spin_lock(&vchan_max->rx_lock, irqs_disabled);
+		hab_spin_lock(&vchan_max->rx_lock, disabled_irqs);
 		/*
 		 * Normally, pending messages are discarded when the client closes the
 		 * channel. However, in this scenario the client does not perform any
@@ -60,7 +62,7 @@ static void hab_pchan_oom_killer(struct work_struct *work)
 		atomic_sub(vchan_max->rx_pending_cnt, &pchan->rx_pending_cnt);
 		vchan_max->rx_pending_cnt = 0;
 		vchan_max->rx_pending_sz = 0;
-		hab_spin_unlock(&vchan_max->rx_lock, irqs_disabled);
+		hab_spin_unlock(&vchan_max->rx_lock, disabled_irqs);
 
 		pr_info("after cleanup, %s remaining rx_p sz %d\n",
 			pchan->name, atomic_read(&pchan->rx_pending_sz));
@@ -135,15 +137,18 @@ static void hab_pchan_free(struct kref *ref)
 struct physical_channel *
 hab_pchan_find_domid(struct hab_device *dev, int dom_id)
 {
-	struct physical_channel *pchan;
+	struct physical_channel *pchan = NULL;
+	struct physical_channel *tmp;
 
 	read_lock_bh(&dev->pchan_lock);
-	list_for_each_entry(pchan, &dev->pchannels, node) {
-		if (pchan->dom_id == dom_id || dom_id == HABCFG_VMID_DONT_CARE)
+	list_for_each_entry(tmp, &dev->pchannels, node) {
+		if ((tmp->dom_id == dom_id) || (dom_id == HABCFG_VMID_DONT_CARE)) {
+			pchan = tmp;
 			break;
+		}
 	}
 
-	if (pchan->dom_id != dom_id && dom_id != HABCFG_VMID_DONT_CARE) {
+	if (pchan && (pchan->dom_id != dom_id) && (dom_id != HABCFG_VMID_DONT_CARE)) {
 		pr_err("dom_id mismatch requested %d, existing %d\n",
 			dom_id, pchan->dom_id);
 		pchan = NULL;

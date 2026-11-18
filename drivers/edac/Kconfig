@@ -60,4 +60,22 @@ config EDAC_QCOM
 	  For debugging issues having to do with stability and overall system
 	  health, you should probably say 'Y' here.
 
+config EDAC_QCOM_LCP
+	bool "QCOM LLCC LCP/SRP DDR DRAM ECC reporting"
+	depends on EDAC_QCOM
+	help
+	  Enables error detection for DDR DRAM single-bit and double-bit ECC
+	  errors reported through the LLCC Last-level Cache Protocol (LCP) /
+	  System Read Protocol (SRP) path.
+
+	  When enabled, a second interrupt handler is registered for
+	  ddrss_apps_interrupt[1]. It reads the LCP/SRP
+	  interrupt status and error-count registers and reports correctable
+	  (SB) and uncorrectable (DB) errors via the EDAC subsystem.
+
+	  Say Y if your platform wires ddrss_apps_interrupt[1] to the GIC and
+	  populates the second interrupt entry in the LLCC DT node.
+	  Say N to save kernel text and avoid requesting the LCP IRQ on
+	  platforms that do not support LCP/SRP ECC reporting.
+
 endmenu

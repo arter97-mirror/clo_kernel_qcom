@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #define DRIVER_NAME "msm_sharedmem"
 #define pr_fmt(fmt) DRIVER_NAME ": %s: " fmt, __func__
@@ -13,6 +13,7 @@
 #include <linux/of.h>
 #include <linux/dma-mapping.h>
 #include <linux/firmware/qcom/qcom_scm.h>
+#include <linux/pm.h>
 
 #include <soc/qcom/secure_buffer.h>
 
@@ -112,6 +113,49 @@ static void setup_shared_ram_perms(u32 client_id, phys_addr_t addr, u32 size,
 				&addr, size, ret);
 	}
 }
+
+static int msm_sharedmem_driver_restore(struct device *dev)
+{
+	int ret = 0;
+	u32 client_id = ((u32)~0U);
+	u32 shared_mem_size = 0;
+	phys_addr_t shared_mem_physical = 0;
+	bool vm_nav_path = false;
+
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct uio_info *info = dev_get_drvdata(&pdev->dev);
+
+	/* Get the addresses from platform-data */
+	if (!pdev->dev.of_node || !info) {
+		pr_err("Node not found\n");
+		ret = -ENODEV;
+		goto out;
+	}
+
+	ret = of_property_read_u32(pdev->dev.of_node, CLIENT_ID_PROP,
+				   &client_id);
+	if (ret) {
+		client_id = ((u32)~0U);
+		pr_warn("qcom,client-id property not found\n");
+		ret = 0;
+	}
+
+	shared_mem_size = info->mem[0].size;
+	shared_mem_physical = info->mem[0].addr;
+
+	vm_nav_path = of_property_read_bool(pdev->dev.of_node,
+			"qcom,vm-nav-path");
+
+	setup_shared_ram_perms(client_id, shared_mem_physical, shared_mem_size,
+				vm_nav_path);
+
+out:
+	return ret;
+}
+
+static const struct dev_pm_ops msm_sharedmem_pm_ops = {
+	.restore = msm_sharedmem_driver_restore,
+};
 
 static int msm_sharedmem_probe(struct platform_device *pdev)
 {
@@ -234,6 +278,7 @@ static struct platform_driver msm_sharedmem_driver = {
 	.driver         = {
 		.name   = DRIVER_NAME,
 		.of_match_table = msm_sharedmem_of_match,
+		.pm = &msm_sharedmem_pm_ops,
 	},
 };
 

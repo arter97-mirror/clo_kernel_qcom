@@ -15,6 +15,8 @@ obj-$(CONFIG_LEDS_QPNP_VIBRATOR_LDO) += leds-qpnp-vibrator-ldo.o
 
 obj-$(CONFIG_LEDS_AW2016) += leds-aw2016.o
 
+obj-$(CONFIG_LEDS_AW200xx) += leds-aw200xx.o
+
 obj-$(CONFIG_LEDS_USER_AW21104) += leds-user-aw21104.o
 
 obj-$(CONFIG_LEDS_BYS_AW21104) += leds-bys-aw21104.o

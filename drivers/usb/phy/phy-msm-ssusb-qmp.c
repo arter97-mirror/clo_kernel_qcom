@@ -173,6 +173,9 @@ static const struct of_device_id msm_usb_id_table[] = {
 		.compatible = "qcom,usb-ssphy-qmp-v2",
 	},
 	{
+		.compatible = "qcom,usb-ssphy-qmp-v2-fw-managed",
+	},
+	{
 		.compatible = "qcom,usb-ssphy-qmp-dp-combo",
 	},
 	{
@@ -1155,6 +1158,10 @@ static void msm_ssphy_qmp_get_phy_type(struct msm_ssphy_qmp *phy, struct device 
 		phy->phy_type = USB3_AND_DP;
 		phy->fw_managed_pwr = true;
 	}
+
+	if (of_device_is_compatible(dev->of_node,
+			"qcom,usb-ssphy-qmp-v2-fw-managed"))
+		phy->fw_managed_pwr = true;
 }
 
 static int msm_ssphy_qmp_get_resets(struct msm_ssphy_qmp *phy, struct device *dev)

@@ -62,19 +62,136 @@ struct ps883x_retimer {
 	struct mutex lock; /* protect non-concurrent retimer & switch */
 
 	enum typec_orientation orientation;
-	u8 cfg0;
-	u8 cfg1;
-	u8 cfg2;
+	bool in_reset;
+	bool dp_4_lane;
 };
 
-static int ps883x_configure(struct ps883x_retimer *retimer, int cfg0,
-			    int cfg1, int cfg2)
+static int ps883x_enable_vregs(struct ps883x_retimer *retimer)
 {
 	struct device *dev = &retimer->client->dev;
 	int ret;
 
-	if (retimer->cfg0 == cfg0 && retimer->cfg1 == cfg1 && retimer->cfg2 == cfg2)
+	ret = regulator_enable(retimer->vdd33_supply);
+	if (ret) {
+		dev_err(dev, "cannot enable VDD 3.3V regulator: %d\n", ret);
+		return ret;
+	}
+
+	ret = regulator_enable(retimer->vdd33_cap_supply);
+	if (ret) {
+		dev_err(dev, "cannot enable VDD 3.3V CAP regulator: %d\n", ret);
+		goto err_vdd33_disable;
+	}
+
+	mdelay(10);
+	ret = regulator_enable(retimer->vddio_supply);
+	if (ret) {
+		dev_err(dev, "cannot enable VDD IO regulator: %d\n", ret);
+		goto err_vdd33_cap_disable;
+	}
+
+	mdelay(10);
+
+	ret = regulator_enable(retimer->vdd_supply);
+	if (ret) {
+		dev_err(dev, "cannot enable VDD regulator: %d\n", ret);
+		goto err_vddio_disable;
+	}
+
+	ret = regulator_enable(retimer->vddar_supply);
+	if (ret) {
+		dev_err(dev, "cannot enable VDD AR regulator: %d\n", ret);
+		goto err_vdd_disable;
+	}
+
+	ret = regulator_enable(retimer->vddat_supply);
+	if (ret) {
+		dev_err(dev, "cannot enable VDD AT regulator: %d\n", ret);
+		goto err_vddar_disable;
+	}
+
+	mdelay(10);
+	return 0;
+
+err_vddar_disable:
+	regulator_disable(retimer->vddar_supply);
+err_vdd_disable:
+	regulator_disable(retimer->vdd_supply);
+err_vddio_disable:
+	regulator_disable(retimer->vddio_supply);
+err_vdd33_cap_disable:
+	regulator_disable(retimer->vdd33_cap_supply);
+err_vdd33_disable:
+	regulator_disable(retimer->vdd33_supply);
+
+	return ret;
+}
+
+static void ps883x_disable_vregs(struct ps883x_retimer *retimer)
+{
+	regulator_disable(retimer->vddat_supply);
+	regulator_disable(retimer->vddar_supply);
+	regulator_disable(retimer->vdd_supply);
+	mdelay(3);
+
+	regulator_disable(retimer->vddio_supply);
+	mdelay(3);
+
+	regulator_disable(retimer->vdd33_cap_supply);
+	regulator_disable(retimer->vdd33_supply);
+	mdelay(3);
+}
+
+static void ps883x_power_down(struct ps883x_retimer *retimer, bool clk_enabled)
+{
+	if (clk_enabled)
+		clk_disable_unprepare(retimer->xo_clk);
+
+	mdelay(2);
+	ps883x_disable_vregs(retimer);
+	gpiod_set_value(retimer->reset_gpio, 1);
+}
+
+static void ps883x_reset(struct ps883x_retimer *retimer)
+{
+	if (retimer->in_reset)
+		return;
+
+	ps883x_power_down(retimer, true);
+
+	retimer->in_reset = true;
+}
+
+static int ps883x_configure(struct ps883x_retimer *retimer, int cfg0,
+			    int cfg1, int cfg2, bool reset)
+{
+	struct device *dev = &retimer->client->dev;
+	int ret;
+
+	if (reset) {
+		ps883x_reset(retimer);
+
 		return 0;
+	} else if (retimer->in_reset) {
+		ret = ps883x_enable_vregs(retimer);
+		if (ret)
+			return ret;
+
+		gpiod_set_value(retimer->reset_gpio, 0);
+
+		/* firmware initialization delay */
+		msleep(65);
+
+		ret = clk_prepare_enable(retimer->xo_clk);
+		if (ret) {
+			dev_err(dev, "failed to enable XO: %d\n", ret);
+			ps883x_power_down(retimer, false);
+			retimer->in_reset = true;
+			return ret;
+		}
+		retimer->in_reset = false;
+	}
+
 
 	ret = regmap_write(retimer->regmap, REG_USB_PORT_CONN_STATUS_0, cfg0);
 	if (ret) {
@@ -94,9 +211,8 @@ static int ps883x_configure(struct ps883x_retimer *retimer, int cfg0,
 		return ret;
 	}
 
-	retimer->cfg0 = cfg0;
-	retimer->cfg1 = cfg1;
-	retimer->cfg2 = cfg2;
+	if (retimer->dp_4_lane)
+		mdelay(50);
 
 	return 0;
 }
@@ -108,9 +224,12 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 	int cfg0 = CONN_STATUS_0_CONNECTION_PRESENT;
 	int cfg1 = 0x00;
 	int cfg2 = 0x00;
+	bool reset = false;
 
 	if (retimer->orientation == TYPEC_ORIENTATION_REVERSE)
 		cfg0 |= CONN_STATUS_0_ORIENTATION_REVERSED;
+
+	retimer->dp_4_lane = false;
 
 	if (state->alt) {
 		switch (state->alt->svid) {
@@ -121,6 +240,8 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 			switch (state->mode)  {
 			case TYPEC_DP_STATE_C:
 				cfg1 |= CONN_STATUS_1_DP_PIN_ASSIGNMENT_C_D;
+				retimer->dp_4_lane = true;
+
 				break;
 			case TYPEC_DP_STATE_D:
 				cfg1 |= CONN_STATUS_1_DP_PIN_ASSIGNMENT_C_D;
@@ -149,9 +270,11 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 		}
 	} else {
 		switch (state->mode) {
+		/* SAFE can be transient or point to an actual disconnect */
 		case TYPEC_STATE_SAFE:
 		/* USB2 pins don't even go through this chip */
 		case TYPEC_MODE_USB2:
+			reset = true;
 			break;
 		case TYPEC_STATE_USB:
 		case TYPEC_MODE_USB3:
@@ -172,7 +295,7 @@ static int ps883x_set(struct ps883x_retimer *retimer, struct typec_retimer_state
 		}
 	}
 
-	return ps883x_configure(retimer, cfg0, cfg1, cfg2);
+	return ps883x_configure(retimer, cfg0, cfg1, cfg2, reset);
 }
 
 static int ps883x_sw_set(struct typec_switch_dev *sw,
@@ -185,10 +308,18 @@ static int ps883x_sw_set(struct typec_switch_dev *sw,
 	if (ret)
 		return ret;
 
-	mutex_lock(&retimer->lock);
+	guard(mutex)(&retimer->lock);
 
 	if (retimer->orientation != orientation) {
 		retimer->orientation = orientation;
+
+		/*
+		 * Orientation notifications usually come prior to mode switch
+		 * events. If the retimer is already in reset, we still want to
+		 * cache the new orientation value for the subsequent ps883x_set().
+		 */
+		if (retimer->in_reset)
+			return 0;
 
 		if (orientation == TYPEC_ORIENTATION_REVERSE)
 			ret = regmap_set_bits(retimer->regmap, REG_USB_PORT_CONN_STATUS_0,
@@ -200,8 +331,6 @@ static int ps883x_sw_set(struct typec_switch_dev *sw,
 		if (ret)
 			dev_err(&retimer->client->dev, "failed to set orientation: %d\n", ret);
 	}
-
-	mutex_unlock(&retimer->lock);
 
 	return ret;
 }
@@ -225,75 +354,6 @@ static int ps883x_retimer_set(struct typec_retimer *rtmr,
 	mux_state.mode = state->mode;
 
 	return typec_mux_set(retimer->typec_mux, &mux_state);
-}
-
-static int ps883x_enable_vregs(struct ps883x_retimer *retimer)
-{
-	struct device *dev = &retimer->client->dev;
-	int ret;
-
-	ret = regulator_enable(retimer->vdd33_supply);
-	if (ret) {
-		dev_err(dev, "cannot enable VDD 3.3V regulator: %d\n", ret);
-		return ret;
-	}
-
-	ret = regulator_enable(retimer->vdd33_cap_supply);
-	if (ret) {
-		dev_err(dev, "cannot enable VDD 3.3V CAP regulator: %d\n", ret);
-		goto err_vdd33_disable;
-	}
-
-	usleep_range(4000, 10000);
-
-	ret = regulator_enable(retimer->vdd_supply);
-	if (ret) {
-		dev_err(dev, "cannot enable VDD regulator: %d\n", ret);
-		goto err_vdd33_cap_disable;
-	}
-
-	ret = regulator_enable(retimer->vddar_supply);
-	if (ret) {
-		dev_err(dev, "cannot enable VDD AR regulator: %d\n", ret);
-		goto err_vdd_disable;
-	}
-
-	ret = regulator_enable(retimer->vddat_supply);
-	if (ret) {
-		dev_err(dev, "cannot enable VDD AT regulator: %d\n", ret);
-		goto err_vddar_disable;
-	}
-
-	ret = regulator_enable(retimer->vddio_supply);
-	if (ret) {
-		dev_err(dev, "cannot enable VDD IO regulator: %d\n", ret);
-		goto err_vddat_disable;
-	}
-
-	return 0;
-
-err_vddat_disable:
-	regulator_disable(retimer->vddat_supply);
-err_vddar_disable:
-	regulator_disable(retimer->vddar_supply);
-err_vdd_disable:
-	regulator_disable(retimer->vdd_supply);
-err_vdd33_cap_disable:
-	regulator_disable(retimer->vdd33_cap_supply);
-err_vdd33_disable:
-	regulator_disable(retimer->vdd33_supply);
-
-	return ret;
-}
-
-static void ps883x_disable_vregs(struct ps883x_retimer *retimer)
-{
-	regulator_disable(retimer->vddio_supply);
-	regulator_disable(retimer->vddat_supply);
-	regulator_disable(retimer->vddar_supply);
-	regulator_disable(retimer->vdd_supply);
-	regulator_disable(retimer->vdd33_cap_supply);
-	regulator_disable(retimer->vdd33_supply);
 }
 
 static int ps883x_get_vregs(struct ps883x_retimer *retimer)
@@ -346,6 +406,7 @@ static int ps883x_retimer_probe(struct i2c_client *client)
 	struct typec_retimer_desc rtmr_desc = { };
 	struct ps883x_retimer *retimer;
 	unsigned int val;
+	bool already_configured;
 	int ret;
 
 	retimer = devm_kzalloc(dev, sizeof(*retimer), GFP_KERNEL);
@@ -396,15 +457,11 @@ static int ps883x_retimer_probe(struct i2c_client *client)
 	if (ret)
 		goto err_mux_put;
 
-	ret = clk_prepare_enable(retimer->xo_clk);
-	if (ret) {
-		dev_err(dev, "failed to enable XO: %d\n", ret);
-		goto err_vregs_disable;
-	}
+	already_configured = regmap_test_bits(retimer->regmap, REG_USB_PORT_CONN_STATUS_0,
+					      CONN_STATUS_0_CONNECTION_PRESENT) == 1;
 
 	/* skip resetting if already configured */
-	if (regmap_test_bits(retimer->regmap, REG_USB_PORT_CONN_STATUS_0,
-			     CONN_STATUS_0_CONNECTION_PRESENT) == 1) {
+	if (already_configured) {
 		gpiod_direction_output(retimer->reset_gpio, 0);
 	} else {
 		gpiod_direction_output(retimer->reset_gpio, 1);
@@ -416,7 +473,15 @@ static int ps883x_retimer_probe(struct i2c_client *client)
 
 		/* firmware initialization delay */
 		msleep(60);
+	}
 
+	ret = clk_prepare_enable(retimer->xo_clk);
+	if (ret) {
+		dev_err(dev, "failed to enable XO: %d\n", ret);
+		goto err_vregs_disable;
+	}
+
+	if (!already_configured) {
 		/* make sure device is accessible */
 		ret = regmap_read(retimer->regmap, REG_USB_PORT_CONN_STATUS_0,
 				  &val);
@@ -428,6 +493,9 @@ static int ps883x_retimer_probe(struct i2c_client *client)
 		}
 	}
 
+	/* Keep the retimer in reset until a Type-C notification comes */
+	ps883x_reset(retimer);
+
 	sw_desc.drvdata = retimer;
 	sw_desc.fwnode = dev_fwnode(dev);
 	sw_desc.set = ps883x_sw_set;
@@ -436,7 +504,7 @@ static int ps883x_retimer_probe(struct i2c_client *client)
 	if (IS_ERR(retimer->sw)) {
 		ret = PTR_ERR(retimer->sw);
 		dev_err(dev, "failed to register typec switch: %d\n", ret);
-		goto err_clk_disable;
+		goto err_mux_put;
 	}
 
 	rtmr_desc.drvdata = retimer;
@@ -450,15 +518,17 @@ static int ps883x_retimer_probe(struct i2c_client *client)
 		goto err_switch_unregister;
 	}
 
+	i2c_set_clientdata(client, retimer);
 	return 0;
 
 err_switch_unregister:
 	typec_switch_unregister(retimer->sw);
+	goto err_mux_put;
 err_clk_disable:
-	clk_disable_unprepare(retimer->xo_clk);
+	ps883x_power_down(retimer, true);
+	goto err_mux_put;
 err_vregs_disable:
-	gpiod_set_value(retimer->reset_gpio, 1);
-	ps883x_disable_vregs(retimer);
+	ps883x_power_down(retimer, false);
 err_mux_put:
 	typec_mux_put(retimer->typec_mux);
 err_switch_put:
@@ -474,11 +544,7 @@ static void ps883x_retimer_remove(struct i2c_client *client)
 	typec_retimer_unregister(retimer->retimer);
 	typec_switch_unregister(retimer->sw);
 
-	gpiod_set_value(retimer->reset_gpio, 1);
-
-	clk_disable_unprepare(retimer->xo_clk);
-
-	ps883x_disable_vregs(retimer);
+	ps883x_reset(retimer);
 
 	typec_mux_put(retimer->typec_mux);
 	typec_switch_put(retimer->typec_switch);

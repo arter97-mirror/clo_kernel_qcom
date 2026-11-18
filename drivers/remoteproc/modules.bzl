@@ -86,6 +86,27 @@ def register_modules(registry):
     )
 
     registry.register(
+        name = "drivers/remoteproc/qcom_rproc_slate",
+        out = "qcom_rproc_slate.ko",
+        config = "CONFIG_QCOM_RPROC_SLATE",
+        srcs = [
+            # do not sort
+            "drivers/remoteproc/qcom_rproc_slate.c",
+            "drivers/remoteproc/qcom_common.h",
+        ],
+        deps = [
+            # do not sort
+            "drivers/soc/qcom/mdt_loader",
+            "drivers/remoteproc/qcom_sysmon",
+            "drivers/remoteproc/rproc_qcom_common",
+            "drivers/firmware/qcom/qcom-scm",
+            "drivers/misc/qseecom_proxy",
+            "drivers/soc/qcom/slatecom_spi",
+            "drivers/soc/qcom/slatecom_interface",
+        ],
+    )
+
+    registry.register(
         name = "drivers/remoteproc/qcom_spss",
         out = "qcom_spss.ko",
         config = "CONFIG_QCOM_SPSS",

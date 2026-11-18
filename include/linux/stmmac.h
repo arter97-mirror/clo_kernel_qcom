@@ -191,6 +191,7 @@ struct dwxgmac_addrs {
 	u32 mtl_chan_base;
 	u32 mtl_chan_offset;
 	u32 timestamp_base;
+	u32 systime_base;
 	u32 pps_base;
 	u32 pps_offset;
 };
@@ -317,5 +318,6 @@ struct plat_stmmacenet_data {
 	const struct dwmac4_addrs *dwmac4_addrs;
 	const struct dwxgmac_addrs *dwxgmac_addrs;
 	unsigned int flags;
+	int disable_pcs_ane;
 };
 #endif

@@ -80,6 +80,8 @@ enum hab_payload_type {
 
 /* make sure concascaded name is less than this value */
 #define MAX_VMID_NAME_SIZE 30
+#define HAB_VMNAME_SIZE    12
+#define HAB_VIRTIRQ_NAME_SIZE 20
 
 /*
  * The maximum value of payload_count in struct export_desc
@@ -139,6 +141,8 @@ struct hab_header {
  * 500KB is big enough for now and leave a margin for other usage
  */
 #define HAB_HEADER_SIZE_MAX  0x0007D000
+/* chunk size for draining a channel in hab_msg_drop() */
+#define HAB_DROP_CHUNK_SIZE  256
 #define HAB_HEADER_TYPE_MASK 0x000F0000
 /* TYPE_LEN is the number of 1 bit in TYPE_MASK */
 #define HAB_HEADER_TYPE_LEN 4
@@ -235,8 +239,8 @@ struct physical_channel {
 	int dom_id; /* BE role: remote vmid; FE role: don't care */
 	int vmid_local; /* from DT or hab_config */
 	int vmid_remote;
-	char vmname_local[12]; /* from DT */
-	char vmname_remote[12];
+	char vmname_local[HAB_VMNAME_SIZE]; /* from DT */
+	char vmname_remote[HAB_VMNAME_SIZE];
 	int closed;
 
 	spinlock_t rxbuf_lock;
@@ -346,7 +350,7 @@ struct hvirq_dbl {
 	int virq_registered;
 	int virtirq_label;
 	int virtirq_num;
-	char virtirq_name[20];
+	char virtirq_name[HAB_VIRTIRQ_NAME_SIZE];
 	/* QVM specific fields*/
 	int32_t irq;
 	void __iomem *base;
@@ -773,13 +777,13 @@ void hab_ctx_free_os(struct kref *ref);
 
 static inline void hab_ctx_get(struct uhab_context *ctx)
 {
-	if (ctx)
+	if (ctx != NULL)
 		kref_get(&ctx->refcount);
 }
 
 static inline void hab_ctx_put(struct uhab_context *ctx)
 {
-	if (ctx)
+	if (ctx != NULL)
 		kref_put(&ctx->refcount, hab_ctx_free);
 }
 

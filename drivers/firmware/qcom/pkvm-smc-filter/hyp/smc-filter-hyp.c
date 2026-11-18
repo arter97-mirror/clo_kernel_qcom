@@ -133,6 +133,31 @@ static bool smc_filter_host_sip_handler(u32 func_id)
 	case SMC_SIP_IO_READ:
 	case SMC_SIP_IO_WRITE:
 	case SMC_SIP_GIC_SET_CPUCLASS:
+	case SMC_SIP_PWR_IO_DISABLE_PMIC_ARBITER:
+		blocked = false;
+		break;
+	default:
+		break;
+	}
+
+	return blocked;
+}
+
+/*
+ * Handler for ARM_SMCCC_OWNER_OEM calls.
+ * If this returns false, call may be forwarded to TZ.
+ */
+static bool smc_filter_host_oem_handler(u32 func_id)
+{
+	const u16 svc_cmd = ARM_SMCCC_FUNC_NUM(func_id);
+	bool blocked = true;
+
+	/*
+	 * Check which OEM calls are permitted from the host.
+	 * Only allow specific svc/cmd combinations.
+	 */
+	switch (svc_cmd) {
+	case SMC_OEM_HW_POWER_REBOOT:
 		blocked = false;
 		break;
 	default:
@@ -196,6 +221,10 @@ bool smc_filter_host_handler(struct user_pt_regs *regs)
 		break;
 	case ARM_SMCCC_OWNER_SIP:
 		blocked = smc_filter_host_sip_handler(func_id);
+		is_scm = true;
+		break;
+	case ARM_SMCCC_OWNER_OEM:
+		blocked = smc_filter_host_oem_handler(func_id);
 		is_scm = true;
 		break;
 	case ARM_SMCCC_OWNER_STANDARD:

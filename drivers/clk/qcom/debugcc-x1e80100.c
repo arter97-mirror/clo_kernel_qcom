@@ -25,6 +25,45 @@ static struct measure_clk_data debug_mux_priv = {
 	.xo_div4_cbcr = 0x62008,
 };
 
+static const char *const apss_cc_debug_mux_parent_names[] = {
+	"measure_only_ncc0_clk",
+	"measure_only_ncc1_clk",
+	"measure_only_ncc2_clk",
+};
+
+static int apss_cc_debug_mux_sels[] = {
+	0x15,		/* measure_only_ncc0_clk */
+	0x16,		/* measure_only_ncc1_clk */
+	0x17,		/* measure_only_ncc2_clk */
+};
+
+static int apss_cc_debug_mux_pre_divs[] = {
+	0x10,		/* measure_only_ncc0_clk */
+	0x10,		/* measure_only_ncc1_clk */
+	0x10,		/* measure_only_ncc2_clk */
+};
+
+static struct clk_debug_mux apss_cc_debug_mux = {
+	.priv = &debug_mux_priv,
+	.debug_offset = 0x0,
+	.post_div_offset = 0x4,
+	.cbcr_offset = 0x8,
+	.src_sel_mask = 0x1FF,
+	.src_sel_shift = 0,
+	.post_div_mask = 0xF,
+	.post_div_shift = 0,
+	.post_div_val = 4,
+	.mux_sels = apss_cc_debug_mux_sels,
+	.num_mux_sels = ARRAY_SIZE(apss_cc_debug_mux_sels),
+	.pre_div_vals = apss_cc_debug_mux_pre_divs,
+	.hw.init = &(const struct clk_init_data){
+		.name = "apss_cc_debug_mux",
+		.ops = &clk_debug_mux_ops,
+		.parent_names = apss_cc_debug_mux_parent_names,
+		.num_parents = ARRAY_SIZE(apss_cc_debug_mux_parent_names),
+	},
+};
+
 static const char *const av1e_cc_debug_mux_parent_names[] = {
 	"av1e_cc_av1e_core_axi_clk",
 	"av1e_cc_av1e_core_clk",
@@ -338,6 +377,7 @@ static struct clk_debug_mux disp_cc_debug_mux = {
 };
 
 static const char *const gcc_debug_mux_parent_names[] = {
+	"apss_cc_debug_mux",
 	"av1e_cc_debug_mux",
 	"cam_cc_debug_mux",
 	"disp_cc_debug_mux",
@@ -592,6 +632,7 @@ static const char *const gcc_debug_mux_parent_names[] = {
 };
 
 static int gcc_debug_mux_sels[] = {
+	0x1EB,		/* apss_cc_debug_mux */
 	0xB4,		/* av1e_cc_debug_mux */
 	0xA2,		/* cam_cc_debug_mux */
 	0xA7,		/* disp_cc_debug_mux */
@@ -994,6 +1035,7 @@ static struct mux_regmap_names mux_list[] = {
 	{ .mux = &disp_cc_debug_mux, .regmap_name = "qcom,dispcc" },
 	{ .mux = &cam_cc_debug_mux, .regmap_name = "qcom,camcc" },
 	{ .mux = &av1e_cc_debug_mux, .regmap_name = "qcom,av1ecc" },
+	{ .mux = &apss_cc_debug_mux, .regmap_name = "qcom,apsscc" },
 	{ .mux = &gcc_debug_mux, .regmap_name = "qcom,gcc" },
 };
 
@@ -1577,6 +1619,8 @@ static int clk_debug_x1e80100_probe(struct platform_device *pdev)
 	struct clk *clk;
 	int ret = 0, i;
 
+	BUILD_BUG_ON(ARRAY_SIZE(apss_cc_debug_mux_parent_names) !=
+		ARRAY_SIZE(apss_cc_debug_mux_sels));
 	BUILD_BUG_ON(ARRAY_SIZE(av1e_cc_debug_mux_parent_names) !=
 		ARRAY_SIZE(av1e_cc_debug_mux_sels));
 	BUILD_BUG_ON(ARRAY_SIZE(cam_cc_debug_mux_parent_names) !=

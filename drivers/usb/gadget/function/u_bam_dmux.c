@@ -581,6 +581,14 @@ gbam_epout_complete(struct usb_ep *ep, struct usb_request *req)
 	int			status = req->status;
 	int			queue = 0;
 
+	pr_debug("ep:(%pK)(%s) port:%p req_status:%d req->actual:%u\n",
+			ep, ep->name, port, req->status, req->actual);
+	if (!port) {
+		pr_err("port is null\n");
+		usb_ep_free_request(ep, req);
+		return;
+	}
+
 	switch (status) {
 	case 0:
 		skb_put(skb, req->actual);
@@ -596,7 +604,7 @@ gbam_epout_complete(struct usb_ep *ep, struct usb_request *req)
 		usb_ep_free_request(ep, req);
 		return;
 	default:
-		pr_err_ratelimited("%s: %s response error %d, %d/%d\n",
+		pr_debug("%s: %s response error %d, %d/%d\n",
 			__func__, ep->name, status, req->actual, req->length);
 		spin_lock(&port->port_lock_ul);
 		gbam_free_skb_to_pool(port, skb);

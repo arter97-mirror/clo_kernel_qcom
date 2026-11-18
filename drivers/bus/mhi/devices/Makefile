@@ -8,3 +8,5 @@ mhi_dev_satellite-objs += mhi_satellite.o
 obj-$(CONFIG_MHI_UCI) += mhi_dev_uci.o
 mhi_dev_uci-objs += mhi_uci.o
 
+obj-$(CONFIG_MHI_NETDEV) += mhi_netdev.o
+

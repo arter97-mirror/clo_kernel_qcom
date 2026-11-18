@@ -9,6 +9,8 @@
 
 unsigned long __read_mostly soc_flags;
 unsigned int trailblazer_floor_freq[MAX_CLUSTERS];
+unsigned int sf_misfit_delay_low_cap[MAX_CLUSTERS];
+unsigned int sf_misfit_delay_high_cap[MAX_CLUSTERS];
 cpumask_t asym_cap_sibling_cpus;
 cpumask_t pipeline_sync_cpus;
 cpumask_t storage_boost_cpus;
@@ -89,6 +91,8 @@ void walt_config(void)
 		high_perf_cluster_freq_cap[i] = FREQ_QOS_MAX_DEFAULT_VALUE;
 		sysctl_sched_idle_enough_clust[i] = SCHED_IDLE_ENOUGH_DEFAULT;
 		sysctl_sched_cluster_util_thres_pct_clust[i] = SCHED_CLUSTER_UTIL_THRES_PCT_DEFAULT;
+		sf_misfit_delay_low_cap[i] = 0;
+		sf_misfit_delay_high_cap[i] = 0;
 		trailblazer_floor_freq[i] = 0;
 		for (j = 0; j < MAX_CLUSTERS; j++) {
 			load_sync_util_thres[i][j] = 0;
@@ -197,6 +201,11 @@ void walt_config(void)
 		if (!strcmp(name, "ALOR_INTERPOSER") || !strcmp(name, "ALOR")
 				|| !strcmp(name, "ALORP") || !strcmp(name, "QCS8845"))
 			soc_feat_set(SOC_ENABLE_LIMIT_PRIME_USAGE);
+
+		for (i = 0; i < MAX_CLUSTERS - 1; i++) {
+			sf_misfit_delay_low_cap[i]  = 0;
+			sf_misfit_delay_high_cap[i] = 0;
+		}
 
 	} else if (!strcmp(name, "PINEAPPLE")) {
 		soc_feat_set(SOC_ENABLE_SILVER_RT_SPREAD_BIT);
@@ -329,7 +338,9 @@ void walt_config(void)
 		 * Do not put the whole cluster at Fmin during thermal halt condition.
 		 */
 		soc_feat_unset(SOC_ENABLE_THERMAL_HALT_LOW_FREQ_BIT);
-	} else if (!strcmp(name, "X1E80100") || !strcmp(name, "X1P42100")) {
+	} else if (!strcmp(name, "X1E80100") ||
+		   !strcmp(name, "X1P42100") ||
+		   !strcmp(name, "X1P42100_CANIM")) {
 		trailblazer_boost_thresh_ipc = 225;
 		trailblazer_floor_freq[0] = 2500000;
 		trailblazer_floor_freq[1] = 2500000;
@@ -340,6 +351,27 @@ void walt_config(void)
 		 * Enable explicitly for platforms that support SW cycle counter.
 		 */
 		soc_feat_set(SOC_ENABLE_SW_CYCLE_COUNTER_BIT);
+	} else if (!strcmp(name, "MAHUA")) {
+		/*
+		 * Glymur (MAHUA) SoC: 3-cluster Oryon topology (cluster0: cpu0-5,
+		 * cluster1: cpu6-11, cluster2: cpu12-17). Enable Trailblazer,
+		 * SW cycle counter, sync freq cap, and RT spread features.
+		 */
+		trailblazer_boost_thresh_ipc = 225;
+		trailblazer_floor_freq[0] = 2500000;
+		trailblazer_floor_freq[1] = 2500000;
+		trailblazer_floor_freq[2] = 3860000;
+		sysctl_walt_features |= WALT_FEAT_TRAILBLAZER_BIT;
+		sysctl_walt_features |= WALT_FEAT_SYNC_FREQ_CAP_BIT;
+
+		/*
+		 * By default this SOC flag will be disabled.
+		 * Enable explicitly for platforms that support SW cycle counter.
+		 */
+		soc_feat_set(SOC_ENABLE_SW_CYCLE_COUNTER_BIT);
+
+		soc_feat_set(SOC_ENABLE_BOOST_TO_NEXT_CLUSTER_BIT);
+		soc_feat_set(SOC_ENABLE_SILVER_RT_SPREAD_BIT);
 	} else if (!strcmp(name, "SERAPH") || !strcmp(name, "PIKACHU")) {
 		soc_feat_unset(SOC_ENABLE_CONSERVATIVE_BOOST_TOPAPP_BIT);
 		soc_feat_unset(SOC_ENABLE_CONSERVATIVE_BOOST_FG_BIT);

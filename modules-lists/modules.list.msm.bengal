@@ -19,6 +19,7 @@ dcc_v2.ko
 llcc-qcom.ko
 clk-dummy.ko
 clk-qcom.ko
+cx-ipeak.ko
 sched-walt.ko
 debug_symbol.ko
 qcom_soc_wdt.ko
@@ -63,6 +64,7 @@ pinctrl-khaje.ko
 pinctrl-bengal.ko
 pinctrl-scuba.ko
 qcom_tsens.ko
+qcom-dload-mode.ko
 qcom-scm.ko
 qcom_hwspinlock.ko
 qrtr.ko

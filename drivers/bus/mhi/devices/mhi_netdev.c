@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -17,6 +17,7 @@
 #include <linux/kthread.h>
 #include <linux/mhi.h>
 #include <linux/mhi_misc.h>
+#include <linux/mod_devicetable.h>
 
 #define MHI_NETDEV_DRIVER_NAME "mhi_netdev"
 #define WATCHDOG_TIMEOUT (30 * HZ)
@@ -96,7 +97,6 @@ struct mhi_netdev {
 
 	/* debug stats */
 	u32 abuffers, kbuffers, rbuffers;
-	bool napi_scheduled;
 };
 
 struct mhi_netdev_priv {
@@ -452,7 +452,6 @@ static int mhi_netdev_alloc_thread(void *data)
 
 		/* replenish the ring */
 		napi_schedule(mhi_netdev->napi);
-		mhi_netdev->napi_scheduled = true;
 
 		/* wait for buffers to run low or thread to stop */
 		wait_event_interruptible(mhi_netdev->alloc_event,
@@ -492,7 +491,6 @@ static int mhi_netdev_poll(struct napi_struct *napi, int budget)
 	if (rx_work < 0) {
 		MSG_ERR("Error polling ret: %d\n", rx_work);
 		napi_complete(napi);
-		mhi_netdev->napi_scheduled = false;
 		return 0;
 	}
 
@@ -503,10 +501,8 @@ static int mhi_netdev_poll(struct napi_struct *napi, int budget)
 		mhi_netdev_queue(mhi_netdev, rsc_dev->mhi_dev);
 
 	/* complete work if # of packet processed less than allocated budget */
-	if (rx_work < budget) {
-		napi_complete(napi);
-		mhi_netdev->napi_scheduled = false;
-	}
+	if (rx_work < budget)
+		napi_complete_done(napi, rx_work);
 
 	MSG_VERB("Polled: %d\n", rx_work);
 
@@ -676,6 +672,23 @@ static void mhi_netdev_setup(struct net_device *dev)
 	dev->watchdog_timeo = WATCHDOG_TIMEOUT;
 }
 
+/* Allocate and register the NAPI instance backing mhi_netdev_poll() */
+static int mhi_netdev_enable_napi(struct mhi_netdev *mhi_netdev)
+{
+	mhi_netdev->napi = devm_kzalloc(&mhi_netdev->mhi_dev->dev,
+					sizeof(*mhi_netdev->napi), GFP_KERNEL);
+	if (!mhi_netdev->napi) {
+		MSG_ERR("Failed to allocate NAPI struct\n");
+		return -ENOMEM;
+	}
+
+	netif_napi_add_weight(mhi_netdev->ndev, mhi_netdev->napi,
+			      mhi_netdev_poll,
+			      MHI_NETDEV_NAPI_POLL_WEIGHT);
+
+	return 0;
+}
+
 /* enable mhi_netdev netdev, call only after grabbing mhi_netdev.mutex */
 static int mhi_netdev_enable_iface(struct mhi_netdev *mhi_netdev)
 {
@@ -695,22 +708,16 @@ static int mhi_netdev_enable_iface(struct mhi_netdev *mhi_netdev)
 		return -ENOMEM;
 	}
 
-	mhi_netdev->ndev->mtu = mhi_dev->mhi_cntrl->buffer_len;
+	mhi_netdev->ndev->mtu = mhi_netdev->mru;
 
 	SET_NETDEV_DEV(mhi_netdev->ndev, &mhi_dev->dev);
 	mhi_netdev_priv = netdev_priv(mhi_netdev->ndev);
 	mhi_netdev_priv->mhi_netdev = mhi_netdev;
 	rtnl_unlock();
 
-	mhi_netdev->napi = devm_kzalloc(&mhi_dev->dev,
-					sizeof(*mhi_netdev->napi), GFP_KERNEL);
-	if (!mhi_netdev->napi) {
-		ret = -ENOMEM;
+	ret = mhi_netdev_enable_napi(mhi_netdev);
+	if (ret)
 		goto napi_alloc_fail;
-	}
-
-	netif_napi_add(mhi_netdev->ndev, mhi_netdev->napi,
-		       mhi_netdev_poll, MHI_NETDEV_NAPI_POLL_WEIGHT);
 
 	ret = register_netdev(mhi_netdev->ndev);
 	if (ret) {
@@ -797,6 +804,7 @@ static void mhi_netdev_xfer_dl_cb(struct mhi_device *mhi_dev,
 
 	if (unlikely(!chain)) {
 		mhi_netdev_push_skb(mhi_netdev, mhi_buf, mhi_result);
+		napi_schedule(mhi_netdev->napi);
 		return;
 	}
 
@@ -819,6 +827,8 @@ static void mhi_netdev_xfer_dl_cb(struct mhi_device *mhi_dev,
 	} else {
 		__free_pages(netbuf->page, mhi_netdev->order);
 	}
+
+	napi_schedule(mhi_netdev->napi);
 }
 
 static void mhi_netdev_status_cb(struct mhi_device *mhi_dev,
@@ -830,7 +840,6 @@ static void mhi_netdev_status_cb(struct mhi_device *mhi_dev,
 		return;
 
 	napi_schedule(mhi_netdev->napi);
-	mhi_netdev->napi_scheduled = true;
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -1129,7 +1138,6 @@ static int mhi_netdev_probe(struct mhi_device *mhi_dev,
 	 * by triggering a napi_poll
 	 */
 	napi_schedule(mhi_netdev->napi);
-	mhi_netdev->napi_scheduled = true;
 
 	return 0;
 }
@@ -1142,8 +1150,17 @@ static const struct mhi_netdev_driver_data hw0_308_data = {
 	.interface_name = "rmnet_mhi",
 };
 
+static const struct mhi_netdev_driver_data sw0_308_data = {
+	.mru = 0x2000,
+	.chain_skb = true,
+	.is_rsc_chan = false,
+	.has_rsc_child = false,
+	.interface_name = "mhi_swip",
+};
+
 static const struct mhi_device_id mhi_netdev_match_table[] = {
 	{ .chan = "IP_HW0", .driver_data = (kernel_ulong_t)&hw0_308_data },
+	{ .chan = "IP_SW0", .driver_data = (kernel_ulong_t)&sw0_308_data },
 	{},
 };
 

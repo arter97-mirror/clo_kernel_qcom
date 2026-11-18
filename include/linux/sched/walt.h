@@ -174,6 +174,13 @@ struct walt_task_struct {
 	atomic_t			event_windows;
 	u8				lib_app_state;
 
+	/*
+	 * Smart Freq misfit delay timer (per-task).
+	 *   0       = no pending sf_misfit
+	 *   non-zero = sf_misfit pending; value is the wallclock timestamp
+	 *              when misfit was first detected under smart_freq limiting.
+	 */
+	u64				sf_misfit_time;
 };
 
 #define wts_to_ts(wts) ({ \

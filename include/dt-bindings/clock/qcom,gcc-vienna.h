@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /*
- * Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _DT_BINDINGS_CLK_QCOM_GCC_VIENNA_H
@@ -157,6 +157,7 @@
 #define GCC_VIDEO_VENUS_CLK_SRC					147
 #define GCC_VIDEO_VENUS_CTL_CLK					148
 #define GCC_VIDEO_XO_CLK					149
+#define GCC_PWM0_XO512_CLK_SRC					150
 
 /* GCC resets */
 #define GCC_CAMSS_OPE_BCR					0

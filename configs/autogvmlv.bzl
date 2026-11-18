@@ -98,6 +98,7 @@ autogvmlv_config = {
     "CONFIG_QCOM_WDT_CORE": "m",
     "CONFIG_QRTR": "m",
     "CONFIG_QRTR_MHI": "m",
+    "CONFIG_QSEECOM_PROXY": "m",
     "CONFIG_QTEE_SHM_BRIDGE": "y",
     "CONFIG_QTI_CRYPTO_VIRTUALIZATION": "m",
     "CONFIG_QTI_IOMMU_SUPPORT": "m",

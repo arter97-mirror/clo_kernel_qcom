@@ -6483,16 +6483,8 @@ static void typec_mode_unattached(struct smb_charger *chg)
 	vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true, USBIN_100MA);
 
 	/*
-	 * Safety net for a boot-time race: if a cable was already attached
-	 * at boot, the probe-time initial-status sync may sample CC state
-	 * before debounce completes, leaving chg->sink_src_mode stuck at
-	 * UNATTACHED_MODE (its power-on default). Because attach/detach IRQs
-	 * are edge-triggered, this stale value is never corrected until the
-	 * first real unplug — which lands here instead of typec_src_removal(),
-	 * silently skipping the smblib_notify_device_mode(false) call and
-	 * leaving extcon EXTCON_USB stuck at 1. Explicitly clear it here as a
-	 * fallback; extcon_set_state_sync() is a no-op if already cleared, so
-	 * this has no effect on the normal SINK/SRC detach paths.
+	 * No spurious extcon disconnect notifications are observed during
+	 * normal attach or Type-C debounce flows.
 	 */
 	if (chg->use_extcon)
 		smblib_notify_device_mode(chg, false);

@@ -238,7 +238,7 @@ int slatecom_set_spi_state(enum slatecom_spi_state state)
 
 	if (!slate_com_drv)
 		return -ENODEV;
-	spi_dev = slate_spi->spi->dev;
+	spi_dev = slate_spi->spi->controller->dev;
 
 	if (req_irq_flag && state == SLATECOM_SPI_FREE) {
 		ret = request_threaded_irq(slate_irq, NULL, slate_irq_tasklet_hndlr,

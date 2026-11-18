@@ -262,40 +262,73 @@ TRACE_EVENT(bw_hwmon_debug,
 
 TRACE_EVENT(bwprof_last_sample_meas,
 
-	TP_PROTO(const char *name, u64 ts, u32 meas_mbps_0, u32 meas_mbps_1,
-			u32 meas_mbps_2, u32 max_mbps, u32 mem_freq),
+	TP_PROTO(const char *name, u8 master_id, u64 ts, u32 meas_mbps,
+					u32 max_mbps, u32 mem_freq),
 
-	TP_ARGS(name, ts, meas_mbps_0, meas_mbps_1, meas_mbps_2, max_mbps,
-				mem_freq),
+	TP_ARGS(name, master_id, ts, meas_mbps, max_mbps, mem_freq),
 
 	TP_STRUCT__entry(
 		__string(name, name)
+		__field(u8, master_id)
 		__field(u64, ts)
-		__field(u32, meas_mbps_0)
-		__field(u32, meas_mbps_1)
-		__field(u32, meas_mbps_2)
+		__field(u32, meas_mbps)
 		__field(u32, max_mbps)
 		__field(u32, mem_freq)
 	),
 
 	TP_fast_assign(
 		__assign_str(name);
+		__entry->master_id = master_id;
 		__entry->ts = ts;
-		__entry->meas_mbps_0 = meas_mbps_0;
-		__entry->meas_mbps_1 = meas_mbps_1;
-		__entry->meas_mbps_2 = meas_mbps_2;
+		__entry->meas_mbps = meas_mbps;
 		__entry->max_mbps = max_mbps;
 		__entry->mem_freq = mem_freq;
 	),
 
-	TP_printk("dev=%s ts=%llu meas_mbps_0=%u meas_mbps_1=%u meas_mbps_2=%u max_mbps=%u mem_freq=%u",
+	TP_printk("dev=%s master_id=%u ts=%llu meas_mbps=%u max_mbps=%u mem_freq=%u",
 		__get_str(name),
+		__entry->master_id,
 		__entry->ts,
-		__entry->meas_mbps_0,
-		__entry->meas_mbps_1,
-		__entry->meas_mbps_2,
+		__entry->meas_mbps,
 		__entry->max_mbps,
 		__entry->mem_freq)
+);
+
+TRACE_EVENT(bwprof_hist_last_sample,
+
+	TP_PROTO(const char *name, u8 master_id, u64 ts, u8 bucket_0,
+					u8 bucket_1, u8 bucket_2, u8 bucket_3),
+
+	TP_ARGS(name, master_id, ts, bucket_0, bucket_1, bucket_2, bucket_3),
+
+	TP_STRUCT__entry(
+		__string(name, name)
+		__field(u8, master_id)
+		__field(u64, ts)
+		__field(u8, bucket_0)
+		__field(u8, bucket_1)
+		__field(u8, bucket_2)
+		__field(u8, bucket_3)
+	),
+
+	TP_fast_assign(
+		__assign_str(name);
+		__entry->master_id = master_id;
+		__entry->ts = ts;
+		__entry->bucket_0 = bucket_0;
+		__entry->bucket_1 = bucket_1;
+		__entry->bucket_2 = bucket_2;
+		__entry->bucket_3 = bucket_3;
+	),
+
+	TP_printk("dev=%s master_id=%u ts=%llu bucket_0=%u bucket_1=%u bucket_2=%u bucket_3=%u",
+		__get_str(name),
+		__entry->master_id,
+		__entry->ts,
+		__entry->bucket_0,
+		__entry->bucket_1,
+		__entry->bucket_2,
+		__entry->bucket_3)
 );
 
 #endif /* _TRACE_DCVS_H */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2014, 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/export.h>
@@ -449,28 +449,38 @@ int qcom_cc_really_probe(struct device *dev,
 	if (ret)
 		goto deinit_clk_regulator;
 
+	if (desc->use_rpm) {
+		ret = devm_pm_runtime_enable(dev);
+		if (ret)
+			goto proxy_unvote;
+
+		ret = pm_runtime_resume_and_get(dev);
+		if (ret)
+			goto proxy_unvote;
+	}
+
 	if (desc->num_resets) {
 		ret = devm_reset_controller_register(dev, &reset->rcdev);
 		if (ret)
-			goto proxy_unvote;
+			goto put_rpm;
 	}
 
 	if (desc->gdscs && desc->num_gdscs) {
 		scd = devm_kzalloc(dev, sizeof(*scd), GFP_KERNEL);
 		if (!scd) {
 			ret = -ENOMEM;
-			goto proxy_unvote;
+			goto put_rpm;
 		}
 		scd->dev = dev;
 		scd->scs = desc->gdscs;
 		scd->num = desc->num_gdscs;
 		ret = gdsc_register(scd, &reset->rcdev, regmap);
 		if (ret)
-			goto proxy_unvote;
+			goto put_rpm;
 		ret = devm_add_action_or_reset(dev, qcom_cc_gdsc_unregister,
 					       scd);
 		if (ret)
-			goto proxy_unvote;
+			goto put_rpm;
 	}
 
 	cc->rclks = rclks;
@@ -487,7 +497,7 @@ int qcom_cc_really_probe(struct device *dev,
 
 		ret = devm_clk_hw_register(dev, clk_hws[i]);
 		if (ret)
-			goto proxy_unvote;
+			goto put_rpm;
 	}
 
 	for (i = 0; i < num_clks; i++) {
@@ -496,7 +506,7 @@ int qcom_cc_really_probe(struct device *dev,
 
 		ret = devm_clk_register_regmap(dev, rclks[i]);
 		if (ret)
-			goto proxy_unvote;
+			goto put_rpm;
 
 		clk_hw_populate_clock_opp_table(dev->of_node, &rclks[i]->hw);
 
@@ -511,10 +521,15 @@ int qcom_cc_really_probe(struct device *dev,
 
 	ret = devm_of_clk_add_hw_provider(dev, qcom_cc_clk_hw_get, cc);
 	if (ret)
-		goto proxy_unvote;
+		goto put_rpm;
 
-	return qcom_cc_icc_register(dev, desc);
+	ret = qcom_cc_icc_register(dev, desc);
 
+put_rpm:
+	if (desc->use_rpm)
+		pm_runtime_put(dev);
+	if (!ret)
+		return ret;
 proxy_unvote:
 	clk_vdd_proxy_unvote(dev, desc);
 deinit_clk_regulator:

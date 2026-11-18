@@ -65,3 +65,9 @@ blocklist qca_cld3_qca6390
 blocklist qca_cld3_qca6490
 blocklist qca_cld3_qca6490_cnss2
 blocklist qca_cld3_qcn7605
+
+# Modules used by LA Prime lunch target (auto_gen_prime). They have to be blocked for
+# other lunch targets to avoid bloat and conflicts (e.g. virtio_blk vs virtio_block).
+blocklist virtio_snd
+blocklist virtio_dma_buf
+blocklist virtio-gpu

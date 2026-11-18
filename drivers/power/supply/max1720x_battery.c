@@ -419,6 +419,9 @@
 #define MODELGAUGE_DATA_I2C_ADDR 0x36
 #define NONVOLATILE_DATA_I2C_ADDR 0x0B
 
+#define MAX1720X_COMMSTAT_WR_PROT_UNLOCK  0xFF06
+#define MAX1720X_COMMSTAT_WR_PROT_LOCK    0x00F9
+
 struct max1720x_platform_data {
 	/*
 	 * rsense in miliOhms.
@@ -1752,7 +1755,7 @@ static ssize_t fet_store(struct device *dev,
 	if (ret < 0)
 		goto error;
 
-	read_val &= 0xFF06;
+	read_val &= MAX1720X_COMMSTAT_WR_PROT_UNLOCK;
 	// Unlock Write Protection
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
@@ -1763,7 +1766,7 @@ static ssize_t fet_store(struct device *dev,
 	if (ret < 0)
 		goto error;
 
-	read_val |= 0x00F9;
+	read_val |= MAX1720X_COMMSTAT_WR_PROT_LOCK;
 	// lock Write Protection
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
@@ -1818,7 +1821,7 @@ static ssize_t dfet_store(struct device *dev,
 	if (ret < 0)
 		goto error;
 
-	read_val &= 0xFF06;
+	read_val &= MAX1720X_COMMSTAT_WR_PROT_UNLOCK;
 	// Unlock Write Protection
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
@@ -1829,7 +1832,7 @@ static ssize_t dfet_store(struct device *dev,
 	if (ret < 0)
 		goto error;
 
-	read_val |= 0x00F9;
+	read_val |= MAX1720X_COMMSTAT_WR_PROT_LOCK;
 	// lock Write Protection
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
 	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], read_val);
@@ -2070,8 +2073,10 @@ static ssize_t register_store_store(struct device *dev,
 		goto error;
 
 	// Unlock Write Protection
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val & 0xFF06);
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val & 0xFF06);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+				commstat_val & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+				commstat_val & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 
 	if ((register_val & 0x100) == 0x100) {
 		priv->client->addr = NONVOLATILE_DATA_I2C_ADDR;
@@ -2096,8 +2101,10 @@ static ssize_t register_store_store(struct device *dev,
 	// Lock Write Protection
 	if (register_val == priv->regs[COMMSTAT_REG])
 		commstat_val = data_val;
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val | 0x00F9);
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val | 0x00F9);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+				commstat_val | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					commstat_val | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 
 	mutex_unlock(&priv->lock);
 	return count;
@@ -4429,8 +4436,10 @@ static ssize_t control_store(struct device *dev,
 		}
 
 		// Unlock Write Protection
-		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val & 0xFF06);
-		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val & 0xFF06);
+		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					commstat_val & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					commstat_val & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 
 		// Firmware Restart
 		regmap_update_bits(priv->regmap, priv->regs[CONFIG2_REG],
@@ -4441,8 +4450,10 @@ static ssize_t control_store(struct device *dev,
 		msleep(500);
 
 		// Lock Write Protection
-		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val | 0x00F9);
-		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], commstat_val | 0x00F9);
+		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					commstat_val | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+		regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					commstat_val | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 		mutex_unlock(&priv->lock);
 	} else {
 		return -EINVAL;
@@ -4500,8 +4511,10 @@ static ssize_t program_nvm_memory_store(struct device *dev,
 		goto error;
 
 	// Unlock Write Protection
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data & 0xFF06);
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data & 0xFF06);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 
 nvm_block_copy:
 	// Break infinite loop
@@ -4600,8 +4613,10 @@ nvm_block_copy:
 		goto error;
 
 	// lock Write Protection
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data | 0x00F9);
-	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data | 0x00F9);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+	regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+					data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 
 	mutex_unlock(&priv->lock);
 	return len;
@@ -4931,13 +4946,23 @@ static int max1720x_regmap_write(struct max1720x_priv *priv, unsigned int reg, u
 	struct regmap *map = priv->regmap;
 
 	mutex_lock(&priv->lock);
+
+	/* Protect NNVCFG1 bit 8 (enProt) from being cleared */
+	if (reg == priv->regs[NNVCFG1_REG]) {
+		if (!(val & BIT(8))) {
+			val |= BIT(8);
+		}
+	}
+
 	if (priv->driver_data == ID_MAX17320 || priv->driver_data == ID_MAX17330 ||
 	    priv->driver_data == ID_MAX17332 || priv->driver_data == ID_MAX17335) {
 		ret = regmap_read(priv->regmap, priv->regs[COMMSTAT_REG], &data);
 		if (!(ret < 0)) {
 			// Unlock Write Protection
-			regmap_write(map, priv->regs[COMMSTAT_REG], data & 0xFF06);
-			regmap_write(map, priv->regs[COMMSTAT_REG], data & 0xFF06);
+			regmap_write(map, priv->regs[COMMSTAT_REG],
+							data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+			regmap_write(map, priv->regs[COMMSTAT_REG],
+							data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 
 			if ((reg & 0x100) == 0x100) {
 				priv->client->addr = NONVOLATILE_DATA_I2C_ADDR;
@@ -4948,8 +4973,10 @@ static int max1720x_regmap_write(struct max1720x_priv *priv, unsigned int reg, u
 			}
 
 			// lock Write Protection
-			regmap_write(map, priv->regs[COMMSTAT_REG], data | 0x00F9);
-			regmap_write(map, priv->regs[COMMSTAT_REG], data | 0x00F9);
+			regmap_write(map, priv->regs[COMMSTAT_REG],
+							data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+			regmap_write(map, priv->regs[COMMSTAT_REG],
+							data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 		}
 	} else {
 		if ((reg & 0x100) == 0x100) {
@@ -5860,17 +5887,17 @@ static int max1720x_init(struct max1720x_priv *priv)
 	u16 max17332_nvm_defaults[][2] = {
 		{priv->regs[NRSENSE_REG], 0x0005},
 		{priv->regs[NRCOMP0_REG], 0x04B8},
-		{priv->regs[NDESIGNCAP_REG], 0x2A83},
+		{priv->regs[NDESIGNCAP_REG], 0x54C3},
 		{priv->regs[NFULLCFG_REG], 0x0785},
-		{priv->regs[NICHGTERM_REG], 0x01E0},
+		{priv->regs[NICHGTERM_REG], 0x0040},
 		{priv->regs[NSTEPCURR_REG], 0x0000},
 		{priv->regs[NSTEPVOLT_REG], 0x0000},
 		{priv->regs[NPACKCFG_REG], 0x0000},
-		{priv->regs[NVCHGCFG1_REG], 0x0280},
+		{priv->regs[NVCHGCFG1_REG], 0x23C2},
 		{priv->regs[NVCHGCFG2_REG], 0x0000},
 		{priv->regs[NICHGCFG1_REG], 0x06E0},
 		{priv->regs[NICHGCFG2_REG], 0x0000},
-		{priv->regs[NUVPRTTH_REG], 0x0008},
+		{priv->regs[NUVPRTTH_REG], 0xA008},
 		{priv->regs[NTPRTTH1_REG], 0x1112},
 		{priv->regs[NTPRTTH2_REG], 0xA028},
 		{priv->regs[NPROTMISCTH_REG], 0x7A5F},
@@ -5884,17 +5911,17 @@ static int max1720x_init(struct max1720x_priv *priv)
 	u16 max17335_nvm_defaults[][2] = {
 		{priv->regs[NRSENSE_REG], 0x0005},
 		{priv->regs[NRCOMP0_REG], 0x04B8},
-		{priv->regs[NDESIGNCAP_REG], 0x2A83},
+		{priv->regs[NDESIGNCAP_REG], 0x54C3},
 		{priv->regs[NFULLCFG_REG], 0x0785},
-		{priv->regs[NICHGTERM_REG], 0x01E0},
+		{priv->regs[NICHGTERM_REG], 0x0040},
 		{priv->regs[NSTEPCURR_REG], 0x0000},
 		{priv->regs[NSTEPVOLT_REG], 0x0000},
 		{priv->regs[NPACKCFG_REG], 0x0000},
-		{priv->regs[NVCHGCFG1_REG], 0x0280},
+		{priv->regs[NVCHGCFG1_REG], 0x23C2},
 		{priv->regs[NVCHGCFG2_REG], 0x0000},
 		{priv->regs[NICHGCFG1_REG], 0x06E0},
 		{priv->regs[NICHGCFG2_REG], 0x0000},
-		{priv->regs[NUVPRTTH_REG], 0x0008},
+		{priv->regs[NUVPRTTH_REG], 0xA008},
 		{priv->regs[NTPRTTH1_REG], 0x1112},
 		{priv->regs[NTPRTTH2_REG], 0xA028},
 		{priv->regs[NPROTMISCTH_REG], 0x7A5F},
@@ -5929,8 +5956,10 @@ static int max1720x_init(struct max1720x_priv *priv)
 		ret = regmap_read(priv->regmap, priv->regs[COMMSTAT_REG], &data);
 		if (!(ret < 0)) {
 			// Unlock Write Protection
-			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data & 0xFF06);
-			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data & 0xFF06);
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+							data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+							data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 
 			priv->client->addr = NONVOLATILE_DATA_I2C_ADDR;
 			if (priv->driver_data == ID_MAX17330) {
@@ -5965,8 +5994,10 @@ static int max1720x_init(struct max1720x_priv *priv)
 			msleep(500);
 
 			// lock Write Protection
-			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data | 0x00F9);
-			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG], data | 0x00F9);
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+							data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+							data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 		}
 		priv->pdata->rsense = 5;
 	}
@@ -6117,9 +6148,9 @@ static int max1720x_probe(struct i2c_client *client)
 				if (!(ret < 0)) {
 					// Unlock Write Protection
 					regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
-						     data & 0xFF06);
+							data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 					regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
-						     data & 0xFF06);
+							data & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
 
 					regmap_update_bits(priv->regmap, priv->regs[CONFIG_REG],
 							   MAX1720X_CONFIG_ALRT_EN,
@@ -6127,9 +6158,9 @@ static int max1720x_probe(struct i2c_client *client)
 
 					// lock Write Protection
 					regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
-						     data | 0x00F9);
+							data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 					regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
-						     data | 0x00F9);
+							data | MAX1720X_COMMSTAT_WR_PROT_LOCK);
 				}
 			}  else {
 				regmap_update_bits(priv->regmap, priv->regs[CONFIG_REG],
@@ -6159,6 +6190,48 @@ err_attr:
 	return ret;
 }
 
+static void max1720x_shutdown(struct i2c_client *client)
+{
+	struct max1720x_priv *priv = i2c_get_clientdata(client);
+	int commstat_val;
+	int ret;
+
+	cancel_work_sync(&priv->init_worker);
+	mutex_lock(&priv->lock);
+
+	if (priv->driver_data == ID_MAX17320 ||
+		priv->driver_data == ID_MAX17330 ||
+		priv->driver_data == ID_MAX17332 ||
+		priv->driver_data == ID_MAX17335) {
+
+		/* For protected variants: Unlock -> Disable -> Lock */
+		ret = regmap_read(priv->regmap, priv->regs[COMMSTAT_REG], &commstat_val);
+		if (ret == 0) {
+			/* 1. Unlock write protection */
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+						commstat_val & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+						commstat_val & MAX1720X_COMMSTAT_WR_PROT_UNLOCK);
+
+			/* 2. Disable alerts using your generic register index */
+			regmap_update_bits(priv->regmap, priv->regs[CONFIG_REG],
+					MAX1720X_CONFIG_ALRT_EN, 0);
+
+			/* 3. Lock write protection */
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+						commstat_val | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+			regmap_write(priv->regmap, priv->regs[COMMSTAT_REG],
+						commstat_val | MAX1720X_COMMSTAT_WR_PROT_LOCK);
+		}
+	} else {
+		/* For non-protected variants: Directly disable */
+		regmap_update_bits(priv->regmap, priv->regs[CONFIG_REG],
+					MAX1720X_CONFIG_ALRT_EN, 0);
+	}
+
+	mutex_unlock(&priv->lock);
+}
+
 static void max1720x_remove(struct i2c_client *client)
 {
 	struct max1720x_priv *priv = i2c_get_clientdata(client);
@@ -6174,6 +6247,8 @@ static int max1720x_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 
+	dev_dbg(dev, "MAX1720x suspending\n");
+
 	if (client->irq) {
 		disable_irq(client->irq);
 		enable_irq_wake(client->irq);
@@ -6185,6 +6260,8 @@ static int max1720x_suspend(struct device *dev)
 static int max1720x_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+
+	dev_dbg(dev, "MAX1720x resuming\n");
 
 	if (client->irq) {
 		disable_irq_wake(client->irq);
@@ -6260,6 +6337,7 @@ static struct i2c_driver max1720x_i2c_driver = {
 	},
 	.probe = max1720x_probe,
 	.remove = max1720x_remove,
+	.shutdown = max1720x_shutdown,
 	.id_table = max1720x_id,
 };
 module_i2c_driver(max1720x_i2c_driver);

@@ -12,7 +12,7 @@
 
 #define MIN_MS	1
 #define MAX_MS	2000
-#define MAX_MASTERS	3
+#define MAX_MASTERS	8
 #define MAX_BUCKETS	4
 #define SAMPLING_1MS	1
 #define SAMPLING_10MS	10
@@ -104,6 +104,7 @@ struct bucket_info {
 
 struct sample_ms_info {
 	uint8_t hist;
+	uint8_t num_samples;
 	uint16_t sample_ms;
 } __packed;
 
@@ -146,6 +147,7 @@ struct bwprof_dev_data {
 	u32	hw_cnt;
 	u32	num_inited_hw;
 	u8	num_masters;
+	u8	num_samples;
 	u16	sample_ms;
 	u8	log_level;
 	char set_config_str[256];

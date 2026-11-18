@@ -393,6 +393,35 @@ static const struct qfprom_soc_compatible_data x1e80100_qfprom = {
 	.nkeepout = ARRAY_SIZE(x1e80100_qfprom_keepout)
 };
 
+static const struct nvmem_keepout glymur_qfprom_keepout[] = {
+	{ .start = 0x20,  .end = 0x24 },
+	{ .start = 0x28,  .end = 0x30 },
+	{ .start = 0x34,  .end = 0x40 },
+	{ .start = 0x58,  .end = 0x60 },
+	{ .start = 0x68,  .end = 0x70 },
+	{ .start = 0x90,  .end = 0x100 },
+	{ .start = 0x180, .end = 0x200 },
+	{ .start = 0x280, .end = 0x300 },
+	{ .start = 0x328, .end = 0x400 },
+	{ .start = 0x4d0, .end = 0x500 },
+	{ .start = 0x550, .end = 0x600 },
+	{ .start = 0x608, .end = 0x610 },
+	{ .start = 0x618, .end = 0x630 },
+	{ .start = 0x638, .end = 0x700 },
+	{ .start = 0x738, .end = 0x73c },
+	{ .start = 0x74c, .end = 0x770 },
+	{ .start = 0x930, .end = 0x948 },
+	{ .start = 0x950, .end = 0x958 },
+	{ .start = 0xbb0, .end = 0xcf0 },
+	{ .start = 0xd38, .end = 0xe00 },
+	{ .start = 0xe68, .end = 0x1000 },
+};
+
+static const struct qfprom_soc_compatible_data glymur_qfprom = {
+	.keepout = glymur_qfprom_keepout,
+	.nkeepout = ARRAY_SIZE(glymur_qfprom_keepout)
+};
+
 /**
  * qfprom_disable_fuse_blowing() - Undo enabling of fuse blowing.
  * @priv: Our driver data.
@@ -737,6 +766,7 @@ static const struct of_device_id qfprom_of_match[] = {
 	{ .compatible = "qcom,bourtzi-qfprom", .data = &ravelin_qfprom},
 	{ .compatible = "qcom,pikachu-qfprom", .data = &pikachu_qfprom},
 	{ .compatible = "qcom,x1e80100-qfprom", .data = &x1e80100_qfprom},
+	{ .compatible = "qcom,glymur-qfprom", .data = &glymur_qfprom},
 	{/* sentinel */},
 };
 MODULE_DEVICE_TABLE(of, qfprom_of_match);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <ufs/ufshcd.h>
@@ -123,10 +123,13 @@ static int ufshcd_qti_crypto_derive_sw_secret(struct blk_crypto_profile *profile
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
 	int err;
 
+	ufshcd_hold(hba);
 	err = qcom_ice_derive_sw_secret(host->ice, wkey, wkey_size, sw_secret);
 	if (err)
 		pr_err("%s: error deriving software secret, err = %d\n",
 		       __func__, err);
+
+	ufshcd_release(hba);
 
 	return err;
 }

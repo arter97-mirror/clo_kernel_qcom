@@ -138,5 +138,5 @@ module_exit(rename_devices_exit);
 
 MODULE_DESCRIPTION("Rename devices");
 MODULE_LICENSE("GPL");
-MODULE_SOFTDEP("pre: virtio_block");
+MODULE_SOFTDEP("pre: virtio_blk");
 MODULE_SOFTDEP("pre: virtio_mmio");

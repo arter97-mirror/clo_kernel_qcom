@@ -25,7 +25,7 @@
 
 /* GPU_CC power domains */
 #define GPU_CC_CX_GDSC						0
-#define GPU_CC_CX_GMU_GDSC					1
+#define GPU_CC_CX_GPU_GDSC					1
 #define GPU_CC_CX_SMMU_GDSC					2
 #define GPU_CC_GX_GDSC						3
 

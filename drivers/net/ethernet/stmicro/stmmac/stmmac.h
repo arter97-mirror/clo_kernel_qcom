@@ -5,6 +5,7 @@
 
   Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
 *******************************************************************************/
+// Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 #ifndef __STMMAC_H__
 #define __STMMAC_H__
@@ -434,6 +435,7 @@ int stmmac_reinit_queues(struct net_device *dev, u32 rx_cnt, u32 tx_cnt);
 int stmmac_reinit_ringparam(struct net_device *dev, u32 rx_size, u32 tx_size);
 int stmmac_bus_clks_config(struct stmmac_priv *priv, bool enabled);
 void stmmac_fpe_apply(struct stmmac_priv *priv);
+void stmmac_handle_switch_reset(struct stmmac_priv *priv);
 
 static inline bool stmmac_xdp_is_enabled(struct stmmac_priv *priv)
 {

@@ -1084,6 +1084,10 @@ static int mhi_get_capability_offset(struct mhi_controller *mhi_cntrl,
 				 MISC_CAP_MASK, offset);
 	if (ret)
 		return ret;
+
+	/* a zero capability pointer means the device has no capability list */
+	if (!*offset)
+		return -ENXIO;
 	do {
 		if (*offset >= MHI_REG_SIZE)
 			return -ENXIO;
@@ -1713,8 +1717,10 @@ int mhi_controller_set_sfr_support(struct mhi_controller *mhi_cntrl, size_t len)
 
 	sfr_info->len = len;
 	sfr_info->str = kzalloc(len, GFP_KERNEL);
-	if (!sfr_info->str)
+	if (!sfr_info->str) {
+		kfree(sfr_info);
 		return -ENOMEM;
+	}
 
 	mhi_priv->sfr_info = sfr_info;
 

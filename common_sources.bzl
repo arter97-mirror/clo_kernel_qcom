@@ -11,20 +11,50 @@ module sources due to DDK limitations that exist today.
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 
 COPY_FILES = [
+    "drivers/leds/leds.h",
+    "drivers/leds/trigger/ledtrig-netdev.c",
     "drivers/leds/trigger/ledtrig-pattern.c",
+    "drivers/leds/leds-aw200xx.c",
+    "drivers/char/hw_random/virtio-rng.c",
     "drivers/char/virtio_console.c",
     "drivers/dma/qcom/gpi.c",
+    "drivers/dma-buf/heaps/system_heap.c",
     "drivers/dma/dmaengine.h",
     "drivers/dma/virt-dma.h",
     "drivers/extcon/extcon-usb-gpio.c",
+    "drivers/gpio/gpio-pca953x.c",
     "drivers/gpio/gpio-virtio.c",
     "drivers/gpu/drm/bridge/aux-bridge.c",
+    "drivers/i2c/i2c-mux.c",
+    "drivers/i2c/muxes/i2c-mux-gpio.c",
     "drivers/i2c/busses/i2c-qcom-geni.c",
     "drivers/i2c/busses/i2c-virtio.c",
+    "drivers/iio/buffer/kfifo_buf.c",
+    "drivers/iio/common/scmi_sensors/scmi_iio.c",
     "drivers/spi/spi-geni-qcom.c",
+    "drivers/virtio/virtio_dma_buf.c",
     "drivers/virtio/virtio_input.c",
+    # virtio_snd.ko files start
+    "sound/virtio/virtio_card.c",
+    "sound/virtio/virtio_card.h",
+    "sound/virtio/virtio_chmap.c",
+    "sound/virtio/virtio_ctl_msg.c",
+    "sound/virtio/virtio_ctl_msg.h",
+    "sound/virtio/virtio_jack.c",
+    "sound/virtio/virtio_kctl.c",
+    "sound/virtio/virtio_pcm_msg.c",
+    "sound/virtio/virtio_pcm_ops.c",
+    "sound/virtio/virtio_pcm.c",
+    "sound/virtio/virtio_pcm.h",
+    # virtio_snd.ko files end
     "net/core/failover.c",
     "lib/crc-itu-t.c",
+    "drivers/net/ethernet/realtek/r8169.h",
+    "drivers/net/ethernet/realtek/r8169_firmware.c",
+    "drivers/net/ethernet/realtek/r8169_firmware.h",
+    "drivers/net/ethernet/realtek/r8169_leds.c",
+    "drivers/net/ethernet/realtek/r8169_main.c",
+    "drivers/net/ethernet/realtek/r8169_phy_config.c",
     "drivers/net/net_failover.c",
     "drivers/net/virtio_net.c",
     "drivers/net/pcs/pcs-xpcs.c",
@@ -34,10 +64,12 @@ COPY_FILES = [
     "drivers/net/pcs/pcs-xpcs-wx.c",
     "drivers/net/phy/aquantia/aquantia_leds.c",
     "drivers/net/phy/aquantia/aquantia_firmware.c",
+    "drivers/net/phy/motorcomm.c",
     "drivers/net/phy/qcom/qca808x.c",
     "drivers/net/phy/qcom/at803x.c",
     "drivers/net/phy/qcom/qcom.h",
     "drivers/net/phy/qcom/qcom-phy-lib.c",
+    "drivers/net/phy/realtek.c",
     "drivers/perf/dwc_pcie_pmu.c",
     "drivers/phy/qualcomm/phy-qcom-sgmii-eth.c",
     "drivers/phy/qualcomm/phy-qcom-qmp-pcs-sgmii.h",
@@ -188,6 +220,8 @@ COPY_FILES = [
     "net/mac80211/wpa.h",
     # mac80211.ko files end
     "drivers/soc/qcom/qcom-pbs.c",
+    "drivers/pci/controller/pci-host-common.h",
+    "drivers/pci/pci.h",
 ]
 
 def define_common_upstream_files():
@@ -251,4 +285,14 @@ def define_common_upstream_files():
         ],
         outs = ["drivers/net/virtio_net_fixed.c"],
         cmd = "patch --follow-symlinks -o $@ -i $(execpath :drivers/net/virtio_net_fix.diff) $(execpath //common:drivers/net/virtio_net.c)",
+    )
+
+    native.genrule(
+        name = "patched-drivers/leds/trigger/ledtrig-netdev.c",
+        srcs = [
+            "//common:drivers/leds/trigger/ledtrig-netdev.c",
+            ":drivers/leds/ledtrig-netdev_fix.diff",
+        ],
+        outs = ["drivers/leds/trigger/ledtrig-netdev_fixed.c"],
+        cmd = "patch --follow-symlinks -o $@ -i $(execpath :drivers/leds/ledtrig-netdev_fix.diff) $(execpath //common:drivers/leds/trigger/ledtrig-netdev.c)",
     )

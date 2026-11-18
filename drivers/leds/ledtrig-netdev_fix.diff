@@ -1,0 +1,13 @@
+diff --git a/drivers/leds/trigger/ledtrig-netdev.c b/drivers/leds/trigger/ledtrig-netdev.c
+index 4b0863db901a..237b433958e1 100644
+--- a/drivers/leds/trigger/ledtrig-netdev.c
++++ b/drivers/leds/trigger/ledtrig-netdev.c
+@@ -26,7 +26,7 @@
+ #include <linux/phy.h>
+ #include <linux/rtnetlink.h>
+ #include <linux/timer.h>
+-#include "../leds.h"
++#include "leds.h"
+
+ #define NETDEV_LED_DEFAULT_INTERVAL	50
+

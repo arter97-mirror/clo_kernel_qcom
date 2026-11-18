@@ -254,21 +254,8 @@ static ssize_t etirled_toggle_store(struct device *dev,
 	chip = (struct lm3645_etirled *)i2c_get_clientdata(client);
 	mutex_lock(&chip->m_lock);
 	chip = (struct lm3645_etirled *)i2c_get_clientdata(client);
-	if (!strncasecmp(buf, D1, sizeof(D1))) {
-		chip->d1_toggle = !chip->d1_toggle;
-		etirled_toggle_d1(dev, chip->d1_toggle);
-	} else if (!strncasecmp(buf, D2, sizeof(D2)))
-		chip->d2_toggle = !chip->d2_toggle;
-		/* D2 not connected on EVB2 */
-	else if (!strncasecmp(buf, D3, sizeof(D3)))
-		chip->d3_toggle = !chip->d3_toggle;
-		/* D3 not connected on EVB2 */
-	else if (!strncasecmp(buf, D4, sizeof(D4)))
-		chip->d4_toggle = !chip->d4_toggle;
-		/* D4 not connected on EVB2 */
-	else
-		dev_dbg(dev, "Doesn't match:%s  expecting d1 to d4\n", buf);
-
+	chip->d1_toggle = !chip->d1_toggle;
+	etirled_toggle_d1(dev, chip->d1_toggle);
 	mutex_unlock(&chip->m_lock);
 
 	return count;

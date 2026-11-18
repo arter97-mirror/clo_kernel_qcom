@@ -807,8 +807,8 @@ again:
 		if (qcom_tzmem_try_grow_pool(pool, size, gfp))
 			goto again;
 
-		/* No runtime allocation for QTVM */
-		if (IS_ENABLED(CONFIG_ARCH_QTI_VM))
+		/* Disable runtime allocation for low memory targets */
+		if (IS_ENABLED(CONFIG_QCOM_TZMEM_LOW_MEMORY))
 			return NULL;
 
 		if (qcom_tzmem_area_alloc(pool, size, gfp, &area))

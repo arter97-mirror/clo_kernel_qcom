@@ -451,6 +451,10 @@ extern unsigned int sysctl_sched_idle_enough;
 extern unsigned int sysctl_sched_cluster_util_thres_pct;
 extern unsigned int sysctl_sched_idle_enough_clust[MAX_CLUSTERS];
 extern unsigned int sysctl_sched_cluster_util_thres_pct_clust[MAX_CLUSTERS];
+extern unsigned int sf_misfit_delay_low_cap[MAX_CLUSTERS];
+extern unsigned int sf_misfit_delay_high_cap[MAX_CLUSTERS];
+/* deep-throttle boundary: cap_orig at/below this % of pre_cap is "deep" */
+#define SF_MISFIT_DEEP_CAP_PCT 40
 
 /* 1ms default for 20ms window size scaled to 1024 */
 extern unsigned int sysctl_sched_min_task_util_for_boost;
@@ -1127,14 +1131,14 @@ static bool check_for_higher_capacity(int cpu1, int cpu2)
 extern void pipeline_demand(struct walt_task_struct *wts, u64 *scaled_gold_demand,
 		     u64 *scaled_prime_demand);
 
-static inline bool task_fits_capacity(struct task_struct *p,
-					int dst_cpu)
+static inline bool __task_fits_capacity(struct task_struct *p,
+					int dst_cpu,
+					unsigned long capacity)
 {
 	struct cgroup_subsys_state *css;
 	struct task_group *tg;
 	struct walt_task_group *wtg;
 	unsigned int margin;
-	unsigned long capacity = capacity_orig_of(dst_cpu);
 	bool down = check_for_higher_capacity(task_cpu(p), dst_cpu);
 	int id, cgroup_type = 0;
 	unsigned long util = 0;
@@ -1178,6 +1182,136 @@ finish:
 	util = clamp(demand, uclamp_eff_value(p, UCLAMP_MIN), uclamp_eff_value(p, UCLAMP_MAX));
 
 	return capacity * 1024 > util * margin;
+}
+
+/*
+ * is_smart_freq_limiting - check if smart_freq is the marginal capacity limiter
+ * for the cluster that contains @cpu.
+ *
+ * Returns true when the CPU's current effective capacity (cpu_capacity_orig,
+ * in arch_scale units) differs from pre_smart_freq_capacity (also in
+ * arch_scale units), meaning smart_freq has further reduced the cluster's
+ * effective capacity beyond what thermal/other limiters already imposed.
+ * Covers both Legacy and IPC paths.
+ */
+static inline bool is_smart_freq_limiting(int cpu)
+{
+	struct walt_sched_cluster *cluster = cpu_cluster(cpu);
+
+	return capacity_orig_of(cpu) != cluster->pre_smart_freq_capacity;
+}
+
+/*
+ * task_fits_capacity - check if task fits on dst_cpu, incorporating
+ * the smart_freq misfit delay mechanism.
+ *
+ * The sf_misfit delay suppresses spurious migration away from the cluster
+ * the task is currently running on while smart_freq is throttling the
+ * cluster frequency. The delay is therefore only meaningful when dst_cpu
+ * belongs to the same cluster as task_cpu(p): the task has accumulated
+ * run-time there and the delay context is valid.
+ *
+ * Cross-cluster candidates have no accumulated run-time in dst_cpu's
+ * cluster, making the delay semantically meaningless; those checks
+ * bypass the delay logic entirely.
+ *
+ * NOTE: task_fits_max() and task_demand_fits() both tail-call this
+ * function and automatically inherit the delay behavior.
+ */
+static inline bool task_fits_capacity(struct task_struct *p,
+				       int dst_cpu)
+{
+	struct walt_task_struct *wts =
+		(struct walt_task_struct *)android_task_vendor_data(p);
+	struct walt_sched_cluster *cluster = cpu_cluster(dst_cpu);
+	unsigned long cap_orig = capacity_orig_of(dst_cpu);
+	unsigned long pre_cap  = cluster->pre_smart_freq_capacity;
+	bool fits;
+	u64 now;
+	u32 dw;
+
+	fits = __task_fits_capacity(p, dst_cpu, cap_orig);
+
+	/*
+	 * Two-tier delay window based on throttle depth:
+	 *   cap_orig <= 40% of pre_cap  (low remaining cap)  -> sf_misfit_delay_low_cap
+	 *   cap_orig >  40% of pre_cap  (high remaining cap) -> sf_misfit_delay_high_cap
+	 *
+	 * Values are stored in nanoseconds and are independent of the window
+	 * size. A value of 0 disables the delay entirely (non-ART default).
+	 * The tier is re-evaluated on every call so transitions are handled
+	 * automatically without extra per-task state.
+	 */
+	dw = (cap_orig * 100 <= pre_cap * SF_MISFIT_DEEP_CAP_PCT)
+	     ? sf_misfit_delay_low_cap[cluster->id]
+	     : sf_misfit_delay_high_cap[cluster->id];
+
+	if (!dw)
+		return fits;
+
+	/*
+	 * The smart_freq delay is a per-cluster mechanism: sf_misfit_time
+	 * records a smart_freq-induced misfit in the context of the task's
+	 * current cluster. For a cross-cluster dst_cpu, skip the delay and
+	 * return the raw capacity fit result -- the destination cluster may
+	 * have a completely different smart_freq state.
+	 *
+	 * sf_misfit_time may also be stale (set on a prior cluster, cleared
+	 * lazily by android_rvh_set_task_cpu). Honoring it for a cross-cluster
+	 * check could make the task appear to fit a smaller cluster and
+	 * trigger a wrong down-migration.
+	 */
+	if (!same_cluster(task_cpu(p), dst_cpu))
+		return fits;
+
+	/* mart_freq not limiting, or task already fits: no delay needed. */
+	if (!is_smart_freq_limiting(dst_cpu) || fits) {
+		wts->sf_misfit_time = 0;
+		return fits;
+	}
+
+	/*
+	 * Task is a smart_freq misfit on its cluster which is under smart_freq
+	 * cap. Do check with pre_smart_freq_capacity which is either the max
+	 * physically possible capacity or it is the capacity lowered due to
+	 * thermals. If the task doesn't fit, it won't fit even when smart_freq
+	 * limits are removed; return false immediately.
+	 */
+	fits = __task_fits_capacity(p, dst_cpu, pre_cap);
+	if (!fits)
+		return false;
+
+	/*
+	 * cpu_rq(dst_cpu)->clock is a cheap per-CPU clock but only advances
+	 * while that rq is active, so a later read against a stale dst_cpu can
+	 * be smaller than the sf_misfit_time stamped from a different dst_cpu.
+	 * Clamp to the stored stamp so the unsigned subtraction below never
+	 * underflows. The value is intentionally imprecise but always monotone
+	 * w.r.t. sf_misfit_time. On first detection sf_misfit_time is 0, so the
+	 * max() reduces to the raw clock and the stamp keeps full precision.
+	 */
+	now = max_t(u64, cpu_rq(dst_cpu)->clock, wts->sf_misfit_time);
+
+	/* First detection: arm the timer and suppress migration. */
+	if (!wts->sf_misfit_time) {
+		wts->sf_misfit_time = now;
+		return true;
+	}
+
+	if (now - wts->sf_misfit_time < dw)
+		return true;
+
+	/*
+	 * Delay expired: keep reporting as misfit until the task actually
+	 * migrates to a new cluster.  Do NOT reset sf_misfit_time here;
+	 * it will be cleared by android_rvh_set_task_cpu() on a
+	 * cross-cluster migration, or by the sf_fits branch above when
+	 * the task fits again.  Resetting here would re-arm the delay
+	 * window on every failed migration attempt, preventing the task
+	 * from ever being upmigrated while large CPUs are busy or isolated.
+	 */
+
+	return false;
 }
 
 extern int pipeline_fits_smaller_cpus(struct task_struct *p);
@@ -1239,6 +1373,9 @@ extern int walt_find_cluster_packing_cpu(int start_cpu);
 extern bool walt_choose_packing_cpu(int packing_cpu, struct task_struct *p);
 extern void walt_cycle_counter_init(void);
 extern u64 walt_cpu_cycle_counter(int cpu, u64 wc);
+void walt_cgroup_init(void);
+void walt_init_tg_pointers(void);
+int __sched_set_group_id(struct task_struct *p, unsigned int group_id);
 
 static inline unsigned int cpu_max_possible_freq(int cpu)
 {

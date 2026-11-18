@@ -56,8 +56,11 @@ def define_single_android_build(
         dtb_target = None,
         ddk_config_deps = None,
         implicit_config_fragment = None,
-        config_path = None):
+        config_path = None,
+        module_lists_name = None,
+        desktop_build = None):
     stem = "{}_{}".format(name, variant)
+    module_lists_name = module_lists_name or name
 
     library_targets = library_registry.define_libraries(
         target_variant = stem,
@@ -155,7 +158,7 @@ def define_single_android_build(
 
     copy_file(
         name = "{}_system_dlkm_blocklist".format(stem),
-        src = "modules-lists/modules.systemdlkm_blocklist.msm.{}".format(name),
+        src = "modules-lists/modules.systemdlkm_blocklist.msm.{}".format(module_lists_name),
         out = "{}/system_dlkm.modules.blocklist".format(stem),
     )
 
@@ -171,15 +174,15 @@ def define_single_android_build(
         build_dtbo = True,
         build_vendor_dlkm = True,
         dedup_dlkm_modules = True,  # removes system_dlkm modules from vendor_dlkm
-        modules_list = "modules-lists/modules.list.msm.{}".format(name),
+        modules_list = "modules-lists/modules.list.msm.{}".format(module_lists_name),
         vendor_dlkm_modules_list = ":{}_vendor_dlkm_modules_list_generated".format(stem),
-        system_dlkm_modules_blocklist = "modules-lists/modules.systemdlkm_blocklist.msm.{}".format(name),
-        vendor_dlkm_modules_blocklist = "modules-lists/modules.vendor_blocklist.msm.{}".format(name),
+        system_dlkm_modules_blocklist = "modules-lists/modules.systemdlkm_blocklist.msm.{}".format(module_lists_name),
+        vendor_dlkm_modules_blocklist = "modules-lists/modules.vendor_blocklist.msm.{}".format(module_lists_name),
         vendor_ramdisk_binaries = get_vendor_ramdisk_binaries(stem),
         deps = [
-            "modules-lists/modules.list.msm.{}".format(name),
-            "modules-lists/modules.vendor_blocklist.msm.{}".format(name),
-            "modules-lists/modules.systemdlkm_blocklist.msm.{}".format(name),
+            "modules-lists/modules.list.msm.{}".format(module_lists_name),
+            "modules-lists/modules.vendor_blocklist.msm.{}".format(module_lists_name),
+            "modules-lists/modules.systemdlkm_blocklist.msm.{}".format(module_lists_name),
         ],
     )
 
@@ -267,7 +270,7 @@ def define_single_android_build(
         dtbo(
             name = "{}_{}_dtbo_image".format(stem, dtbo_img["name"]),
             srcs = [":{}_dtb_build/{}".format(stem, dtbo) for dtbo in dtbo_img["src"]] if dtbo_img["src"] else None,
-            out = "{}_{}_dtbo.img".format(dtbo_img["name"], variant),
+            out = "{}/{}_dtbo.img".format(stem, dtbo_img["name"]),
             config_file = dtbo_img["config_file"],
             kernel_build = "{}_dtb_build".format(stem),
             tool = "mkdtboimg",
@@ -293,6 +296,9 @@ def define_single_android_build(
         ":{}_{}_dtbo_image".format(stem, dtbo_img["name"])
         for dtbo_img in custom_dtbo_img_list
     ]
+
+    if desktop_build != None:
+        dist_data.append(desktop_build)
 
     vendor_dlkm_module_unprotected_list = get_unprotected_vendor_modules_list(stem)
     vendor_unprotected_dlkm = " ".join(vendor_dlkm_module_unprotected_list)

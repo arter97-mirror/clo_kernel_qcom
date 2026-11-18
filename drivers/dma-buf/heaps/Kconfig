@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 config DMABUF_HEAPS_SYSTEM
 	tristate "DMA-BUF System Heap"
 	depends on DMABUF_HEAPS
@@ -124,6 +125,15 @@ config QCOM_DMABUF_HEAPS_DEFERRED_FREE
 	  library. It allows the page-zeroing to be done out of the
 	  normal allocation/free path.
 	  If in doubt, say N here.
+
+config QCOM_NAMED_DMABUF
+	tristate "Named DMA-BUF registry"
+	depends on DMA_SHARED_BUFFER
+	help
+	  Choose this option to enable the named dma-buf driver.
+	  It allows producers to register an existing dmabuf under a
+	  human-readable name and consumers to discover and mmap it via
+	  /dev/named_dmabuf/<name>. If in doubt, say N here.
 
 config QCOM_DMABUF_HEAPS_SC_TCM
 	bool "QCOM dma-buf SC TCM heap"

@@ -11,10 +11,18 @@
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
+#include <linux/suspend.h>
 
 #define USB_ID_DEBOUNCE_MS	5	/* ms */
+#define CHG1_INT_LATCHED_CLR	0x2714
+#define VBUS_LATCH_BIT		BIT(0)
+
+/* CHG1_POLARITY register: selects polarity of the PAD input to debouncer */
+#define CHG1_POLARITY_REG	0x2747
+#define INV_DEB_IN_BIT		BIT(7)
 
 struct qcom_usb_extcon_info {
 	struct extcon_dev *edev;
@@ -22,6 +30,8 @@ struct qcom_usb_extcon_info {
 	int vbus_irq;
 	struct delayed_work wq_detcable;
 	unsigned long debounce_jiffies;
+	struct regmap *regmap;
+	bool vbus_polarity_inverted; /* true when INV_DEB_IN (bit7 of 0x2747) = 1 */
 };
 
 static const unsigned int qcom_usb_extcon_cable[] = {
@@ -61,6 +71,14 @@ static void qcom_usb_extcon_detect_cable(struct work_struct *work)
 		if (ret)
 			return;
 
+		/*
+		 * If CHG1_POLARITY.INV_DEB_IN (0x2747 bit7) is set the PAD input
+		 * is inverted before it reaches the debouncer, so the IRQ line
+		 * level seen by the kernel is the logical complement of the true
+		 * VBUS presence.  XOR with the flag to normalise the state.
+		 */
+		state ^= info->vbus_polarity_inverted;
+
 		if (state) {
 			val.intval = true;
 			extcon_set_property(info->edev, EXTCON_USB,
@@ -84,11 +102,37 @@ static int qcom_usb_extcon_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct qcom_usb_extcon_info *info;
+	unsigned int polarity_val;
 	int ret;
 
 	info = devm_kzalloc(dev, sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
+
+	/*
+	 * Obtain the parent regmap to read the CHG1_POLARITY register once
+	 * during probe.  The register must not be polled at runtime because
+	 * the HW spec states it must not change while EN_CTL.EN_DEB = 1.
+	 */
+	info->regmap = dev_get_regmap(dev->parent, NULL);
+	if (!info->regmap) {
+		dev_err(dev, "failed to get parent regmap\n");
+		return -ENODEV;
+	}
+
+	/*
+	 * Read CHG1_POLARITY (0x2747) bit 7 (INV_DEB_IN).
+	 *   0x00 -> PAD connected to debouncer without inversion (normal)
+	 *   0x80 -> inverted PAD connected to debouncer (polarity inverted)
+	 */
+	ret = regmap_read(info->regmap, CHG1_POLARITY_REG, &polarity_val);
+	if (ret) {
+		dev_err(dev, "failed to read CHG1_POLARITY reg: %d\n", ret);
+		return ret;
+	}
+	info->vbus_polarity_inverted = !!(polarity_val & INV_DEB_IN_BIT);
+	dev_dbg(dev, "CHG1_POLARITY=0x%02x, vbus_polarity_inverted=%d\n",
+		polarity_val, info->vbus_polarity_inverted);
 
 	info->edev = devm_extcon_dev_allocate(dev, qcom_usb_extcon_cable);
 	if (IS_ERR(info->edev)) {
@@ -195,7 +239,10 @@ static int qcom_usb_extcon_restore(struct device *dev)
 		}
 	}
 
-	queue_delayed_work(system_power_efficient_wq, &info->wq_detcable, info->debounce_jiffies);
+	qcom_usb_extcon_detect_cable(&info->wq_detcable.work);
+
+	/* Write BIT(0) to CLR to rearm VBUS interrupt after queue */
+	ret = regmap_write(info->regmap, CHG1_INT_LATCHED_CLR, VBUS_LATCH_BIT);
 
 	return 0;
 }
@@ -222,6 +269,9 @@ static int qcom_usb_extcon_resume(struct device *dev)
 	bool id_state = false, vbus_state = false;
 	bool needs_detection = false;
 
+	if (pm_suspend_target_state == PM_SUSPEND_MEM)
+		return qcom_usb_extcon_restore(dev);
+
 	if (device_may_wakeup(dev)) {
 		if (info->id_irq > 0)
 			ret = disable_irq_wake(info->id_irq);
@@ -232,10 +282,14 @@ static int qcom_usb_extcon_resume(struct device *dev)
 	if (info->vbus_irq > 0) {
 		vbus_ret = irq_get_irqchip_state(info->vbus_irq,
 				IRQCHIP_STATE_LINE_LEVEL, &vbus_state);
-		if (vbus_ret == 0 && extcon_get_state(info->edev, EXTCON_USB) != vbus_state)
-			needs_detection = true;
-		else if (vbus_ret != 0)
+		if (vbus_ret == 0) {
+			/* normalise against hardware polarity inversion */
+			vbus_state ^= info->vbus_polarity_inverted;
+			if (extcon_get_state(info->edev, EXTCON_USB) != vbus_state)
+				needs_detection = true;
+		} else {
 			dev_warn(dev, "failed to get VBUS IRQ state: %d\n", vbus_ret);
+		}
 	}
 
 	if (info->id_irq > 0) {

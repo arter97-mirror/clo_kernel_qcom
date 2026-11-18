@@ -458,27 +458,32 @@ int lp5814_user_led_probe(struct i2c_client *client)
 	}
 
 	ret = regmap_write(chip->regmap, LP5814_REG_RESET_CMD, LP5814_RESET_CMD_VAL);
-	if (ret)
+	if (ret) {
 		dev_err(&client->dev, "failed to  write register:%x with value:%x\n",
 				LP5814_REG_RESET_CMD, LP5814_RESET_CMD_VAL);
+		goto i2c_failed;
+	}
 
 	ret = regmap_read(chip->regmap, LP5814_REG_RESET_CMD, &chipid);
 	if (ret) {
 		dev_err(&client->dev, "Failed to read chip ID: %d\n", ret);
-		goto error2;
+		goto i2c_failed;
 	}
 	dev_dbg(&client->dev, "expected: %x ChipId read is :%x\n",
 			LP5814_RESET_CMD_VAL, chipid);
 
 	ret = regmap_write(chip->regmap, LP5814_REG_CHIP_EN, 0x1);
-	if (ret)
+	if (ret) {
 		dev_err(&client->dev,
 		"failed to  write register:LP5814_REG_CHIP_EN with value:0x1\n");
+		goto i2c_failed;
+	}
 	mutex_unlock(&chip->m_lock);
 
 	return 0;
-error2:
+i2c_failed:
 	sysfs_remove_group(&client->dev.kobj, &lp5814_user_led_attr_group);
+	ret = -EPROBE_DEFER;
 
 error:
 	mutex_unlock(&chip->m_lock);

@@ -24,6 +24,7 @@ extern void *qcom_create_ramdump_device(const char *dev_name, struct device *par
 extern void qcom_destroy_ramdump_device(void *dev);
 extern int qcom_elf_dump(struct list_head *segs, struct device *dev, unsigned char class);
 extern int qcom_dump(struct list_head *head, struct device *dev);
+extern int qcom_microdump(struct list_head *segs, struct device *dev);
 extern int qcom_fw_elf_dump(struct firmware *fw, struct device *dev);
 extern bool dump_enabled(void);
 extern int register_dump_segments(struct list_head *head, const struct firmware *fw);
@@ -44,6 +45,10 @@ static inline int qcom_elf_dump(struct list_head *segs, struct device *dev, unsi
 	return -ENODEV;
 }
 static inline int qcom_dump(struct list_head *head, struct device *dev)
+{
+	return -ENODEV;
+}
+static inline int qcom_microdump(struct list_head *segs, struct device *dev)
 {
 	return -ENODEV;
 }

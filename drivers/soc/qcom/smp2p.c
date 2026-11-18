@@ -301,11 +301,16 @@ static void qcom_smp2p_notify_in(struct qcom_smp2p *smp2p)
 	char buf[SMP2P_MAX_ENTRY_NAME];
 	u32 val;
 	int i;
+	unsigned int in_valid_entries;
 
 	in = smp2p->in;
 
+	in_valid_entries = in->valid_entries;
+	SMP2P_INFO("%d: smp2p_num:%d in_num:%u\n",
+		smp2p->remote_pid, smp2p->valid_entries, in_valid_entries);
+
 	/* Match newly created entries */
-	for (i = smp2p->valid_entries; i < in->valid_entries; i++) {
+	for (i = smp2p->valid_entries; i < in_valid_entries; i++) {
 		list_for_each_entry(entry, &smp2p->inbound, node) {
 			memcpy_fromio(buf, in->entries[i].name, sizeof(buf));
 			if (!strcmp(buf, entry->name)) {

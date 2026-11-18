@@ -24,6 +24,7 @@
 
 #include <soc/qcom/secure_buffer.h>
 #include <trace/events/rproc_qcom.h>
+#include <soc/qcom/qcom_ramdump.h>
 
 /* Macros */
 #define SYSFS_NAME_LEN	50
@@ -133,6 +134,7 @@ static void initialize_client(void)
 	int i;
 
 	for (i = 0; i < MAX_CLIENTS; i++) {
+		memblock[i].subdev = NULL;
 		memblock[i].allotted = 0;
 		memblock[i].size = 0;
 		memblock[i].guarantee = 0;
@@ -143,22 +145,92 @@ static void initialize_client(void)
 		memblock[i].sequence_id = -1;
 		memblock[i].memory_type = MEMORY_CMA;
 		memblock[i].hyp_mapping = 0;
+		memblock[i].ssr_ramdump = false;
 	}
+}
+
+static int shared_hyp_unmapping(int index)
+{
+	u64 source_vmids = 0;
+	int ret, j;
+	struct memshare_hyp_mapping *source;
+	struct qcom_scm_vmperm dest_vmids[] = {
+		{ .vmid = QCOM_SCM_VMID_HLOS,
+		  .perm = PERM_READ | PERM_WRITE | PERM_EXEC }
+	};
+
+	source = &memblock[index].hyp_map_info;
+	for (j = 0; j < source->num_vmids; j++)
+		source_vmids |= BIT(source->vmids[j]);
+
+	ret = qcom_scm_assign_mem(memblock[index].phy_addr,
+		memblock[index].size, &source_vmids, dest_vmids, 1);
+	if (!ret)
+		memblock[index].hyp_mapping = 0;
+
+	return ret;
+}
+
+static void memshare_collect_ssr_ramdump(int index)
+{
+	int ret;
+	struct list_head head;
+	struct qcom_dump_segment *dump_segment;
+
+	if (!memblock[index].hyp_mapping) {
+		dev_err(memsh_drv->dev,
+			"memshare: %s: Client-id: %d is not hyp mapped\n",
+			__func__, memblock[index].client_id);
+		return;
+	}
+
+	if (!memblock[index].subdev) {
+		memblock[index].subdev = root_device_register(devm_kasprintf(memsh_drv->dev,
+			GFP_KERNEL, "memshare_client_id-%d", memblock[index].client_id));
+		if (IS_ERR(memblock[index].subdev)) {
+			dev_err(memsh_drv->dev,
+				"msm_memshare: %s: Failed to register dump device for: %d\n",
+				__func__, memblock[index].client_id);
+			return;
+		}
+	}
+
+	ret = shared_hyp_unmapping(index);
+	if (ret) {
+		dev_err(memsh_drv->dev,
+			"memshare: %s: Failed qcom_scm_assign_mem for client-id: %d, ret: %d\n",
+			__func__, memblock[index].client_id, ret);
+		return;
+	}
+
+	dump_segment = kzalloc(sizeof(*dump_segment), GFP_KERNEL);
+	if (!dump_segment)
+		return;
+
+	INIT_LIST_HEAD(&head);
+	dump_segment->va = memblock[index].virtual_addr;
+	dump_segment->da = (dma_addr_t)memblock[index].phy_addr;
+	dump_segment->size = memblock[index].size;
+	list_add_tail(&dump_segment->node, &head);
+	ret = qcom_elf_dump(&head, memblock[index].subdev, ELF_CLASS);
+	if (ret)
+		dev_err(memsh_drv->dev,
+			"memshare: %s: Failed to collect ram dump for client: %d\n",
+			__func__, memblock[index].client_id);
+
+	kfree(dump_segment);
+	dev_info(memsh_drv->dev,
+		"memshare: %s: Added memory region to ssr ramdump for client-id: %d\n",
+		__func__, memblock[index].client_id);
 }
 
 static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 					void *_cmd)
 {
-	u64 source_vmids = 0;
-	int i, j, ret, size = 0;
-	struct qcom_scm_vmperm dest_vmids[] = {
-		{ .vmid = QCOM_SCM_VMID_HLOS,
-		  .perm = PERM_READ | PERM_WRITE | PERM_EXEC }
-	};
+	int i, ret, size = 0;
 	struct memshare_child *client_node = NULL;
 
 	mutex_lock(&memsh_drv->mem_share);
-
 	switch (code) {
 
 	case QCOM_SSR_BEFORE_SHUTDOWN:
@@ -176,6 +248,16 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 
 	case QCOM_SSR_BEFORE_POWERUP:
 		trace_rproc_qcom_event("modem", "QCOM_SSR_BEFORE_POWERUP", "modem_notifier-enter");
+		for (i = 0; i < MAX_CLIENTS; i++) {
+			/*
+			 * dump_enabled() ensures that userspace thread is running
+			 * to avoid timeout
+			 */
+			if (memblock[i].peripheral == DHMS_MEM_PROC_MPSS_V01 &&
+			    memblock[i].ssr_ramdump && memblock[i].allotted &&
+			    dump_enabled())
+				memshare_collect_ssr_ramdump(i);
+		}
 		break;
 
 	case QCOM_SSR_AFTER_POWERUP:
@@ -197,38 +279,18 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 				DHMS_MEM_PROC_MPSS_V01 &&
 				!memblock[i].guarantee &&
 				!memblock[i].client_request &&
-				memblock[i].allotted &&
-				!memblock[i].alloc_request) {
-				dev_info(memsh_drv->dev,
-					"memshare: hypervisor unmapping for allocated memory with client id: %d\n",
-					memblock[i].client_id);
+				memblock[i].allotted) {
+
 				if (memblock[i].hyp_mapping) {
-					struct memshare_hyp_mapping *source;
-
-					source = &memblock[i].hyp_map_info;
-					for (j = 0; j < source->num_vmids; j++)
-						source_vmids |= BIT(source->vmids[j]);
-
-					ret = qcom_scm_assign_mem(
-							memblock[i].phy_addr,
-							memblock[i].size,
-							&source_vmids,
-							dest_vmids, 1);
-					if (ret &&
-						memblock[i].hyp_mapping == 1) {
-						/*
-						 * This is an error case as hyp
-						 * mapping was successful
-						 * earlier but during unmap
-						 * it lead to failure.
-						 */
+					ret = shared_hyp_unmapping(i);
+					if (ret) {
 						dev_err(memsh_drv->dev,
-							"memshare: failed to hypervisor unmap the memory region for client id: %d\n",
-							memblock[i].client_id);
-					} else {
-						memblock[i].hyp_mapping = 0;
+						"memshare: %s: scm_assign_mem: ret: %d, client-id: %d\n",
+						    __func__, ret, memblock[i].client_id);
+						continue;
 					}
 				}
+
 				if (memblock[i].guard_band) {
 				/*
 				 *	Check if the client required guard band
@@ -287,8 +349,9 @@ static void shared_hyp_mapping(int index)
 	}
 	ret = qcom_scm_assign_mem(mb->phy_addr, mb->size, source_vmlist,
 			      newvm, dest->num_vmids);
+	kfree(newvm);
 	if (ret != 0) {
-		dev_err(memsh_drv->dev, "memshare: qcom_scm_assign_mem failed size=%u err=%d\n",
+		dev_err(memsh_drv->dev, "memshare: qcom_scm_assign_mem failed size: %u, err: %d\n",
 				mb->size, ret);
 		return;
 	}
@@ -828,6 +891,10 @@ static int memshare_child_probe(struct platform_device *pdev)
 							pdev->dev.of_node,
 							"qcom,guard-band");
 
+	memblock[num_clients].ssr_ramdump = of_property_read_bool(
+							pdev->dev.of_node,
+							"qcom,ssr-ramdump");
+
 	/* If the shared property is set, allow access from both HLOS and peripheral */
 	if (of_property_read_bool(pdev->dev.of_node, "qcom,shared")) {
 		memblock[num_clients].hyp_map_info.num_vmids = 2;
@@ -930,6 +997,15 @@ static int memshare_child_probe(struct platform_device *pdev)
 					"qcom,dynamic-size-max", &dynamic_size_max))
 				memblock[num_clients].dynamic_size_max = dynamic_size_max;
 		}
+
+		if (memblock[num_clients].ssr_ramdump) {
+			memblock[num_clients].subdev = root_device_register(devm_kasprintf(
+			    memsh_drv->dev, GFP_KERNEL, "memshare_client-%s", drv->client_name));
+
+			if (IS_ERR(memblock[num_clients].subdev))
+				dev_err(memsh_drv->dev, "msm_memshare: Failed to register dump device for: %d\n",
+					memblock[num_clients].client_id);
+		}
 	}
 
 	memsh_child[num_clients] = drv;
@@ -976,7 +1052,7 @@ static int memshare_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	qcom_register_ssr_notifier("modem", &nb);
+	qcom_register_ssr_notifier("mpss", &nb);
 	dev_dbg(memsh_drv->dev, "memshare: Memshare inited\n");
 
 	return 0;
@@ -1003,6 +1079,13 @@ static void memshare_remove(struct platform_device *pdev)
 		qmi_handle_release(mem_share_svc_handle);
 		kfree(mem_share_svc_handle);
 		mem_share_svc_handle = NULL;
+	}
+
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		if (!memblock[i].subdev)
+			continue;
+
+		root_device_unregister(memblock[i].subdev);
 	}
 }
 

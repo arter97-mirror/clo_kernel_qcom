@@ -8,6 +8,8 @@
  * Copyright (C) 2015  STMicroelectronics Ltd
  *
  * Author: Alexandre Torgue <alexandre.torgue@st.com>
+ *
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/crc32.h>
@@ -751,7 +753,16 @@ static void dwmac4_flow_ctrl(struct mac_device_info *hw, unsigned int duplex,
 static void dwmac4_ctrl_ane(void __iomem *ioaddr, bool ane, bool srgmi_ral,
 			    bool loopback)
 {
+	u32 intr_mask;
+
 	dwmac_ctrl_ane(ioaddr, GMAC_PCS_BASE, ane, srgmi_ral, loopback);
+	intr_mask = readl(ioaddr + GMAC_INT_EN);
+	if (!ane)
+		intr_mask &= ~(GMAC_INT_PCS_LINK | GMAC_INT_PCS_ANE);
+	else
+		intr_mask |= (GMAC_INT_PCS_LINK | GMAC_INT_PCS_ANE);
+
+	writel(intr_mask, ioaddr + GMAC_INT_EN);
 }
 
 static void dwmac4_get_adv_lp(void __iomem *ioaddr, struct rgmii_adv *adv)

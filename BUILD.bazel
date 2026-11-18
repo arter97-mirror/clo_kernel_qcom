@@ -45,6 +45,8 @@ load(
     "define_shikra_oemvm",
     "define_shikra_tuivm",
 )
+load(":kleaf-scripts/targets/shikra_auto.bzl", "define_shikra_auto")
+load(":kleaf-scripts/targets/shikra_tiny.bzl", "define_shikra_tiny")
 load(":kleaf-scripts/targets/shikra_vms.bzl", "define_shikra_vms")
 load(
     ":kleaf-scripts/targets/sun.bzl",
@@ -55,6 +57,7 @@ load(
 load(":kleaf-scripts/targets/sun_vms.bzl", "define_sun_vms")
 load(":kleaf-scripts/targets/vienna.bzl", "define_vienna")
 load(":kleaf-scripts/targets/vienna_le.bzl", "define_vienna_le")
+load(":kleaf-scripts/targets/waipio.bzl", "define_waipio")
 
 exports_files(["android/abi_gki_aarch64_qcom"])
 
@@ -329,6 +332,8 @@ label_flag(
 
 define_canoe()
 
+define_waipio()
+
 define_alor_le()
 
 define_sun()
@@ -380,6 +385,10 @@ define_malabar_vms()
 define_monaco()
 
 define_shikra()
+
+define_shikra_auto()
+
+define_shikra_tiny()
 
 define_shikra_oemvm()
 

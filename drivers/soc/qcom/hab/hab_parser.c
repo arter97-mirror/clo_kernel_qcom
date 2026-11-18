@@ -8,6 +8,10 @@
 #include "hab.h"
 #include "hab_virq.h"
 
+#define HAB_MMID_RANGE_DIVISOR  100U
+#define HAB_VMIDS_MAX           16U
+#define HAB_ROLE_BE             "be"
+
 struct local_virq virqsettings = {0};
 /*
  * set valid mmid value in tbl to show this is valid entry. All inputs here are
@@ -20,9 +24,9 @@ static int fill_vmid_mmid_tbl(struct vmid_mmid_desc *tbl, int32_t vm_start,
 {
 	int i, j;
 
-	for (i = vm_start; i < vm_start+vm_range; i++) {
+	for (i = vm_start; i < (vm_start + vm_range); i++) {
 		tbl[i].vmid = i; /* set valid vmid value to make it usable */
-		for (j = mmid_start; j < mmid_start + mmid_range; j++) {
+		for (j = mmid_start; j < (mmid_start + mmid_range); j++) {
 			/* sanity check */
 			if (tbl[i].mmid[j] != HABCFG_VMID_INVALID) {
 				pr_err("overwrite previous setting vmid %d, mmid %d, be %d, kernel only %d\n",
@@ -48,50 +52,52 @@ void dump_settings(struct local_vmid *settings)
 int fill_default_gvm_settings(struct local_vmid *settings, int vmid_default,
 		int mmid_start, int mmid_end)
 {
-	int32_t be = HABCFG_BE_TRUE;
-	int32_t range = 1;
-	int32_t vmremote = vmid_default;
+	const int32_t be = HABCFG_BE_TRUE;
+	const int32_t range = 1;
+	const int32_t vmremote = vmid_default;
 	/* pchan is not kernel only by default */
-	int32_t kernel_only = 0;
+	const int32_t kernel_only = 0;
 	/* dma_coherent is false by default */
-	bool dma_coherent = false;
+	const bool dma_coherent = false;
 
 	/* default gvm always talks to host as vm0 */
 	settings->self = 0;
 	return fill_vmid_mmid_tbl(settings->vmid_mmid_list, vmremote, range,
-		mmid_start/100, (mmid_end-mmid_start)/100+1, be, kernel_only, dma_coherent);
+		(mmid_start / (int)HAB_MMID_RANGE_DIVISOR),
+		(((mmid_end - mmid_start) / (int)HAB_MMID_RANGE_DIVISOR) + 1),
+		be, kernel_only, dma_coherent);
 }
 #else
 int fill_default_gvm_settings(struct local_vmid *settings, int vmid_local,
 		int mmid_start, int mmid_end)
 {
-	int32_t be = HABCFG_BE_FALSE;
-	int32_t range = 1;
-	int32_t vmremote = 0; /* default to host[0] as local is guest[2] */
-	/* pchan is not kernel only by default */
-	int32_t kernel_only = 0;
-	/* dma_coherent is false by default */
-	bool dma_coherent = false;
+	const int32_t be = HABCFG_BE_FALSE;
+	const int32_t range = 1;
+	const int32_t vmremote = 0; /* default to host[0] as local is guest[2] */
+	const int32_t kernel_only = 0;
+	const bool dma_coherent = false;
 
 	settings->self = vmid_local;
 	/* default gvm always talks to host as vm0 */
 	return fill_vmid_mmid_tbl(settings->vmid_mmid_list, vmremote, range,
-		mmid_start/100, (mmid_end-mmid_start)/100+1, be, kernel_only, dma_coherent);
+		(mmid_start / (int)HAB_MMID_RANGE_DIVISOR),
+		(((mmid_end - mmid_start) / (int)HAB_MMID_RANGE_DIVISOR) + 1),
+		be, kernel_only, dma_coherent);
 }
 #endif
 
 int hab_count_pchan(void)
 {
 	int result, i;
-	struct device_node *hab_node = NULL;
-	struct device_node *mmid_grp_node = NULL;
-
-	int32_t grp_start_id, tmp;
+	struct device_node *hab_node;
+	struct device_node *mmid_grp_node;
+	int32_t grp_start_id;
+	u32 tmp;
 	int count = 0;
 
 	/* parse device tree*/
 	hab_node = of_find_compatible_node(NULL, NULL, "qcom,hab");
-	if (!hab_node) {
+	if (hab_node == NULL) {
 		pr_err("no hab device tree node\n");
 		return -ENODEV;
 	}
@@ -100,16 +106,16 @@ int hab_count_pchan(void)
 		/* read the group starting id */
 		result = of_property_read_u32(mmid_grp_node,
 				"grp-start-id", &tmp);
-		if (result) {
+		if (result != 0) {
 			pr_err("failed to read grp-start-id, result = %d\n",
 				result);
 			return result;
 		}
 
-		grp_start_id = tmp;
+		grp_start_id = (int32_t)tmp;
 		grp_start_id++;
 		for (i = 0; i < hab_driver.ndevices; i++) {
-			if (hab_driver.devp[i].id == grp_start_id) {
+			if (hab_driver.devp[i].id == (u32)grp_start_id) {
 				count++;
 				grp_start_id++;
 			}
@@ -122,72 +128,53 @@ int hab_count_pchan(void)
 static int hab_parse_dt(struct local_vmid *settings)
 {
 	int result, i;
-	struct device_node *hab_node = NULL;
-	struct device_node *mmid_grp_node = NULL;
+	struct device_node *hab_node;
+	struct device_node *mmid_grp_node;
 	const char *role = NULL;
-	int tmp = -1, vmids_num, count = 0;
-	u32 vmids[16];
+	u32 vmids[HAB_VMIDS_MAX];
+	int vmids_num;
+	u32 tmp;
 	int32_t grp_start_id, be;
 	int kernel_only;
 	bool dma_coherent;
+	struct property *prop;
 
 	/* parse device tree*/
 	pr_debug("parsing hab node in device tree...\n");
 	hab_node = of_find_compatible_node(NULL, NULL, "qcom,hab");
-	if (!hab_node) {
+	if (hab_node == NULL) {
 		pr_err("no hab device tree node\n");
 		return -ENODEV;
 	}
 
 	/* read the local vmid of this VM, like 0 for host, 1 for AGL GVM */
 	result = of_property_read_u32(hab_node, "vmid", &tmp);
-	if (result) {
+	if (result != 0) {
 		pr_err("failed to read local vmid, result = %d\n", result);
 		return result;
 	}
 
 	pr_debug("local vmid = %d\n", tmp);
-	settings->self = tmp;
+	settings->self = (int)tmp;
 
-	if (of_find_property(hab_node, HAB_VIRQ_NODE, NULL)) {
-		count = of_property_count_elems_of_size(hab_node, HAB_VIRQ_NODE,
-				sizeof(u32));
-		if (count == 0)
-			pr_err("No virt-irq are specified for %s\n", HAB_VIRQ_NODE);
-		else if (count > HAB_VIRTIRQ_MAX) {
-			pr_err("The number of virq exceed limitation set %d for %s\n",
-					HAB_VIRTIRQ_MAX, HAB_VIRQ_NODE);
-			count = 0;
-		}
-
-		result = of_property_read_u32_array(hab_node, HAB_VIRQ_NODE,
-				virqsettings.label, count);
-		if (result != 0)
-			pr_err("error %d getting virq resource for %s\n", result,
-					HAB_VIRQ_NODE);
-	}
-
-	virqsettings.cnt_virq = count;
-
-	for (int i = 0 ; i < count ; i++)
-		pr_debug("virq-label is %d\n", virqsettings.label[i]);
-
-	if (of_find_property(hab_node, "PCHAN_RX_PENDING_SZ_MAX", NULL)) {
+	prop = of_find_property(hab_node, "PCHAN_RX_PENDING_SZ_MAX", NULL);
+	if (prop != NULL) {
 		result = of_property_read_u32(hab_node, "RX_PENDING_SZ_MAX", &tmp);
 		if (result != 0) {
 			pr_err("error %d getting pending msg mem size limit\n", result);
 		} else {
-			hab_driver.pchan_rx_pending_sz_max = tmp;
+			hab_driver.pchan_rx_pending_sz_max = (int)tmp;
 			pr_debug("setting pending msg mem limit to %d\n", tmp);
 		}
 	}
 
-	if (of_find_property(hab_node, "VCHAN_RX_PENDING_CNT_MAX", NULL)) {
+	prop = of_find_property(hab_node, "VCHAN_RX_PENDING_CNT_MAX", NULL);
+	if (prop != NULL) {
 		result = of_property_read_u32(hab_node, "VCHAN_RX_PENDING_CNT_MAX", &tmp);
 		if (result != 0) {
 			pr_err("error %d getting pending msg cnt limit\n", result);
 		} else {
-			hab_driver.vchan_rx_pending_cnt_max = tmp;
+			hab_driver.vchan_rx_pending_cnt_max = (int)tmp;
 			pr_debug("setting pending msg cnt limit to %d\n", tmp);
 		}
 	}
@@ -196,14 +183,14 @@ static int hab_parse_dt(struct local_vmid *settings)
 		/* read the group starting id */
 		result = of_property_read_u32(mmid_grp_node,
 				"grp-start-id", &tmp);
-		if (result) {
+		if (result != 0) {
 			pr_err("failed to read grp-start-id, result = %d\n",
 				result);
 			return result;
 		}
 
 		pr_debug("grp-start-id = %d\n", tmp);
-		grp_start_id = tmp;
+		grp_start_id = (int32_t)tmp;
 
 		if (of_property_read_bool(mmid_grp_node, "dma-coherent"))
 			dma_coherent = true;
@@ -213,13 +200,13 @@ static int hab_parse_dt(struct local_vmid *settings)
 
 		/* read the role(fe/be) of these pchans in this mmid group */
 		result = of_property_read_string(mmid_grp_node, "role", &role);
-		if (result) {
+		if (result != 0) {
 			pr_err("failed to get role, result = %d\n", result);
 			return result;
 		}
 
 		pr_debug("local role of this mmid group is %s\n", role);
-		if (!strcmp(role, "be"))
+		if (strcmp(role, HAB_ROLE_BE) == 0)
 			be = 1;
 		else
 			be = 0;
@@ -229,8 +216,8 @@ static int hab_parse_dt(struct local_vmid *settings)
 					"remote-vmids", sizeof(u32));
 
 		result = of_property_read_u32_array(mmid_grp_node,
-					"remote-vmids", vmids, vmids_num);
-		if (result) {
+					"remote-vmids", vmids, (size_t)vmids_num);
+		if (result != 0) {
 			pr_err("failed to read remote-vmids, result = %d\n",
 				result);
 			return result;
@@ -252,9 +239,10 @@ static int hab_parse_dt(struct local_vmid *settings)
 
 			result = fill_vmid_mmid_tbl(
 					settings->vmid_mmid_list,
-					vmids[i], 1,
-					grp_start_id/100, 1, be, kernel_only, dma_coherent);
-			if (result) {
+					(int32_t)vmids[i], 1,
+					grp_start_id / (int32_t)HAB_MMID_RANGE_DIVISOR,
+					1, be, kernel_only, dma_coherent);
+			if (result != 0) {
 				pr_err("fill_vmid_mmid_tbl failed\n");
 				return result;
 			}

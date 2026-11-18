@@ -8,6 +8,14 @@
 #include "hab_virq.h"
 
 #define MAX_LINE_SIZE 128
+#define MAX_CMD_LEN                32
+#define PCHAN_RX_PENDING_SZ_MIN    4096
+#define VCHAN_RX_PENDING_CNT_MIN   100
+#define SSCANF_PCHAN_ARGS_COUNT    3
+#define KSTRTOUL_BASE_DECIMAL      10
+#define PIPE_DUMP_FILE_PATH_LEN    256
+#define PIPE_DUMP_FILE_TIME_LEN    100
+#define PIPE_DUMP_SEPARATOR_LEN    8
 
 int hab_stat_init(struct hab_driver *driver)
 {
@@ -41,7 +49,7 @@ int hab_stat_buffer_print(char *dest,
 int hab_stat_show_vchan(struct hab_driver *driver,
 		char *buf, int size)
 {
-	int i, ret = 0;
+	int i, ret;
 
 	ret = strscpy(buf, "", size);
 	ret = hab_stat_buffer_print(buf, size, "global vc r_pcntmax %d:\n",
@@ -53,9 +61,6 @@ int hab_stat_show_vchan(struct hab_driver *driver,
 
 		read_lock_bh(&dev->pchan_lock);
 		list_for_each_entry(pchan, &dev->pchannels, node) {
-			if (!pchan->vcnt)
-				continue;
-
 			ret = hab_stat_buffer_print(buf, size,
 				"nm %s r %d lc %d rm %d sq_t %d sq_r %d st 0x%x vn %d ",
 				pchan->name, pchan->is_be, pchan->vmid_local,
@@ -94,11 +99,11 @@ int hab_stat_show_vchan(struct hab_driver *driver,
 int hab_stat_store_rx_pending(const char *buf, int size)
 {
 	int ret;
-	char cmd[32] = {0};
+	char cmd[MAX_CMD_LEN] = {0};
 	int consumed = 0;
 	const char *p = buf;
-	uint32_t vmid, mmid, new_limit;
-	unsigned long val;
+	uint32_t vmid = 0, mmid = 0, new_limit = 0;
+	unsigned long val = 0;
 	struct hab_device *dev;
 	struct physical_channel *pchan;
 
@@ -111,15 +116,16 @@ int hab_stat_store_rx_pending(const char *buf, int size)
 
 	p += consumed;
 	/* there should be one and only one space between cmd and args */
-	if (*p == ' ')
+	if (*p == ' ') {
 		p++;
+	}
 
 	if (!strcmp(cmd, "pchan_rx_pending_sz")) {
 		ret = sscanf(p, "%u %u %u", &vmid, &mmid, &new_limit);
-		if (ret != 3) {
+		if (ret != SSCANF_PCHAN_ARGS_COUNT) {
 			pr_err("failed to parse input, expect 3 numbers %d\n", ret);
 			ret = -EINVAL;
-		} else if (new_limit < 4096) {
+		} else if (new_limit < PCHAN_RX_PENDING_SZ_MIN) {
 			pr_err("new limit is too low %u\n", new_limit);
 			ret = -EINVAL;
 		} else {
@@ -138,12 +144,12 @@ int hab_stat_store_rx_pending(const char *buf, int size)
 			hab_pchan_put(pchan);
 		}
 	} else if (!strcmp(cmd, "vchan_rx_pending_cnt")) {
-		ret = kstrtoul(p, 10, &val);
+		ret = kstrtoul(p, KSTRTOUL_BASE_DECIMAL, &val);
 		if (ret) {
 			pr_err("invalid number for vchan_rx_pending_cnt: ret=%d\n", ret);
 			return -EINVAL;
 		}
-		if (val < 100 || val > INT_MAX) {
+		if (val < VCHAN_RX_PENDING_CNT_MIN || val > INT_MAX) {
 			pr_err("vchan_rx_pending_cnt must be in [100, %u]\n", INT_MAX);
 			return -EINVAL;
 		}
@@ -158,7 +164,7 @@ int hab_stat_store_rx_pending(const char *buf, int size)
 int hab_stat_show_ctx(struct hab_driver *driver,
 		char *buf, int size)
 {
-	int ret = 0;
+	int ret;
 	struct uhab_context *ctx;
 	struct virq_uhab_context *virq_ctx;
 
@@ -246,13 +252,14 @@ static int print_ctx_total_expimp(struct uhab_context *ctx,
 	}
 	spin_unlock_bh(&ctx->imp_lock);
 
-	if (exp_cnt || exp_total || imp_cnt || imp_total)
+	if (exp_cnt || exp_total || imp_cnt || imp_total) {
 		ret = hab_stat_buffer_print(buf, size,
 				"ctx %d exp %d size %d imp %d size %d\n",
 				ctx->owner, exp_cnt, exp_total,
 				imp_cnt, imp_total);
-	else
+	} else {
 		return 0;
+	}
 
 	read_lock(&ctx->exp_lock);
 	ret = hab_stat_buffer_print(buf, size, "export[expid:vcid:size]: ");
@@ -395,13 +402,13 @@ static int pipedump_idx;
 int dump_hab_open(void)
 {
 	int rc = 0;
-	char file_path[256];
-	char file_time[100];
+	char file_path[PIPE_DUMP_FILE_PATH_LEN];
+	char file_time[PIPE_DUMP_FILE_TIME_LEN];
 
 	rc = dump_hab_get_file_name(file_time, sizeof(file_time));
-	strscpy(file_path, HAB_PIPE_DUMP_FILE_NAME, sizeof(file_path));
-	strlcat(file_path, file_time, sizeof(file_path));
-	strlcat(file_path, HAB_PIPE_DUMP_FILE_EXT, sizeof(file_path));
+	(void)strscpy(file_path, HAB_PIPE_DUMP_FILE_NAME, sizeof(file_path));
+	(void)strlcat(file_path, file_time, sizeof(file_path));
+	(void)strlcat(file_path, HAB_PIPE_DUMP_FILE_EXT, sizeof(file_path));
 
 	filp = vmalloc(HAB_PIPEDUMP_SIZE);
 	if (IS_ERR(filp)) {
@@ -411,7 +418,7 @@ int dump_hab_open(void)
 	} else {
 		pr_info("hab pipe dump buffer opened %s\n", file_path);
 		pipedump_idx = 0;
-		dump_hab_buf(file_path, strlen(file_path)); /* id first */
+		(void)dump_hab_buf(file_path, strlen(file_path)); /* id first */
 	}
 	return rc;
 }
@@ -440,10 +447,10 @@ int dump_hab_buf(void *buf, int size)
 void dump_hab(int mmid)
 {
 	struct physical_channel *pchan = NULL;
-	int i = 0;
-	char str[8] = {35, 35, 35, 35, 35, 35, 35, 35}; /* ## */
+	int i;
+	char str[PIPE_DUMP_SEPARATOR_LEN] = {35, 35, 35, 35, 35, 35, 35, 35}; /* ## */
 
-	dump_hab_open();
+	(void)dump_hab_open();
 	for (i = 0; i < hab_driver.ndevices; i++) {
 		struct hab_device *habdev = &hab_driver.devp[i];
 
@@ -456,7 +463,7 @@ void dump_hab(int mmid)
 					break;
 				}
 			}
-			dump_hab_buf(str, 8); /* separator */
+			(void)dump_hab_buf(str, PIPE_DUMP_SEPARATOR_LEN); /* separator */
 		}
 	}
 	dev_coredumpv(hab_driver.dev[mmid / 100], filp, pipedump_idx, GFP_KERNEL);

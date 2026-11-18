@@ -704,6 +704,7 @@ def register_modules(registry):
         deps = [
             # do not sort
             "drivers/remoteproc/rproc_qcom_common",
+            "drivers/remoteproc/qcom_q6v5_pas",
         ],
     )
 
@@ -1155,6 +1156,16 @@ def register_modules(registry):
     )
 
     registry.register(
+        name = "drivers/soc/qcom/rpm_master_stat",
+        out = "rpm_master_stat.ko",
+        config = "CONFIG_QTI_RPM_STATS_LOG",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/rpm_master_stat.c",
+        ],
+    )
+
+    registry.register(
         name = "drivers/soc/qcom/qcom_tlmm_vm_irqchip",
         out = "qcom_tlmm_vm_irqchip.ko",
         config = "CONFIG_QCOM_TLMM_VM_IRQCHIP",
@@ -1542,6 +1553,20 @@ def register_modules(registry):
             "drivers/virt/gunyah/gh_msgq",
             "drivers/virt/gunyah/gh_dbl",
             "arch/arm64/gunyah/gh_arm_drv",
+        ],
+    )
+
+    registry.register(
+        name = "drivers/soc/qcom/sys_pm_vx_v2",
+        out = "sys_pm_vx_v2.ko",
+        config = "CONFIG_QTI_SYS_PM_VX_V2",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/sys_pm_vx_v2.c",
+        ],
+        deps = [
+            # do not sort
+            "drivers/soc/qcom/qcom_aoss",
         ],
     )
 
@@ -1979,5 +2004,49 @@ def register_modules(registry):
         srcs = [
             # do not sort
             "drivers/soc/qcom/power_mode.c",
+        ],
+    )
+
+    registry.register(
+        name = "drivers/soc/qcom/qdss_bridge",
+        out = "qdss_bridge.ko",
+        config = "CONFIG_QCOM_QDSS_BRIDGE",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/qdss_bridge.h",
+            "drivers/soc/qcom/qdss_bridge.c",
+        ],
+        deps = [
+            # do not sort
+            "drivers/bus/mhi/host/mhi",
+            "drivers/usb/gadget/function/usb_f_qdss",
+        ],
+    )
+
+    registry.register(
+        name = "drivers/soc/qcom/pdr_monitor",
+        out = "pdr_monitor.ko",
+        config = "CONFIG_QCOM_PDR_MONITOR",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/pdr_monitor.c",
+        ],
+        hdrs = [
+            "include/linux/soc/qcom/pdr.h",
+        ],
+        deps = [
+            # do not sort
+            "drivers/soc/qcom/pdr_interface",
+            "drivers/soc/qcom/smem",
+        ],
+    )
+
+    registry.register(
+        name = "drivers/soc/qcom/wear_config",
+        out = "wear_config.ko",
+        config = "CONFIG_QCOM_WEAR_CONFIG",
+        srcs = [
+            # do not sort
+            "drivers/soc/qcom/wear_config.c",
         ],
     )

@@ -92,9 +92,9 @@ static int microdump_crash_collection(void)
 	}
 
 	start_qcomdump = 1;
-	ret = qcom_dump(&head, drv->microdump_dev);
+	ret = qcom_microdump(&head, drv->microdump_dev);
 	if (ret)
-		pr_err("%s: qcom_dump() failed\n", __func__);
+		pr_err("%s: qcom_microdump() failed\n", __func__);
 
 	start_qcomdump = 0;
 out:

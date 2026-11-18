@@ -1653,6 +1653,10 @@ static int arm_smmu_init_domain_context(struct arm_smmu_domain *smmu_domain,
 			pgtbl_cfg->quirks |= IO_PGTABLE_QUIRK_QCOM_TCR_IRGN_NC;
 	}
 
+	if (of_property_read_bool(smmu->dev->of_node,
+				  "qcom,outer-shareable-for-iommu-cache-errata"))
+		pgtbl_cfg->quirks |= IO_PGTABLE_QUIRK_QCOM_OSH_FOR_IOMMU_CACHE;
+
 	if (smmu_domain->pgtbl_quirks)
 		pgtbl_cfg->quirks |= smmu_domain->pgtbl_quirks;
 
@@ -2046,17 +2050,28 @@ static void arm_smmu_master_free_smes(struct arm_smmu_master_cfg *cfg,
 	mutex_unlock(&smmu->stream_map_mutex);
 }
 
-static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
+static int arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 					  enum arm_smmu_s2cr_type type,
 					  u8 cbndx, struct iommu_fwspec *fwspec)
 {
 	struct arm_smmu_device *smmu = cfg->smmu;
 	struct arm_smmu_s2cr *s2cr = smmu->s2crs;
-	int i, idx;
+	int i, idx, ret = 0;
 
 	mutex_lock(&smmu->stream_map_mutex);
 
 	for_each_cfg_sme(cfg, fwspec, i, idx) {
+		if (s2cr[idx].pinned) {
+			if (cbndx != s2cr[idx].cbndx) {
+				dev_err(smmu->dev,
+					"asymmetric group: S2CR[%d] pinned to cbndx=%d but device attaching with cbndx=%d - fix DT qcom,iommu-group\n",
+					idx, s2cr[idx].cbndx, cbndx);
+				ret = -EINVAL;
+				break;
+			}
+			continue;
+		}
+
 		if (type == s2cr[idx].type && cbndx == s2cr[idx].cbndx)
 			continue;
 
@@ -2067,6 +2082,7 @@ static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 	}
 
 	mutex_unlock(&smmu->stream_map_mutex);
+	return ret;
 }
 
 static bool arm_smmu_qcom_validate_secure_pool_node(struct device *dev,
@@ -2265,6 +2281,8 @@ static int arm_smmu_setup_default_domain(struct device *dev,
 		smmu_domain->pgtbl_quirks = IO_PGTABLE_QUIRK_ARM_OUTER_WBWA;
 	else if (!strcmp(str, "LLC_NWA"))
 		smmu_domain->pgtbl_quirks = IO_PGTABLE_QUIRK_QCOM_USE_LLC_NWA;
+	else if (!strcmp(str, "LLC_NRA"))
+		smmu_domain->pgtbl_quirks = IO_PGTABLE_QUIRK_QCOM_USE_LLC_NRA;
 
 	/* Default value: disabled */
 	if (of_property_read_bool(np, "qcom,iommu-earlymap"))
@@ -2370,8 +2388,10 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	}
 
 	/* Looks ok, so add the device to the domain */
-	arm_smmu_master_install_s2crs(cfg, S2CR_TYPE_TRANS,
-				      smmu_domain->cfg.cbndx, fwspec);
+	ret = arm_smmu_master_install_s2crs(cfg, S2CR_TYPE_TRANS,
+					    smmu_domain->cfg.cbndx, fwspec);
+	if (ret)
+		goto rpm_put;
 	if (iommu_logger_register(domain, dev, smmu_domain->pgtbl_ops))
 		dev_err(dev, "Registering iommu debug info failed, continuing.\n");
 
@@ -2410,10 +2430,11 @@ static int arm_smmu_attach_dev_type(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	arm_smmu_master_install_s2crs(cfg, type, 0, fwspec);
-	arm_smmu_rpm_use_autosuspend(smmu);
+	ret = arm_smmu_master_install_s2crs(cfg, type, 0, fwspec);
+	if (!ret)
+		arm_smmu_rpm_use_autosuspend(smmu);
 	arm_smmu_rpm_put(smmu);
-	return 0;
+	return ret;
 }
 
 static int arm_smmu_attach_dev_identity(struct iommu_domain *domain,
@@ -3341,6 +3362,7 @@ static int arm_smmu_handoff_cbs(struct arm_smmu_device *smmu)
 
 		smr = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_SMR(i));
 
+		smrs.pinned = false;
 		if (smmu->features & ARM_SMMU_FEAT_EXIDS) {
 			s2cr = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_S2CR(i));
 			smrs.valid = FIELD_GET(ARM_SMMU_S2CR_EXIDVALID, s2cr);
@@ -3982,6 +4004,7 @@ out_power_off:
 static void arm_smmu_device_shutdown(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
+	int i;
 
 	if (!bitmap_empty(smmu->context_map, ARM_SMMU_MAX_CBS))
 		dev_notice(&pdev->dev, "disabling translation\n");
@@ -3992,6 +4015,27 @@ static void arm_smmu_device_shutdown(struct platform_device *pdev)
 	arm_smmu_rpm_get(smmu);
 	/* Turn the thing off */
 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, ARM_SMMU_sCR0_CLIENTPD);
+
+	/*
+	 * Free the page-table ops for all active secure-VMID domains here so
+	 * that io_pgtable_pool_release calls io_pgtable_hyp_unassign_page() for
+	 * every pooled page before the GVM hands control back to the hypervisor.
+	 */
+	for (i = 0; i < smmu->num_context_banks; i++) {
+		struct arm_smmu_domain *smmu_domain;
+
+		if (!smmu->cbs[i].cfg)
+			continue;
+		smmu_domain = container_of(smmu->cbs[i].cfg,
+					   struct arm_smmu_domain, cfg);
+		if (!arm_smmu_has_secure_vmid(smmu_domain))
+			continue;
+		if (!smmu_domain->pgtbl_ops)
+			continue;
+		qcom_free_io_pgtable_ops(smmu_domain->pgtbl_ops);
+		smmu_domain->pgtbl_ops = NULL;
+	}
+
 	arm_smmu_rpm_put(smmu);
 
 	if (pm_runtime_enabled(smmu->dev)) {

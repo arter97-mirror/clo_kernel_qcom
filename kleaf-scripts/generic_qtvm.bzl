@@ -77,6 +77,7 @@ def define_qc_core_kernel(name, defconfig, defconfig_fragments = None):
         srcs = [
             # do not sort
             ":qc_core_kernel_header_config",
+            "//common:build.config.common",
             "//common:build.config.aarch64",
             "build.config.{}".format(name),
         ],

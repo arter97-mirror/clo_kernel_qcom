@@ -45,3 +45,13 @@ def register_modules(registry):
             "drivers/virtio/virtio_mmio",
         ],
     )
+
+    registry.register(
+        name = "drivers/virtio/virtio_dma_buf",
+        out = "virtio_dma_buf.ko",
+        config = "CONFIG_VIRTIO_DMA_SHARED_BUFFER",
+        srcs = [
+            # do not sort
+            "drivers/virtio/virtio_dma_buf.c",
+        ],
+    )

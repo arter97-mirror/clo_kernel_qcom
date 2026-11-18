@@ -17,6 +17,7 @@
 #include <linux/of.h>
 #include "hab_virq.h"
 
+#define VIRQ_BASE_OFFSET    4U
 int irq_index;
 
 static struct virq_handle virqid[] = {
@@ -42,7 +43,7 @@ int qvm_get_virq_num_id(void **virqdev, int label)
 	kref_init(&dbl->refcount);
 	size = ARRAY_SIZE(virqid);
 	if (i < size) {
-		dbl->id =  virqid[i].id;
+		dbl->id =  (int)virqid[i].id;
 		dbl->virtirq_num = virqid[i].virq_num;
 		*virqdev = dbl;
 		i++;
@@ -55,19 +56,18 @@ int qvm_get_virq_num_id(void **virqdev, int label)
 
 static irqreturn_t virt_irq_handler(int irq, void *priv)
 {
-	struct hvirq_dbl *dbl = priv;
+	struct hvirq_dbl * const dbl = priv;
 	unsigned long flags;
 	unsigned int status;
 
 	spin_lock_irqsave(&dbl->dbl_lock, flags);
 	status = readl(dbl->base);
-	if (!status) {
+	if (status == 0U) {
 		spin_unlock_irqrestore(&dbl->dbl_lock, flags);
 		return IRQ_NONE;
 	}
-	if (dbl->efd)
+	if (dbl->efd != NULL)
 		eventfd_signal(dbl->efd);
-
 	dbl->virq_recv++;
 	/* to deassert interrupt status */
 	writel(0x0, dbl->base);
@@ -76,7 +76,7 @@ static irqreturn_t virt_irq_handler(int irq, void *priv)
 	spin_unlock_irqrestore(&dbl->dbl_lock, flags);
 
 	/* Eventually call the client cb function */
-	if (dbl->client_cb)
+	if (dbl->client_cb != NULL)
 		dbl->client_cb(irq, dbl->client_pdata, 0);
 
 	return IRQ_HANDLED;
@@ -84,12 +84,14 @@ static irqreturn_t virt_irq_handler(int irq, void *priv)
 
 int qvm_virq_rx_register(struct hvirq_dbl *dbl, int dbl_label)
 {
-	int ret = 0;
+	int ret;
 
 	pr_info("irq = %d id = %d irq index = %d\n", dbl->irq, dbl->id, irq_index);
-	snprintf(dbl->virtirq_name, sizeof(dbl->virtirq_name), "hab_virq_%d", dbl->virtirq_num);
-	ret = request_irq(dbl->irq, virt_irq_handler, IRQF_SHARED, dbl->virtirq_name, (void *)dbl);
-	if (ret) {
+	(void)snprintf(dbl->virtirq_name, sizeof(dbl->virtirq_name),
+			"hab_virq_%d", dbl->virtirq_num);
+	ret = request_irq(dbl->irq, virt_irq_handler, IRQF_SHARED,
+			dbl->virtirq_name, (void *)dbl);
+	if (ret != 0) {
 		pr_err("request_irq failed ret %d\n", ret);
 		return ret;
 	}

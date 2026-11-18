@@ -97,6 +97,7 @@
 
 #define ARM_SMMU_GR0_sTLBGSTATUS 0x74
 #define ARM_SMMU_sTLBGSTATUS_GSACTIVE BIT(0)
+#define ARM_SMMU_GR0_TLBIVMIDS1 0xb8
 
 #define ARM_SMMU_TRANSBUF_READSW 0x80U
 #define ARM_SMMU_TRANSBUF_DR2 0x9CU
@@ -166,6 +167,7 @@ enum arm_smmu_cbar_type {
 	CBAR_TYPE_S1_TRANS_S2_TRANS,
 };
 
+#define ARM_SMMU_CBAR_CBNDX GENMASK(15, 8)
 #define ARM_SMMU_CBAR_S1_MEMATTR GENMASK(15, 12)
 #define ARM_SMMU_CBAR_S1_MEMATTR_WB 0xf
 #define ARM_SMMU_CBAR_S1_BPSHCFG GENMASK(9, 8)
@@ -187,6 +189,15 @@ enum arm_smmu_cbar_type {
 #define ARM_SMMU_GR1_CBA2R(n) (0x800 + ((n) << 2))
 #define ARM_SMMU_CBA2R_VMID16 GENMASK(31, 16)
 #define ARM_SMMU_CBA2R_VA64 BIT(0)
+
+/* Inverse helpers: get CBA2R index from a GR1 offset */
+#define ARM_SMMU_GR1_CBA2R_FIRST       ARM_SMMU_GR1_CBA2R(0)
+#define ARM_SMMU_GR1_CBA2R_INDEX(off)  (((off) - ARM_SMMU_GR1_CBA2R_FIRST) >> 2)
+/* Validate a CBA2R offset given runtime max (num_cbar) */
+#define ARM_SMMU_GR1_CBA2R_VALID(off, max) \
+	((off) >= ARM_SMMU_GR1_CBA2R_FIRST && \
+	 ((off) - ARM_SMMU_GR1_CBA2R_FIRST) < ((max) << 2) && \
+	 !((off) & 0x3))
 
 #define ARM_SMMU_CB_SCTLR 0x0
 #define ARM_SMMU_SCTLR_S1_ASIDPNE BIT(12)

@@ -903,6 +903,8 @@ static int msm_hsphy_dpdm_regulator_enable(struct regulator_dev *rdev)
 	dev_dbg(phy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, phy->dpdm_enable);
 
+	msm_hsphy_enable_clocks(phy, true);
+
 	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg)) {
 		dev_err(phy->phy.dev, "eud is enabled\n");
 		return 0;

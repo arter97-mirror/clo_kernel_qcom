@@ -74,6 +74,23 @@ static inline u32 qcom_ipcc_get_hwirq(u16 client_id, u16 signal_id)
 	       FIELD_PREP(IPCC_SIGNAL_ID_MASK, signal_id);
 }
 
+static void qcom_ipcc_hw_init(struct qcom_ipcc *ipcc)
+{
+	u32 config_value;
+
+	/*
+	 * Boot firmware or remote-reset flows may leave CLEAR_ON_RECV_RD set.
+	 * Keep it disabled so RECV_ID reads don't implicitly consume pending IRQs.
+	 */
+	config_value = readl(ipcc->base + IPCC_REG_CONFIG);
+	if (config_value & IPCC_CLEAR_ON_RECV_RD) {
+		dev_dbg(ipcc->dev,
+			 "Clear on receive read is set from firmware; clearing it\n");
+		writel(config_value & ~IPCC_CLEAR_ON_RECV_RD,
+			ipcc->base + IPCC_REG_CONFIG);
+	}
+}
+
 static irqreturn_t qcom_ipcc_irq_fn(int irq, void *data)
 {
 	struct qcom_ipcc *ipcc = data;
@@ -102,7 +119,7 @@ static void qcom_ipcc_update_irq_status(struct qcom_ipcc *ipcc,
 	for (chan_id = 0; chan_id < ipcc->num_chans; chan_id++) {
 		qcom_ipcc_chan_info = ipcc->chans[chan_id].con_priv;
 		if (!qcom_ipcc_chan_info)
-			break;
+			continue;
 
 		if (qcom_ipcc_chan_info->client_id == FIELD_GET(IPCC_CLIENT_ID_MASK, hwirq) &&
 			qcom_ipcc_chan_info->signal_id == FIELD_GET(IPCC_SIGNAL_ID_MASK, hwirq)) {
@@ -292,7 +309,7 @@ static void qcom_ipcc_restore_unmask_irq(struct device *dev)
 	for (chan_id = 0; chan_id < ipcc->num_chans; chan_id++) {
 		qcom_ipcc_chan_info = ipcc->chans[chan_id].con_priv;
 		if (!qcom_ipcc_chan_info)
-			break;
+			continue;
 
 		packed_id = qcom_ipcc_get_hwirq(qcom_ipcc_chan_info->client_id,
 				qcom_ipcc_chan_info->signal_id);
@@ -313,6 +330,10 @@ static int qcom_ipcc_pm_resume(struct device *dev)
 	u32 hwirq;
 	int virq;
 
+	/* Re-apply HW defaults after hibernation restore paths. */
+	qcom_ipcc_hw_init(ipcc);
+
+	/* Re-enable all lines that Linux had unmasked before suspend/hibernate. */
 	qcom_ipcc_restore_unmask_irq(dev);
 
 	hwirq = readl(ipcc->base + IPCC_REG_RECV_ID);
@@ -330,7 +351,6 @@ static int qcom_ipcc_pm_resume(struct device *dev)
 static int qcom_ipcc_probe(struct platform_device *pdev)
 {
 	struct qcom_ipcc *ipcc;
-	u32 config_value;
 	static int id;
 	char *name;
 	int ret;
@@ -352,12 +372,7 @@ static int qcom_ipcc_probe(struct platform_device *pdev)
 	 * The register automatically updates to the next pending interrupt/client
 	 * status based on priority.
 	 */
-	config_value = readl(ipcc->base + IPCC_REG_CONFIG);
-	if (config_value & IPCC_CLEAR_ON_RECV_RD) {
-		dev_info(&pdev->dev, "Clear on receive read is set from boot firmware\n");
-		config_value &= ~(IPCC_CLEAR_ON_RECV_RD);
-		writel(config_value, ipcc->base + IPCC_REG_CONFIG);
-	}
+	qcom_ipcc_hw_init(ipcc);
 
 	ipcc->irq = platform_get_irq(pdev, 0);
 	if (ipcc->irq < 0)

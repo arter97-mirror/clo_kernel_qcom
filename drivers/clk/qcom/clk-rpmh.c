@@ -672,6 +672,8 @@ static struct clk_hw *sm8450_rpmh_clocks[] = {
 	[RPMH_RF_CLK3_A]	= &clk_rpmh_rf_clk3_a_ao.hw,
 	[RPMH_RF_CLK4]		= &clk_rpmh_rf_clk4_a.hw,
 	[RPMH_RF_CLK4_A]	= &clk_rpmh_rf_clk4_a_ao.hw,
+	[RPMH_RF_CLK5]		= &clk_rpmh_rf_clk5_a.hw,
+	[RPMH_RF_CLK5_A]	= &clk_rpmh_rf_clk5_a_ao.hw,
 	[RPMH_IPA_CLK]		= &clk_rpmh_ipa.hw,
 };
 
@@ -916,6 +918,8 @@ static const struct clk_rpmh_desc clk_rpmh_pineapple = {
 static struct clk_hw *glymur_rpmh_clocks[] = {
 	[RPMH_CXO_CLK]		= &clk_rpmh_bi_tcxo_div2.hw,
 	[RPMH_CXO_CLK_A]	= &clk_rpmh_bi_tcxo_div2_ao.hw,
+	[RPMH_LN_BB_CLK3]	= &clk_rpmh_clk8_a1_e0.hw,
+	[RPMH_LN_BB_CLK3_A]	= &clk_rpmh_clk8_a1_e0_ao.hw,
 	[RPMH_RF_CLK3]		= &clk_rpmh_clk3_a1_e0.hw,
 	[RPMH_RF_CLK3_A]	= &clk_rpmh_clk3_a1_e0_ao.hw,
 	[RPMH_RF_CLK4]		= &clk_rpmh_clk4_a1_e0.hw,
@@ -1069,6 +1073,27 @@ static const struct clk_rpmh_desc clk_rpmh_pikachu = {
 	.num_clks = ARRAY_SIZE(pikachu_rpmh_clocks),
 };
 
+static struct clk_hw *fillmore_rpmh_clocks[] = {
+	[RPMH_CXO_CLK]		= &clk_rpmh_bi_tcxo_div4.hw,
+	[RPMH_CXO_CLK_A]	= &clk_rpmh_bi_tcxo_div4_ao.hw,
+	[RPMH_LN_BB_CLK2]	= &clk_rpmh_ln_bb_clk2_a4.hw,
+	[RPMH_LN_BB_CLK2_A]	= &clk_rpmh_ln_bb_clk2_a4_ao.hw,
+	[RPMH_RF_CLK1]		= &clk_rpmh_rf_clk1_a.hw,
+	[RPMH_RF_CLK1_A]	= &clk_rpmh_rf_clk1_a_ao.hw,
+	[RPMH_RF_CLK2]		= &clk_rpmh_rf_clk2_a.hw,
+	[RPMH_RF_CLK2_A]	= &clk_rpmh_rf_clk2_a_ao.hw,
+	[RPMH_RF_CLK3]		= &clk_rpmh_rf_clk3_a.hw,
+	[RPMH_RF_CLK3_A]	= &clk_rpmh_rf_clk3_a_ao.hw,
+	[RPMH_RF_CLK4]		= &clk_rpmh_rf_clk4_a.hw,
+	[RPMH_RF_CLK4_A]	= &clk_rpmh_rf_clk4_a_ao.hw,
+	[RPMH_IPA_CLK]		= &clk_rpmh_ipa.hw,
+};
+
+static const struct clk_rpmh_desc clk_rpmh_fillmore = {
+	.clks = fillmore_rpmh_clocks,
+	.num_clks = ARRAY_SIZE(fillmore_rpmh_clocks),
+};
+
 static int clk_rpmh_probe(struct platform_device *pdev)
 {
 	struct clk_hw **hw_clks;
@@ -1178,6 +1203,7 @@ static const struct of_device_id clk_rpmh_match_table[] = {
 	{ .compatible = "qcom,chora-rpmh-clk", .data = &clk_rpmh_chora},
 	{ .compatible = "qcom,pikachu-rpmh-clk", .data = &clk_rpmh_pikachu},
 	{ .compatible = "qcom,glymur-rpmh-clk", .data = &clk_rpmh_glymur},
+	{ .compatible = "qcom,fillmore-rpmh-clk", .data = &clk_rpmh_fillmore},
 	{ }
 };
 MODULE_DEVICE_TABLE(of, clk_rpmh_match_table);

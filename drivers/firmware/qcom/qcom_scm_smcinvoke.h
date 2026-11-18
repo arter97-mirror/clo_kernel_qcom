@@ -79,7 +79,7 @@ struct smo_buffer_info {
 void qcom_smci_store_memory(u32 uid, u32 peripheral, phys_addr_t addr, size_t size);
 void qcom_smci_get_memory(u32 uid, u32 peripheral, phys_addr_t *addr, size_t *size);
 void qcom_smci_store_smo(u32 uid, u32 peripheral, struct si_object *smo);
-void qcom_smci_release_smo(u32 uid, u32 peripheral);
+void qcom_smci_release_image_service(u32 uid, u32 peripheral);
 void qcom_smci_store_client_smo(u32 uid, struct si_object *smo);
 int qcom_smci_init_client_service(u32 uid, struct si_object **service);
 int qcom_scm_pas_pil_service_init(u32 peripheral, struct si_object **pil_image_service);

@@ -266,8 +266,8 @@ static int map_via_shm_bridge(struct mem_object *mo)
 {
 	int ret;
 	u32 *vmid_list, *perms_list, nelems;
-	u32 hlos_vmid = QCOM_SCM_VMID_HLOS;
-	u32 hlos_perms = QCOM_SCM_PERM_RW;
+	u32 cur_vmid;
+	u32 cur_perms = QCOM_SCM_PERM_RW;
 	struct scatterlist *sgl;
 
 	if (mo->map.sgt->nents != 1)
@@ -293,9 +293,22 @@ static int map_via_shm_bridge(struct mem_object *mo)
 		mo->shm_mapping_info.p_addr = sg_dma_address(sgl);
 		mo->shm_mapping_info.p_addr_len = sg_dma_len(sgl);
 	} else {
-		/* TODO: Add and fetch vmid from DTSI */
-		vmid_list = &hlos_vmid;
-		perms_list = &hlos_perms;
+		/* Use current VM's VMID from qcom,vmid DT property.
+		 * VMID 0 is reserved; treat it as uninitialised and reject.
+		 * ns_vmid perms are always RW for this path.
+		 */
+		ret = mem_buf_current_vmid();
+		if (ret < 0) {
+			pr_err("failed to get current VMID: %d\n", ret);
+			return ret;
+		}
+		if (ret == 0) {
+			pr_err("current VMID is 0 (uninitialised)\n");
+			return -EINVAL;
+		}
+		cur_vmid = (u32)ret;
+		vmid_list = &cur_vmid;
+		perms_list = &cur_perms;
 		nelems = 1;
 
 		/* A DMA API such as dma_alloc_coherent() was used to allocate
@@ -1127,4 +1140,3 @@ int mem_object_init(struct platform_device *pdev)
 
 	return 0;
 }
-

@@ -253,6 +253,22 @@ static int qcom_xpcs_reset_usxgmii(struct dw_xpcs_qcom *qxpcs)
 
 		switch (qxpcs->phy_interface) {
 		case PHY_INTERFACE_MODE_USXGMII:
+			if (qxpcs->needs_aneg) {
+				ret = qcom_xpcs_poll_bit_set(qxpcs,
+							     DW_VR_MII_AN_INTR_STS,
+							     DW_VR_MII_ANCMPLT_INTR);
+				if (ret < 0)
+					return ret;
+
+				XPCSDBG("XPCS AN completed\n");
+				ret = qcom_xpcs_read(qxpcs, DW_VR_MII_AN_INTR_STS);
+				if (ret < 0)
+					return ret;
+
+				/* Clear the AN completion interrupt status */
+				ret &= ~DW_VR_MII_ANCMPLT_INTR;
+				qcom_xpcs_write(qxpcs, DW_VR_MII_AN_INTR_STS, ret);
+			}
 			qcom_xpcs_read(qxpcs, DW_SR_MII_MMD_STS);
 			ret = qcom_xpcs_poll_bit_set(qxpcs,
 						     DW_SR_MII_MMD_STS, DW_SR_MII_STS_LINK_STS);
@@ -438,7 +454,7 @@ static int qcom_xpcs_config(struct phylink_pcs *pcs, unsigned int mode, phy_inte
 static int qcom_xpcs_get_link_status(struct dw_xpcs_qcom *qxpcs,
 				     struct phylink_link_state *state)
 {
-	unsigned int retries = 32;
+	unsigned int retries = 8;
 	unsigned int count = 0;
 	int ret = -EFAULT;
 
@@ -480,8 +496,12 @@ recover:
 					goto recover;
 				else
 					XPCSDBG("XPCS AN completed\n");
+
 				ret = qcom_xpcs_read(qxpcs, DW_VR_MII_AN_INTR_STS);
-				/* Clear the IOC status */
+				if (ret < 0)
+					goto recover;
+
+				/* Clear the AN completion interrupt status */
 				ret &= ~DW_VR_MII_ANCMPLT_INTR;
 				qcom_xpcs_write(qxpcs, DW_VR_MII_AN_INTR_STS, ret);
 			}
@@ -619,6 +639,8 @@ static int qcom_xpcs_enable(struct phylink_pcs *pcs)
 
 	if (qxpcs->pcs_fusa_intr > 0)
 		ret = qcom_xpcs_fusa_intr_enable(qxpcs);
+	else
+		qcom_xpcs_write(qxpcs, DW_VR_XS_PCS_SFTY_DISABLE, 0x1);
 
 	return ret;
 }

@@ -14,6 +14,7 @@
 #define VALID_MASK 0x88
 
 #define SDAM2_MEM17 0x7151
+#define SDAM2_MEM54 0x7176
 
 #define MAX_IDX 7
 

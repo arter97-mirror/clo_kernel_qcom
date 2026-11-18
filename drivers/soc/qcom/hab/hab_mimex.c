@@ -140,8 +140,8 @@ struct export_desc_super *habmem_add_export(
 		int sizebytes,
 		uint32_t flags)
 {
-	struct export_desc *exp = NULL;
-	struct export_desc_super *exp_super = NULL;
+	struct export_desc *exp;
+	struct export_desc_super *exp_super;
 
 	if (!vchan || !sizebytes)
 		return NULL;
@@ -158,6 +158,13 @@ struct export_desc_super *habmem_add_export(
 		idr_alloc_cyclic(&vchan->pchan->expid_idr, exp, 1, 0, GFP_NOWAIT);
 	spin_unlock_bh(&vchan->pchan->expid_lock);
 	idr_preload_end();
+
+	if (exp->export_id < 0) {
+		pr_err("idr_alloc_cyclic failed, ret %d, vchan %x\n",
+			exp->export_id, vchan->id);
+		vfree(exp_super);
+		return NULL;
+	}
 
 	exp->readonly = flags;
 	exp->vcid_local = vchan->id;
@@ -183,7 +190,7 @@ struct export_desc_super *habmem_add_export(
 
 void habmem_remove_export(struct export_desc *exp)
 {
-	struct uhab_context *ctx = NULL;
+	struct uhab_context *ctx;
 	struct export_desc_super *exp_super =
 			container_of(exp,
 				struct export_desc_super,
@@ -236,8 +243,8 @@ static int habmem_export_vchan(struct uhab_context *ctx,
 		uint32_t export_id)
 {
 	int ret = 0;
-	struct export_desc *exp = NULL;
-	struct export_desc_super *exp_super = NULL;
+	struct export_desc *exp;
+	struct export_desc_super *exp_super;
 
 	/*
 	 * Add 1 byte to the export desc size to avoid mismatch in size
@@ -326,9 +333,9 @@ static int habmem_hyp_grant_undo(struct uhab_context *ctx,
 		struct virtual_channel *vchan,
 		uint32_t export_id)
 {
-	struct export_desc *exp = NULL;
-	struct export_desc_super *exp_super = NULL;
-	int irqs_disabled = irqs_disabled();
+	struct export_desc *exp;
+	struct export_desc_super *exp_super;
+	int disabled_irqs = irqs_disabled();
 
 	exp = idr_find(&vchan->pchan->expid_idr, export_id);
 	if (!exp) {
@@ -341,9 +348,9 @@ static int habmem_hyp_grant_undo(struct uhab_context *ctx,
 				struct export_desc_super,
 				exp);
 
-	hab_spin_lock(&vchan->pchan->expid_lock, irqs_disabled);
+	hab_spin_lock(&vchan->pchan->expid_lock, disabled_irqs);
 	idr_remove(&vchan->pchan->expid_idr, exp->export_id);
-	hab_spin_unlock(&vchan->pchan->expid_lock, irqs_disabled);
+	hab_spin_unlock(&vchan->pchan->expid_lock, disabled_irqs);
 
 	exp->ctx = NULL;
 	return habmem_export_put(exp_super);
@@ -431,8 +438,8 @@ int hab_mem_unexport(struct uhab_context *ctx,
 		int kernel)
 {
 	int ret = 0;
-	struct export_desc *exp = NULL;
-	struct export_desc_super *exp_super = NULL;
+	struct export_desc *exp;
+	struct export_desc_super *exp_super;
 	struct virtual_channel *vchan;
 
 	if (!ctx || !param)
@@ -494,8 +501,8 @@ int hab_mem_import(struct uhab_context *ctx,
 		int kernel)
 {
 	int ret = 0, found = 0;
-	struct export_desc *export = NULL;
-	struct export_desc_super *exp_super = NULL, key = {0};
+	struct export_desc *export;
+	struct export_desc_super *exp_super, key = {0};
 	struct virtual_channel *vchan = NULL;
 	struct hab_header header = HAB_HEADER_INITIALIZER;
 	struct hab_import_ack expected_ack = {0};
@@ -631,8 +638,8 @@ int hab_mem_unimport(struct uhab_context *ctx,
 		int kernel)
 {
 	int ret = 0, found = 0;
-	struct export_desc *exp = NULL;
-	struct export_desc_super *exp_super = NULL, key = {0};
+	struct export_desc *exp;
+	struct export_desc_super *exp_super, key = {0};
 	struct virtual_channel *vchan;
 	long fcnt_idle;
 

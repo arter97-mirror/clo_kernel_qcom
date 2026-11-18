@@ -12,4 +12,13 @@ config SND_USB_AUDIO_QMI
 	  stream on a connected USB device, subsystem restart and
 	  device disconnect.
 
+config SND_USB_AUDIO_QMI_1IR
+	tristate "USB Audio QMI One interrupter Service driver"
+	depends on QCOM_QMI_HELPERS && SND_USB_AUDIO
+	help
+	  Starts USB Audio QMI server to communicate with remote entity
+	  to perform operations like enable or disable particular audio
+	  stream on a connected USB device, subsystem restart and
+	  device disconnect. This is one interrupter supported version.
+
 endif	# SND_USB

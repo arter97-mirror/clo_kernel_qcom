@@ -202,8 +202,13 @@ static int md_smem_init_md_table(void)
 	minidump_table.revision = md_global_toc->md_revision;
 	md_ss_toc = &md_global_toc->md_ss_toc[MD_SS_HLOS_ID];
 
+#ifdef CONFIG_QCOM_MINIDUMP_HLOS_ENCRYPTION
+	md_ss_toc->encryption_status = MD_SS_ENCR_NONE;
+	md_ss_toc->encryption_required = MD_SS_ENCR_REQ;
+#else
 	md_ss_toc->encryption_status = MD_SS_ENCR_DONE;
 	md_ss_toc->encryption_required = MD_SS_ENCR_NOTREQ;
+#endif
 
 	minidump_table.md_ss_toc = md_ss_toc;
 	minidump_table.md_regions = kzalloc((MAX_NUM_ENTRIES *

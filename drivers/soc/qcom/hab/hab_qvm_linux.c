@@ -52,9 +52,9 @@ struct hab_driver_ops shmem_ops = {
 /* this happens before hypervisor register */
 static int hab_shmem_probe(struct platform_device *pdev)
 {
-	int irq = 0;
+	int irq;
 	struct resource *mem;
-	void __iomem *shmem_base = NULL;
+	void __iomem *shmem_base;
 	static int pchan_cnt;
 	int ret = 0;
 
@@ -172,9 +172,10 @@ static irqreturn_t shm_irq_handler(int irq, void *_pchan)
 	if (dev && dev->guest_ctrl) {
 		int status = dev->guest_ctrl->status;
 
-		if (status & 0xffff) {/*source bitmask indicator*/
+		if (((unsigned int)status & 0xffffU) != 0U) {/*source bitmask indicator*/
 			rc = IRQ_HANDLED;
-			tasklet_hi_schedule(&dev->os_data->task);
+			if (dev->os_data)
+				tasklet_hi_schedule(&dev->os_data->task);
 		}
 	}
 	return rc;
@@ -205,9 +206,10 @@ int shmem_habhyp_commdev_create_dispatcher(struct physical_channel *pchan)
 	pr_debug("request_irq: irq = %d, pchan name = %s\n",
 			dev->irq, pchan->name);
 	ret = request_irq(dev->irq, shm_irq_handler, IRQF_SHARED, pchan->name, pchan);
-	if (ret)
+	if (ret) {
 		pr_err("request_irq for %s failed: %d\n",
 			pchan->name, ret);
+	}
 
 	return ret;
 }

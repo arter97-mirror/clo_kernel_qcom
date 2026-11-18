@@ -579,7 +579,7 @@ struct stmmac_hwtimestamp {
 	int (*config_addend) (void __iomem *ioaddr, u32 addend);
 	int (*adjust_systime) (void __iomem *ioaddr, u32 sec, u32 nsec,
 			       int add_sub, int gmac4);
-	void (*get_systime) (void __iomem *ioaddr, u64 *systime);
+	void (*get_systime)(struct stmmac_priv *priv, void __iomem *ioaddr, u64 *systime);
 	void (*get_ptptime)(void __iomem *ioaddr, u64 *ptp_time);
 	void (*timestamp_interrupt)(struct stmmac_priv *priv);
 	void (*hwtstamp_correct_latency)(struct stmmac_priv *priv);
@@ -596,7 +596,7 @@ struct stmmac_hwtimestamp {
 #define stmmac_adjust_systime(__priv, __args...) \
 	stmmac_do_callback(__priv, ptp, adjust_systime, __args)
 #define stmmac_get_systime(__priv, __args...) \
-	stmmac_do_void_callback(__priv, ptp, get_systime, __args)
+	stmmac_do_void_callback(__priv, ptp, get_systime, __priv, __args)
 #define stmmac_get_ptptime(__priv, __args...) \
 	stmmac_do_void_callback(__priv, ptp, get_ptptime, __args)
 #define stmmac_timestamp_interrupt(__priv, __args...) \

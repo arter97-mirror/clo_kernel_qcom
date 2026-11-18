@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include "hab.h"
 #include "hab_pipe.h"
+
+#define HAB_SIGNATURE 0xBEE1BEE1U
+#define HAB_MAX_RETRY_CNT 1000
 
 size_t hab_pipe_calc_required_bytes(const uint32_t shared_buf_size)
 {
@@ -29,11 +32,11 @@ struct hab_pipe_endpoint *hab_pipe_init(struct hab_pipe *pipe,
 		const uint32_t shared_buf_size, int top)
 {
 	struct hab_pipe_endpoint *ep = NULL;
-	struct hab_shared_buf *buf_a = NULL;
-	struct hab_shared_buf *buf_b = NULL;
-	struct dbg_items *its = NULL;
+	struct hab_shared_buf *buf_a;
+	struct hab_shared_buf *buf_b;
+	struct dbg_items *its;
 
-	if (!pipe || !tx_buf_p || !rx_buf_p)
+	if ((!pipe) || (!tx_buf_p) || (!rx_buf_p) || (!itms))
 		return NULL;
 
 	/* debug only */
@@ -43,7 +46,7 @@ struct hab_pipe_endpoint *hab_pipe_init(struct hab_pipe *pipe,
 	buf_b = (struct hab_shared_buf *) (pipe->buf_base
 		+ sizeof(struct hab_shared_buf) + shared_buf_size);
 
-	if (top) {
+	if (top != 0) {
 		ep = &pipe->top;
 		memset(ep, 0, sizeof(*ep));
 		*tx_buf_p = buf_a;
@@ -76,7 +79,7 @@ uint32_t hab_pipe_write(struct hab_pipe_endpoint *ep,
 	uint32_t ep_tx_index = ep->tx_info.index;
 	uint32_t ep_tx_wr_count = ep->tx_info.wr_count;
 	uint32_t sh_buf_rd_count = sh_buf->rd_count;
-	uint32_t space = 0U;
+	uint32_t space;
 	uint32_t count1, count2;
 
 	if (buf_size < (ep_tx_wr_count - sh_buf_rd_count)) {
@@ -86,7 +89,7 @@ uint32_t hab_pipe_write(struct hab_pipe_endpoint *ep,
 	}
 	space = buf_size - (ep_tx_wr_count - sh_buf_rd_count);
 
-	if (!p || num_bytes > space || num_bytes == 0) {
+	if ((!p) || (num_bytes > space) || (num_bytes == 0U)) {
 		pr_err("****can not write to pipe p %pK to-write %d space available %d\n",
 			p, num_bytes, space);
 		return 0;
@@ -109,6 +112,9 @@ uint32_t hab_pipe_write(struct hab_pipe_endpoint *ep,
 		ep_tx_index += count1;
 		if (ep_tx_index >= buf_size)
 			ep_tx_index = 0;
+		/* index still within bounds, no wrap needed */
+	} else {
+		/* no bytes in first segment */
 	}
 	if (count2 > 0) {/* handle buffer wrapping */
 		memcpy((void *)&sh_buf->data[ep_tx_index],
@@ -116,7 +122,10 @@ uint32_t hab_pipe_write(struct hab_pipe_endpoint *ep,
 		ep_tx_wr_count += count2;
 		ep_tx_index += count2;
 		if (ep_tx_index >= buf_size)
-			ep_tx_index = 0;
+			ep_tx_index = 0U;
+		/* index still within bounds, no wrap needed */
+	} else {
+		/* no bytes in second segment */
 	}
 
 	ep->tx_info.wr_count = ep_tx_wr_count;
@@ -149,7 +158,7 @@ uint32_t hab_pipe_read(struct hab_pipe_endpoint *ep,
 	uint32_t index_saved = ep_rx_index; /* store original for retry */
 	static uint8_t signature_mismatch;
 
-	if (!p || avail == 0 || size == 0 || ep_rx_index > buf_size)
+	if ((!p) || (avail == 0U) || (size == 0U) || (ep_rx_index > buf_size))
 		return 0;
 
 	asm volatile("dmb ishld" ::: "memory");
@@ -161,24 +170,32 @@ uint32_t hab_pipe_read(struct hab_pipe_endpoint *ep,
 	 * But when calling hab_msg_drop() during message recv, available size may
 	 * less than expected size.
 	 */
-	if (to_read < size)
+	if (to_read < size) {
 		pr_info("less data available %d than requested %d\n",
 			avail, size);
+	} else {
+		/* available data meets requested size */
+	}
 
 	count1 = (to_read <= (buf_size - ep_rx_index)) ? to_read :
 		(buf_size - ep_rx_index);
 	count2 = to_read - count1;
 
-	if (count1 > 0) {
+	if (count1 > 0U) {
 		memcpy(p, (void *)&sh_buf->data[ep_rx_index], count1);
 		ep_rx_index += count1;
 		if (ep_rx_index >= buf_size)
-			ep_rx_index = 0;
+			ep_rx_index = 0U;
+		/* index within bounds, no wrap */
+	} else {
+		/* no bytes in first segment */
 	}
-	if (count2 > 0) { /* handle buffer wrapping */
+	if (count2 > 0U) { /* handle buffer wrapping */
 		memcpy(p + count1, (void *)&sh_buf->data[ep_rx_index],
 			count2);
 		ep_rx_index += count2;
+	} else {
+		/* no bytes in second segment */
 	}
 
 	ep->rx_info.index = ep_rx_index;
@@ -190,7 +207,7 @@ uint32_t hab_pipe_read(struct hab_pipe_endpoint *ep,
 		if (clear && (size == sizeof(*head))) {
 retry:
 
-			if (unlikely(head->signature != 0xBEE1BEE1)) {
+			if (unlikely(head->signature != HAB_SIGNATURE)) {
 				pr_debug("hab head corruption detected at %pK buf %pK %08X %08X %08X %08X %08X rd %d wr %d index %X saved %X retry %d\n",
 					head, &sh_buf->data[0],
 					head->id_type,
@@ -200,7 +217,8 @@ retry:
 					sh_buf->rd_count, sh_buf->wr_count,
 					ep->rx_info.index, index_saved,
 					retry_cnt);
-				if (retry_cnt++ <= 1000) {
+				if (retry_cnt <= HAB_MAX_RETRY_CNT) {
+					retry_cnt++;
 					memcpy(p, &sh_buf->data[index_saved],
 						   count1);
 					if (count2)
@@ -229,17 +247,22 @@ retry:
 		/* If the signature has mismatched,
 		 * don't increment the shared buffer index.
 		 */
-		if (signature_mismatch) {
-			ep->rx_info.index = index_saved + 1;
+		if (signature_mismatch != 0U) {
+			ep->rx_info.index = index_saved + 1U;
 			if (ep->rx_info.index >= sh_buf->size)
-				ep->rx_info.index = 0;
+				ep->rx_info.index = 0U;
+			/* index within bounds */
 
-			to_read = (retry_cnt < 1000) ? 0xFFFFFFFE : 0xFFFFFFFF;
+			to_read = (retry_cnt < HAB_MAX_RETRY_CNT) ? 0xFFFFFFFEU : 0xFFFFFFFFU;
+		} else {
+			/* signature valid, normal index update */
 		}
 
 		/*Must commit data before incremeting count*/
 		asm volatile("dmb ish" ::: "memory");
-		sh_buf->rd_count += (signature_mismatch) ? 1 : count1 + count2;
+		sh_buf->rd_count += (signature_mismatch != 0U) ? 1U : (count1 + count2);
+	} else {
+		/* nothing was read */
 	}
 
 	return to_read;

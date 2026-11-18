@@ -92,13 +92,14 @@
 #define LLCC_DCP              86
 #define LLCC_COMPUTE1         87
 #define LLCC_CPUSSMPAM        89
-#define LLCC_CPU_MTE          35
-#define LLCC_VIDEO_APV        83
-#define LLCC_COMPUTE1         87
+/* Backward-compatible aliases for the same usecase IDs. */
+#define LLCC_CPU_MTE          LLCC_CPUMTE
 #define LLCC_CPUSS_OPP        88
-#define LLCC_CPUSS_MPAM1      89
+#define LLCC_CPUSS_MPAM1      LLCC_CPUSSMPAM
 #define LLCC_PARTIALWRITES    90
 #define LLCC_CAM_IPE_STROV    92
+/* Target-specific alias sharing ID 89 on some SoCs. */
+#define LLCC_PCIE_TCU         LLCC_CPUSSMPAM
 #define LLCC_CAM_OFE_STROV    93
 #define LLCC_CPUSS_HEU        94
 #define LLCC_MDM_PNG_FIXED   100
@@ -178,6 +179,8 @@ struct llcc_edac_reg_data {
 
 struct llcc_edac_reg_offset {
 	/* LLCC TRP registers */
+	u32 trp_ecc_error_inject_0;
+	u32 trp_ecc_error_inject_1;
 	u32 trp_ecc_error_status0;
 	u32 trp_ecc_error_status1;
 	u32 trp_ecc_sb_err_syn0;
@@ -193,6 +196,8 @@ struct llcc_edac_reg_offset {
 	u32 cmn_interrupt_2_enable;
 
 	/* LLCC DRP registers */
+	u32 drp_ecc_error_inject_0;
+	u32 drp_ecc_error_inject_1;
 	u32 drp_ecc_error_cfg;
 	u32 drp_ecc_error_cntr_clear;
 	u32 drp_interrupt_status;
@@ -202,6 +207,22 @@ struct llcc_edac_reg_offset {
 	u32 drp_ecc_error_status1;
 	u32 drp_ecc_sb_err_syn0;
 	u32 drp_ecc_db_err_syn0;
+
+	/*
+	 * LCP/SRP DDR DRAM ECC registers (LLCC broadcast space).
+	 * Zero means LCP reporting is not available on this platform.
+	 * Populated only when CONFIG_EDAC_QCOM_LCP is enabled.
+	 */
+	u32 cmn_interrupt_1_enable;
+	u32 lcp_clock_ctrl;
+	u32 lcp_srp_ecc_error_cfg;
+	u32 lcp_srp_ecc_error_cntr_clear;
+	u32 lcp_srp_ecc_error_inject_0;
+	u32 lcp_srp_ecc_error_inject_1;
+	u32 lcp_srp_interrupt_clear;
+	u32 lcp_srp_interrupt_enable;
+	u32 lcp_srp_interrupt_status;
+	u32 lcp_srp_ecc_error_status1;
 };
 
 struct llcc_uid_slice_pair {
@@ -223,6 +244,8 @@ struct llcc_uid_slice_pair {
  * @num_banks: Number of llcc banks
  * @bitmap: Bit map to track the active slice ids
  * @ecc_irq: interrupt for llcc cache error detection and reporting
+ * @lcp_irq: interrupt for LCP/SRP DDR DRAM ECC error reporting (or -ENXIO)
+ * @ecc_irq_configured: true when firmware already configured LLCC ECC routing
  * @version: Indicates the LLCC version
  * @desc: Array pointer of llcc_slice_desc
  * @uid_slice_lookup: Lookup form UID to slice desc
@@ -241,6 +264,8 @@ struct llcc_drv_data {
 	u32 num_banks;
 	unsigned long *bitmap;
 	int ecc_irq;
+	int lcp_irq;
+	bool ecc_irq_configured;
 	u32 version;
 	bool cap_based_alloc_and_pwr_collapse;
 	struct llcc_slice_desc *desc;
@@ -357,6 +382,16 @@ size_t llcc_tcm_get_slice_size(struct llcc_tcm_data *tcm_data);
  * llcc_tcm_deactivate - Deactivate the llcc tcm
  */
 void llcc_tcm_deactivate(struct llcc_tcm_data *tcm_data);
+/**
+ * llcc_tcm_trigger_access - Issue bounded reads/writes into LLCC TCM
+ * @tcm_data: Pointer to the llcc tcm descriptor
+ * @len: Number of bytes to touch
+ * @pattern: Pattern seed used while generating traffic
+ *
+ * Returns zero on success or a negative errno.
+ */
+int llcc_tcm_trigger_access(struct llcc_tcm_data *tcm_data, size_t len,
+			    u32 pattern);
 int llcc_configure_staling_mode(struct llcc_slice_desc *desc,
 				struct llcc_staling_mode_params *p);
 /**
@@ -420,6 +455,12 @@ static inline size_t llcc_tcm_get_slice_size(struct llcc_tcm_data *tcm_data)
 static inline void llcc_tcm_deactivate(struct llcc_tcm_data *tcm_data)
 {
 
+}
+
+static inline int llcc_tcm_trigger_access(struct llcc_tcm_data *tcm_data,
+					  size_t len, u32 pattern)
+{
+	return -EINVAL;
 }
 
 static inline int llcc_configure_staling_mode(struct llcc_slice_desc *desc,
