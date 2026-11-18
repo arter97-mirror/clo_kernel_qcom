@@ -2288,6 +2288,19 @@ static int msm_geni_serial_prep_dma_tx(struct uart_port *uport)
 	if (atomic_read(&port->flush_buffers))
 		return -EIO;
 
+	/*
+	 * xmit->buf is freed by the serial core after port shutdown.
+	 * If runtime suspend does not happen and port closed, A stale DMA
+	 * TX interrupt can fire after shutdown completes,
+	 * racing into this function with a NULL xmit->buf.
+	 * Add check with xmit->buf to prevent the crash.
+	 */
+	if (unlikely(!xmit->buf)) {
+		UART_LOG_DBG(port->ipc_log_misc, uport->dev,
+			     "%s: xmit buf is NULL, port may be closed\n", __func__);
+		return -EPERM;
+	}
+
 	xmit_size = uart_circ_chars_pending(xmit);
 	if (xmit_size < WAKEUP_CHARS)
 		uart_write_wakeup(uport);
@@ -3829,7 +3842,8 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 
 		if (port->ioctl_count) {
 			UART_LOG_DBG(port->ipc_log_pwr, uport->dev,
-				     "%s: IOCTL vote present. Resetting ioctl count\n", __func__);
+				     "%s: IOCTL vote present. Resetting ioctl count usage_count:%d\n",
+					__func__, atomic_read(&uport->dev->power.usage_count));
 			port->ioctl_count = 0;
 		}
 

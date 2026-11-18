@@ -1943,6 +1943,7 @@ drivers/usb/host/xhci-ext-caps.h
 drivers/usb/host/xhci-hub.c
 drivers/usb/host/xhci-mem.c
 drivers/usb/host/xhci-mvebu.h
+drivers/usb/host/xhci-pci-renesas.c
 drivers/usb/host/xhci-pci.c
 drivers/usb/host/xhci-pci.h
 drivers/usb/host/xhci-plat.c
@@ -4546,6 +4547,7 @@ include/trace/hooks/sd.h
 include/trace/hooks/selinux.h
 include/trace/hooks/signal.h
 include/trace/hooks/softlockup.h
+include/trace/hooks/sound.h
 include/trace/hooks/suspend.h
 include/trace/hooks/swapfile.h
 include/trace/hooks/sys.h

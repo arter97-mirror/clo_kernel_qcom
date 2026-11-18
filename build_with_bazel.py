@@ -18,7 +18,9 @@ import threading
 
 HOST_TARGETS = ["dtc"]
 PHONY_TARGETS = ["16k"]
-SUPPLEMENTARY_SUFFIXES = ("_abl_dist", "_kti_dist", "_vm_images_dist")
+SUPPLEMENTARY_SUFFIXES = (
+    "_abl_dist", "_comb_dist", "_kti_dist", "_vm_images_dist",
+)
 DEFAULT_SKIP_LIST = ["abi"]
 MSM_EXTENSIONS = "build/msm_kernel_extensions.bzl"
 ABL_EXTENSIONS = "build/abl_extensions.bzl"

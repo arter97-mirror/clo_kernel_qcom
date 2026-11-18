@@ -9,6 +9,7 @@
 #include <linux/kdev_t.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/sched/mm.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/soc/mediatek/gzvm_drv.h>
@@ -145,11 +146,25 @@ gzvm_vm_ioctl_set_memory_region(struct gzvm *gzvm,
 
 	memslot = &gzvm->memslot[mem->slot];
 
+	mmap_read_lock(gzvm->mm);
 	vma = vma_lookup(gzvm->mm, mem->userspace_addr);
-	if (!vma)
+	if (!vma) {
+		mmap_read_unlock(gzvm->mm);
 		return -EFAULT;
+	}
 
 	size = vma->vm_end - vma->vm_start;
+	/*
+	 * The mmap read lock is only required while @vma is dereferenced to
+	 * read its extent above. Once @size has been captured @vma is no
+	 * longer dereferenced, so the lock is dropped here rather than being
+	 * held until the memslot->vma store below. That store keeps the
+	 * pointer purely for bookkeeping and it is never dereferenced anywhere
+	 * else in the driver, so extending the locked region to cover it would
+	 * protect nothing.
+	 */
+	mmap_read_unlock(gzvm->mm);
+
 	if (size != mem->memory_size)
 		return -EINVAL;
 
@@ -255,6 +270,13 @@ static long gzvm_vm_ioctl(struct file *filp, unsigned int ioctl,
 	long ret;
 	void __user *argp = (void __user *)arg;
 	struct gzvm *gzvm = filp->private_data;
+
+	/*
+	 * Reject ioctls issued by a process other than the VM creator
+	 * (cf. KVM's kvm->mm check).
+	 */
+	if (gzvm->mm != current->mm)
+		return -EIO;
 
 	switch (ioctl) {
 	case GZVM_CHECK_EXTENSION: {
@@ -389,6 +411,7 @@ static void gzvm_destroy_vm(struct gzvm *gzvm)
 
 	gzvm_destroy_vm_debugfs(gzvm);
 
+	mmdrop(gzvm->mm);
 	kfree(gzvm);
 }
 
@@ -617,7 +640,6 @@ static struct gzvm *gzvm_create_vm(struct gzvm_driver *drv, unsigned long vm_typ
 
 	gzvm->gzvm_drv = drv;
 	gzvm->vm_id = ret;
-	gzvm->mm = current->mm;
 	mutex_init(&gzvm->lock);
 	mutex_init(&gzvm->mem_lock);
 	gzvm->pinned_pages = RB_ROOT;
@@ -637,6 +659,15 @@ static struct gzvm *gzvm_create_vm(struct gzvm_driver *drv, unsigned long vm_typ
 		kfree(gzvm);
 		return ERR_PTR(ret);
 	}
+
+	/*
+	 * Pin the creator's mm_struct for the VM's lifetime (cf. KVM's
+	 * mmgrab(kvm->mm)). Taken here, after the last failure path that
+	 * would free gzvm, so it is balanced by the single mmdrop() in
+	 * gzvm_destroy_vm().
+	 */
+	mmgrab(current->mm);
+	gzvm->mm = current->mm;
 
 	setup_mem_alloc_mode(gzvm);
 
@@ -665,11 +696,22 @@ static struct gzvm *gzvm_create_vm(struct gzvm_driver *drv, unsigned long vm_typ
 int gzvm_dev_ioctl_create_vm(struct gzvm_driver *drv, unsigned long vm_type)
 {
 	struct gzvm *gzvm;
+	int ret;
 
 	gzvm = gzvm_create_vm(drv, vm_type);
 	if (IS_ERR(gzvm))
 		return PTR_ERR(gzvm);
 
-	return anon_inode_getfd("gzvm-vm", &gzvm_vm_fops, gzvm,
+	ret = anon_inode_getfd("gzvm-vm", &gzvm_vm_fops, gzvm,
 			       O_RDWR | O_CLOEXEC);
+	/*
+	 * gzvm_create_vm() initializes the VM's kref to one. If
+	 * anon_inode_getfd() succeeds, gzvm_vm_release() drops this initial
+	 * reference when the VM file is released. On failure, the release
+	 * callback will not run, so drop the reference here.
+	 */
+	if (ret < 0)
+		gzvm_vm_put(gzvm);
+
+	return ret;
 }
