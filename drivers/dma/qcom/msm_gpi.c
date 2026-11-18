@@ -3944,7 +3944,7 @@ static int gpi_deep_sleep_exit_config(struct dma_chan *chan)
 	return ret;
 
 error_start_chan:
-	for (chid = chid - 1; chid >= 0; chid++) {
+	for (chid = chid - 1; chid >= 0; chid--) {
 		gpi_send_cmd(gpii, gpii_chan, GPI_CH_CMD_STOP);
 		gpi_send_cmd(gpii, gpii_chan, GPI_CH_CMD_RESET);
 	}

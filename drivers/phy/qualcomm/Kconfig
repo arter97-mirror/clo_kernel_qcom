@@ -101,6 +101,15 @@ config PHY_QCOM_UFS_V4_WAIPIO
 	  This is required to enable UFS on Waipio chipset.
 	  To compile this driver as a module, choose M here.
 
+config PHY_QCOM_UFS_V4_DIWALI
+	tristate "Qualcomm Technologies, Inc. UFS Diwali Phy Driver"
+	depends on PHY_QCOM_UFS
+	help
+	  This configuration option adds support for the UFS
+	  PHY present on QCOM Diwali chipsets.
+	  This is required to enable UFS on Diwali chipset.
+	  To compile this driver as a module, choose M here.
+
 config PHY_QCOM_SNPS_EUSB2
 	tristate "Qualcomm SNPS eUSB2 PHY Driver"
 	depends on OF && (ARCH_QCOM || COMPILE_TEST)

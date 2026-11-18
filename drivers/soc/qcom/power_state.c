@@ -20,6 +20,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/remoteproc.h>
 #include <linux/remoteproc/qcom_rproc.h>
+#include <linux/string.h>
 #include <linux/suspend.h>
 #include <linux/sysfs.h>
 #include <linux/uaccess.h>
@@ -137,10 +138,21 @@ static int subsys_suspend(struct subsystem_data *ss_data, struct rproc *rproc, u
 static int subsys_resume(struct subsystem_data *ss_data, struct rproc *rproc, u32 state)
 {
 	int ret = 0;
-
 	switch (state) {
 	case SUBSYS_DEEPSLEEP:
 	case SUBSYS_HIBERNATE:
+		ss_data->ignore_ssr = true;
+		ret = hibernation_rproc_early_boot_ping(rproc);
+		if (ret) {
+			pr_err("%s early boot ping init failed: %d\n",
+				ss_data->name, ret);
+			return ret;
+		}
+		ret = rproc_boot(rproc);
+		ss_data->ignore_ssr = false;
+		break;
+	case SUBSYS_DEEPSLEEP_ABORT:
+	case SUBSYS_HIBERNATE_ABORT:
 		ss_data->ignore_ssr = true;
 		ret = rproc_boot(rproc);
 		ss_data->ignore_ssr = false;
@@ -284,12 +296,25 @@ static long ps_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case POWER_STATE_EXIT_DEEPSLEEP_STATE:
 		pr_debug("Exit Deep Sleep\n");
 		ret = subsystem_resume(drv, SUBSYS_DEEPSLEEP);
+		__pm_relax(drv->ps_ws);
 		break;
 
 	case EXIT_HIBERNATE_STATE:
 	case POWER_STATE_EXIT_HIBERNATE_STATE:
 		pr_debug("Exit Hibernate\n");
 		ret = subsystem_resume(drv, SUBSYS_HIBERNATE);
+		break;
+
+	case DEEPSLEEP_ABORT:
+	case POWER_STATE_DEEPSLEEP_ABORT:
+		pr_debug("Deepsleep abort\n");
+		ret = subsystem_resume(drv, SUBSYS_DEEPSLEEP_ABORT);
+		break;
+
+	case HIBERNATE_ABORT:
+	case POWER_STATE_HIBERNATE_ABORT:
+		pr_debug("Hibernation abort\n");
+		ret = subsystem_resume(drv, SUBSYS_HIBERNATE_ABORT);
 		break;
 
 	case MODEM_SUSPEND:
@@ -389,7 +414,7 @@ static int ps_pm_cb(struct notifier_block *nb, unsigned long event, void *unused
 		break;
 
 	case PM_POST_SUSPEND:
-		if (pm_suspend_target_state == PM_SUSPEND_MEM) {
+		if (!pm_suspend_default_s2idle()) {
 			pr_info("Deep Sleep exit\n");
 
 			ret = send_deep_sleep_vote(DS_EXIT, drv);

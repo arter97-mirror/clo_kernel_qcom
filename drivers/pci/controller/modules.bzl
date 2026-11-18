@@ -44,9 +44,11 @@ def register_modules(registry):
         srcs = [
             # do not sort
             "drivers/pci/controller/pcie-qcom-ecam.c",
+            "drivers/pci/controller/pci-host-common.h",
         ],
         deps = [
             # do not sort
+            "kernel/trace/qcom_ipc_logging",
             "drivers/soc/qcom/smem",
             "drivers/soc/qcom/debug_symbol",
             "drivers/dma-buf/heaps/qcom_dma_heaps",

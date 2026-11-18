@@ -3144,7 +3144,6 @@ static int gcc_sm4450_probe(struct platform_device *pdev)
 	regmap_update_bits(regmap, 0x36018, BIT(0), BIT(0)); /* GCC_CAMERA_SLEEP_CLK */
 	regmap_update_bits(regmap, 0x3601c, BIT(0), BIT(0)); /* GCC_CAMERA_XO_CLK */
 	regmap_update_bits(regmap, 0x37004, BIT(0), BIT(0)); /* GCC_DISP_AHB_CLK */
-	regmap_update_bits(regmap, 0x37014, BIT(0), BIT(0)); /* GCC_DISP_XO_CLK */
 	regmap_update_bits(regmap, 0x81004, BIT(0), BIT(0)); /* GCC_GPU_CFG_AHB_CLK */
 	regmap_update_bits(regmap, 0x42004, BIT(0), BIT(0)); /* GCC_VIDEO_AHB_CLK */
 	regmap_update_bits(regmap, 0x42018, BIT(0), BIT(0)); /* GCC_VIDEO_XO_CLK */

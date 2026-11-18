@@ -275,7 +275,7 @@ static void smmu_tlb_inv_range(unsigned long iova, size_t size, size_t granule,
 				.vmid = 0,
 			},
 		};
-		hyp_spin_lock(&smmu->lock);
+		kvm_smmu_hw_lock(smmu);
 		/*
 		 * Don't bother if SMMU is disabled, this would be useful for the case
 		 * when RPM is supported to avoid thouching the SMMU MMIO when disabled.
@@ -283,11 +283,11 @@ static void smmu_tlb_inv_range(unsigned long iova, size_t size, size_t granule,
 		 * enabled. As otherwise the host can prevent the hypervisor from doing
 		 * TLB invalidations.
 		 */
-		if (is_smmu_enabled(smmu)) {
+		if (smmu->active) {
 			WARN_ON(smmu_tlb_inv_range_smmu(smmu, &cmd, iova, size, granule));
 			WARN_ON(smmu_send_cmd(smmu, &cmd_s1));
 		}
-		hyp_spin_unlock(&smmu->lock);
+		kvm_smmu_hw_unlock(smmu);
 	}
 }
 
@@ -546,11 +546,14 @@ static int smmu_reshadow_ste(struct hyp_arm_smmu_v3_device *smmu, u32 sid, bool 
 	 * There is no need for last CFGI as it's done next.
 	 */
 	smmu_attach_stage_2(&target);
+
+	kvm_smmu_hw_lock(smmu);
 	for (i = 1; i < STRTAB_STE_DWORDS; i++)
 		WRITE_ONCE(hyp_ste_ptr->data[i], target.data[i]);
 
 	WARN_ON(smmu_send_cmd(smmu, &cfgi_cmd));
 	WRITE_ONCE(hyp_ste_ptr->data[0], target.data[0]);
+	kvm_smmu_hw_unlock(smmu);
 	return 0;
 }
 
@@ -623,6 +626,7 @@ static int smmu_init_device(struct hyp_arm_smmu_v3_device *smmu)
 		goto out_ret;
 
 	hyp_spin_lock_init(&smmu->lock);
+	kvm_smmu_hw_lock_init(smmu);
 
 	ret = smmu_init_cmdq(smmu);
 	if (ret)
@@ -685,7 +689,17 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 		u32 sid = FIELD_GET(CMDQ_CFGI_0_SID, command[0]);
 		u32 leaf = FIELD_GET(CMDQ_CFGI_1_LEAF, command[1]);
 
-		WARN_ON(smmu_reshadow_ste(smmu, sid, leaf));
+		bool ret;
+		/*
+		 * If STE update is required flush the CMDQ and drop the lock as that
+		 * might require to update the host page table and acquire its lock.
+		 */
+		writel(smmu->cmdq.llq.prod, smmu->cmdq.prod_reg);
+		kvm_smmu_hw_unlock(smmu);
+		ret = smmu_reshadow_ste(smmu, sid, leaf);
+		kvm_smmu_hw_lock(smmu);
+		if (WARN_ON(ret))
+			return true;
 		break;
 	}
 	case CMDQ_OP_CFGI_ALL:
@@ -707,15 +721,14 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 		/* Only allow VMID = 0*/
 		if (FIELD_GET(CMDQ_TLBI_0_VMID, command[0]) == 0)
 			break;
-		break;
+		return true;
 	}
-	case 0x10: /* CMD_TLBI_NH_ALL: Not used by Linux */
-	case CMDQ_OP_TLBI_EL2_ALL:
-	case CMDQ_OP_TLBI_EL2_VA:
-	case CMDQ_OP_TLBI_EL2_ASID:
-	case CMDQ_OP_TLBI_S12_VMALL:
-	case 0x23: /* CMD_TLBI_EL2_VAA: Not used by Linux */
-		return WARN_ON(true);
+	case CMDQ_OP_PREFETCH_CFG:
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+	case CMDQ_OP_TLBI_NH_ALL:
+	case CMDQ_OP_TLBI_NSNH_ALL:
+		break;
 	case CMDQ_OP_CMD_SYNC:
 		if (FIELD_GET(CMDQ_SYNC_0_CS, command[0]) == CMDQ_SYNC_0_CS_IRQ) {
 			/* Allow it, but let the host timeout, as this should never happen. */
@@ -724,6 +737,9 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 			command[1] &= ~CMDQ_SYNC_1_MSIADDR_MASK;
 		}
 		break;
+	default:
+		/* Deny unknown commands */
+		return true;
 	}
 
 	return false;
@@ -731,7 +747,7 @@ static bool smmu_filter_command(struct hyp_arm_smmu_v3_device *smmu, u64 *comman
 
 static void smmu_emulate_cmdq_insert(struct hyp_arm_smmu_v3_device *smmu)
 {
-	u64 *host_cmdq = hyp_phys_to_virt(smmu->cmdq_host.q_base & Q_BASE_ADDR_MASK);
+	u64 *host_cmdq = hyp_phys_to_virt(smmu->cmdq_host.base_dma);
 	int idx;
 	u64 cmd[CMDQ_ENT_DWORDS];
 	bool skip;
@@ -742,6 +758,7 @@ static void smmu_emulate_cmdq_insert(struct hyp_arm_smmu_v3_device *smmu)
 		return;
 
 	space = (1 << (smmu->cmdq_host.llq.max_n_shift)) - queue_space(&smmu->cmdq_host.llq);
+	kvm_smmu_hw_lock(smmu);
 	/* Wait for the command queue to have some space. */
 	WARN_ON(smmu_wait(use_wfe, smmu_cmdq_has_space(&smmu->cmdq, space)));
 
@@ -752,7 +769,7 @@ static void smmu_emulate_cmdq_insert(struct hyp_arm_smmu_v3_device *smmu)
 		smmu_copy_from_host(smmu, cmd, &host_cmdq[idx * CMDQ_ENT_DWORDS],
 				    CMDQ_ENT_DWORDS << 3);
 		skip = smmu_filter_command(smmu, cmd);
-		if (skip)
+		if (WARN_ON(skip))
 			continue;
 		smmu_add_cmd_raw(smmu, cmd);
 	}
@@ -760,6 +777,8 @@ static void smmu_emulate_cmdq_insert(struct hyp_arm_smmu_v3_device *smmu)
 	writel(smmu->cmdq.llq.prod, smmu->cmdq.prod_reg);
 
 	WARN_ON(smmu_wait(use_wfe, smmu_cmdq_empty(&smmu->cmdq)));
+
+	kvm_smmu_hw_unlock(smmu);
 }
 
 static void smmu_update_ste_shadow(struct hyp_arm_smmu_v3_device *smmu, bool enabled)
@@ -788,11 +807,42 @@ static void smmu_update_ste_shadow(struct hyp_arm_smmu_v3_device *smmu, bool ena
 		WARN_ON(smmu_unshare_pages(strtab_host_base(smmu), strtab_size));
 }
 
+static int smmu_flush_all_tlb(struct hyp_arm_smmu_v3_device *smmu)
+{
+	int ret;
+	u32 cr0;
+	struct arm_smmu_cmdq_ent cmd = {
+		.opcode = CMDQ_OP_TLBI_NSNH_ALL,
+	};
+
+	kvm_smmu_hw_lock(smmu);
+	/*
+	 * This must be called when the SMMU is getting enabled.
+	 * First enable the cmdq and then invalidate the TLB.
+	 */
+	cr0 = readl_relaxed(smmu->base + ARM_SMMU_CR0);
+	if (!(cr0 & CR0_CMDQEN)) {
+		cr0 |= CR0_CMDQEN;
+		writel_relaxed(cr0, smmu->base + ARM_SMMU_CR0);
+		ret = smmu_wait(false,
+				readl_relaxed(smmu->base + ARM_SMMU_CR0ACK) == cr0);
+		if (ret) {
+			kvm_smmu_hw_unlock(smmu);
+			return ret;
+		}
+	}
+	ret = smmu_send_cmd(smmu, &cmd);
+	kvm_smmu_hw_unlock(smmu);
+	return ret;
+}
+
 static void smmu_emulate_enable(struct hyp_arm_smmu_v3_device *smmu)
 {
 	/* Enabling SMMU without CMDQ, means TLB invalidation won't work. */
 	WARN_ON(!is_cmdq_enabled(smmu));
 	smmu_update_ste_shadow(smmu, true);
+	/* Clean the TLBs each time the SMMU is enabled. */
+	WARN_ON(smmu_flush_all_tlb(smmu));
 }
 
 static void smmu_emulate_disable(struct hyp_arm_smmu_v3_device *smmu)
@@ -803,7 +853,8 @@ static void smmu_emulate_disable(struct hyp_arm_smmu_v3_device *smmu)
 static void smmu_emulate_cmdq_enable(struct hyp_arm_smmu_v3_device *smmu)
 {
 	smmu->cmdq_host.llq.max_n_shift = smmu->cmdq_host.q_base & Q_BASE_LOG2SIZE;
-	smmu->cmdq_host.base_dma = smmu->cmdq_host.q_base & Q_BASE_ADDR_MASK;
+	smmu->cmdq_host.base_dma = smmu->cmdq_host.q_base &
+		Q_BASE_ADDR_MASK & ((1ULL << smmu->oas) - 1);
 	WARN_ON(smmu_share_pages(smmu->cmdq_host.base_dma,
 				 cmdq_size(&smmu->cmdq_host)));
 }
@@ -814,9 +865,11 @@ static void smmu_emulate_cmdq_disable(struct hyp_arm_smmu_v3_device *smmu)
 				   cmdq_size(&smmu->cmdq_host)));
 }
 
-static void smmu_emulate_queue(unsigned long q_base, size_t ent_size_shift)
+static void smmu_emulate_queue(struct hyp_arm_smmu_v3_device *smmu,
+			       unsigned long q_base, size_t ent_size_shift)
 {
-	phys_addr_t base = q_base & Q_BASE_ADDR_MASK;
+	/* Q_BASE_ADDR_MASK is not enough as the SMMU also ignores bits > OAS */
+	phys_addr_t base = q_base & Q_BASE_ADDR_MASK & ((1ULL << smmu->oas) - 1);
 	size_t size = 1UL << (FIELD_GET(Q_BASE_LOG2SIZE, q_base) + ent_size_shift);
 
 	WARN_ON(smmu_share_pages(base, size));
@@ -919,13 +972,13 @@ static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 			 * As the host never disable those queues, don't support that.
 			 */
 			if (!last_evtq_en && is_evtq_enabled(smmu))
-				smmu_emulate_queue(smmu->evtq_base, EVTQ_ENT_SZ_SHIFT);
+				smmu_emulate_queue(smmu, smmu->evtq_base, EVTQ_ENT_SZ_SHIFT);
 			else if (last_evtq_en && !is_evtq_enabled(smmu)) {
 				if (smmu->cr0 != 0)
 					WARN_ON(1);
 			}
 			if (!last_priq_en && is_priq_enabled(smmu))
-				smmu_emulate_queue(smmu->priq_base, PRIQ_ENT_SZ_SHIFT);
+				smmu_emulate_queue(smmu, smmu->priq_base, PRIQ_ENT_SZ_SHIFT);
 			else if (last_priq_en && !is_priq_enabled(smmu)) {
 				if (smmu->cr0 != 0)
 					WARN_ON(1);
@@ -992,27 +1045,39 @@ static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 	 * There are some other registers that are not used by Linux as IDR2, IDR4
 	 * that won't be allowed.
 	 */
-	case ARM_SMMU_EVTQ_PROD + SZ_64K:
-	case ARM_SMMU_EVTQ_CONS + SZ_64K:
 	case ARM_SMMU_EVTQ_IRQ_CFG1:
 	case ARM_SMMU_EVTQ_IRQ_CFG2:
-	case ARM_SMMU_PRIQ_PROD + SZ_64K:
-	case ARM_SMMU_PRIQ_CONS + SZ_64K:
-	case ARM_SMMU_PRIQ_IRQ_CFG1:
-	case ARM_SMMU_PRIQ_IRQ_CFG2:
-	case ARM_SMMU_GERRORN:
 	case ARM_SMMU_GERROR_IRQ_CFG1:
 	case ARM_SMMU_GERROR_IRQ_CFG2:
+	case ARM_SMMU_PRIQ_IRQ_CFG1:
+	case ARM_SMMU_PRIQ_IRQ_CFG2:
+		/* These are RES0 as MSI support is hidden. */
+		val = 0;
+		if (!is_write)
+			goto out_update_regs;
+		fallthrough;
+	case ARM_SMMU_EVTQ_PROD + SZ_64K:
+	case ARM_SMMU_EVTQ_CONS + SZ_64K:
+	case ARM_SMMU_PRIQ_PROD + SZ_64K:
+	case ARM_SMMU_PRIQ_CONS + SZ_64K:
+	case ARM_SMMU_GERRORN:
 	case ARM_SMMU_IRQ_CTRLACK:
 	case ARM_SMMU_IRQ_CTRL:
 	case ARM_SMMU_CR0ACK:
 	case ARM_SMMU_CR2:
 		/* These are 32 bit registers. */
 		WARN_ON(len != sizeof(u32));
-		fallthrough;
+		mask = read_write;
+		break;
 	case ARM_SMMU_EVTQ_IRQ_CFG0:
 	case ARM_SMMU_PRIQ_IRQ_CFG0:
 	case ARM_SMMU_GERROR_IRQ_CFG0:
+		if (len != sizeof(u64))
+			break;
+		/* These are RES0 as MSI support is hidden. */
+		val = 0;
+		if (!is_write)
+			goto out_update_regs;
 		mask = read_write;
 		break;
 	case ARM_SMMU_IIDR:
@@ -1027,11 +1092,27 @@ static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 	if (WARN_ON(!mask))
 		goto out_ret;
 
+	kvm_smmu_hw_lock(smmu);
 	if (is_write) {
 		if (len == sizeof(u64))
 			writeq_relaxed(val & mask, smmu->base + off);
 		else
 			writel_relaxed(val & mask, smmu->base + off);
+
+		/*
+		 * Make sure writes to CR0 are immediately observed, that is important
+		 * when synchronizing with TLB invalidation as reading CR0 is enough
+		 * to deduce the SMMU state, and we have to enforce the ack with the
+		 * hw_lock acquired.
+		 */
+		if (off == ARM_SMMU_CR0) {
+			WARN_ON(smmu_wait(false,
+						readl_relaxed(smmu->base +
+							      ARM_SMMU_CR0ACK) == (val & mask)));
+			smmu->active = !!(val & CR0_CMDQEN);
+		}
+
+		kvm_smmu_hw_unlock(smmu);
 		return true;
 	} else {
 		if (len == sizeof(u64))
@@ -1039,6 +1120,8 @@ static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 		else
 			val = readl_relaxed(smmu->base + off) & mask;
 	}
+
+	kvm_smmu_hw_unlock(smmu);
 
 out_update_regs:
 	/*

@@ -284,14 +284,14 @@ static int glink_cma_fifo_init(struct glink_cma_dev *gdev)
 	*(u32 *)(descs + FIFO_0_BASE) = FIFO_0_START_OFFSET;
 	*(u32 *)(descs + FIFO_0_SIZE) = FIFO_SIZE;
 	tx_pipe->fifo = (u32 *)(descs + FIFO_0_START_OFFSET);
-	tx_pipe->tail = (u32 *)(descs + FIFO_0_TAIL);
-	tx_pipe->head = (u32 *)(descs + FIFO_0_HEAD);
+	tx_pipe->tail = (__le32 *)(descs + FIFO_0_TAIL);
+	tx_pipe->head = (__le32 *)(descs + FIFO_0_HEAD);
 
 	*(u32 *)(descs + FIFO_1_BASE) = FIFO_1_START_OFFSET;
 	*(u32 *)(descs + FIFO_1_SIZE) = FIFO_SIZE;
 	rx_pipe->fifo = (u32 *)(descs + FIFO_1_START_OFFSET);
-	rx_pipe->tail = (u32 *)(descs + FIFO_1_TAIL);
-	rx_pipe->head = (u32 *)(descs + FIFO_1_HEAD);
+	rx_pipe->tail = (__le32 *)(descs + FIFO_1_TAIL);
+	rx_pipe->head = (__le32 *)(descs + FIFO_1_HEAD);
 
 	/* Reset respective index */
 	*tx_pipe->head = 0;
@@ -304,6 +304,9 @@ static int glink_cma_fifo_init(struct glink_cma_dev *gdev)
 static void qcom_glink_cma_release(struct device *dev)
 {
 	struct glink_cma_dev *gdev = dev_get_drvdata(dev);
+
+	if (!gdev)
+		return;
 	GLINK_CMA_DEBUG_LOG(gdev->glink_cma_ilc, "");
 	kfree(gdev);
 }
@@ -312,8 +315,10 @@ static irqreturn_t qcom_glink_cma_intr(int irq, void *data)
 {
 	struct glink_cma_dev *gdev = data;
 
-	if (gdev->glink)
-		qcom_glink_native_rx(gdev->glink);
+	if (!gdev || !gdev->glink)
+		return IRQ_HANDLED;
+
+	qcom_glink_native_rx(gdev->glink);
 
 	return IRQ_HANDLED;
 }
@@ -323,7 +328,7 @@ struct glink_cma_dev *qcom_glink_cma_register(struct device *parent, struct devi
 	struct glink_cma_dev *gdev;
 	struct qcom_glink *glink;
 	struct device *dev;
-	int rc, ret, irq;
+	int rc, irq;
 
 	if (!parent || !node || !config)
 		return ERR_PTR(-EINVAL);
@@ -340,7 +345,7 @@ struct glink_cma_dev *qcom_glink_cma_register(struct device *parent, struct devi
 	rc = device_register(dev);
 	if (rc) {
 		pr_err("failed to register glink edge\n");
-		put_device(dev);
+		kfree(gdev);
 		return ERR_PTR(rc);
 	}
 
@@ -350,11 +355,12 @@ struct glink_cma_dev *qcom_glink_cma_register(struct device *parent, struct devi
 
 	rc = glink_cma_fifo_init(gdev);
 	if (rc) {
-		kfree(gdev);
-		return ERR_PTR(rc);
+		goto err_put_dev;
 	}
 
-	ret = of_property_read_string(dev->of_node, "label", &gdev->name);
+	rc = of_property_read_string(dev->of_node, "label", &gdev->name);
+	if (rc)
+		gdev->name = "unknown";
 
 	scnprintf(gdev->irqname, 32, "glink-native-%s", gdev->name);
 
@@ -376,11 +382,11 @@ struct glink_cma_dev *qcom_glink_cma_register(struct device *parent, struct devi
 		goto err_put_glink;
 	}
 	gdev->irq = irq;
-	ret = devm_request_irq(&gdev->dev, gdev->irq, qcom_glink_cma_intr,
+	rc = devm_request_irq(&gdev->dev, gdev->irq, qcom_glink_cma_intr,
 							IRQF_NO_SUSPEND,
 							gdev->irqname, gdev);
-	if (ret) {
-		pr_err("%s: failed to request irq %d\n", __func__, ret);
+	if (rc) {
+		pr_err("%s: failed to request irq %d\n", __func__, rc);
 		goto err_put_glink;
 	}
 

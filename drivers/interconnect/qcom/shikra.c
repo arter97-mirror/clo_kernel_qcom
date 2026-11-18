@@ -19,6 +19,7 @@
 #include <soc/qcom/rpm-smd.h>
 
 #include "icc-rpm.h"
+#include "icc-debug.h"
 #include "qnoc-qos-rpm.h"
 #include "rpm-ids.h"
 
@@ -166,6 +167,7 @@ static struct qcom_icc_node qnm_gpu = {
 	.qosbox = &qnm_gpu_qos,
 	.mas_rpm_id = -1,
 	.slv_rpm_id = -1,
+	.perf_mode_mask = 0x4,
 	.num_links = 3,
 	.links = { SLAVE_LLCC, SLAVE_MEMNOC_SNOC,
 		   SLAVE_MEM_NOC_PCIE_SNOC },
@@ -265,6 +267,7 @@ static struct qcom_icc_node xm_apps = {
 	.qosbox = &xm_apps_qos,
 	.mas_rpm_id = ICBID_MASTER_APPSS_PROC,
 	.slv_rpm_id = -1,
+	.perf_mode_mask = 0x2,
 	.num_links = 3,
 	.links = { SLAVE_LLCC, SLAVE_MEMNOC_SNOC,
 		   SLAVE_MEM_NOC_PCIE_SNOC },
@@ -1855,6 +1858,8 @@ static int qnoc_probe(struct platform_device *pdev)
 	list_add_tail(&qp->probe_list, &qnoc_probe_list);
 	mutex_unlock(&probe_list_lock);
 
+	qcom_icc_debug_register(provider);
+
 	return 0;
 err:
 	clk_bulk_disable_unprepare(qp->num_qos_clks, qp->qos_clks);
@@ -1869,6 +1874,7 @@ static void qnoc_remove(struct platform_device *pdev)
 {
 	struct qcom_icc_provider *qp = platform_get_drvdata(pdev);
 
+	qcom_icc_debug_unregister(&qp->provider);
 	clk_bulk_disable_unprepare(qp->num_clks, qp->bus_clks);
 
 	icc_nodes_remove(&qp->provider);

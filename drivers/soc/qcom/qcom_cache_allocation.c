@@ -522,7 +522,27 @@ static ssize_t current_governor_show(struct device *dev,
 	return cnt;
 }
 
-QCOM_CACHE_ALLOCATION_ATTR_STORE(current_governor);
+static ssize_t current_governor_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct cache_allocation *pd = dev_get_drvdata(dev);
+	int i, new_gov = -1;
+
+	for (i = 0; i < ARRAY_SIZE(gov_list); i++) {
+		if (sysfs_streq(buf, gov_list[i])) {
+			new_gov = i;
+			break;
+		}
+	}
+
+	if (new_gov < 0)
+		return -EINVAL;
+
+	mutex_lock(&pd->lock);
+	pd->current_governor = new_gov;
+	mutex_unlock(&pd->lock);
+	return count;
+}
 static DEVICE_ATTR_RW(current_governor);
 
 static ssize_t win_count_config_show(struct device *dev,

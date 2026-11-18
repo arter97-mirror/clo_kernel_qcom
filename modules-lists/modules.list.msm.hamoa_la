@@ -84,6 +84,7 @@ pmic-pon-log.ko
 pinctrl-spmi-gpio.ko
 phy-qcom-eusb2-repeater.ko
 phy-qcom-snps-eusb2.ko
+eom_driver.ko
 phy-qcom-qmp-combo.ko
 phy-nxp-ptn3222.ko
 phy-qcom-qmp-usb.ko
@@ -113,3 +114,5 @@ spi-msm-geni.ko
 wcd_usbss_i2c.ko
 qcom-reboot-reason.ko
 iommu-logger.ko
+cqhci.ko
+sdhci-msm.ko

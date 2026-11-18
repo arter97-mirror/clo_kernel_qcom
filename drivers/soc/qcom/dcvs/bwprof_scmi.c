@@ -35,7 +35,6 @@
 #define BWMON_FEATURE_1MS	2103 /* For 1ms sampling rate */
 #define BWMON_FEATURE_HIST	2104 /* For Histogram sampling mode */
 #define BWMON_FEATURE_MULTIMEDIA	2107 /* For Multimedia masters */
-#define BUFFER_FILL_MS 100
 
 static struct bwprof_dev_data *bwprof_data;
 void __iomem *base_src;
@@ -84,6 +83,18 @@ static bool check_master_info(u8 master, u32 cfg_type)
 		if (master == mode->masters_list[i])
 			return true;
 	}
+
+	return false;
+}
+
+static bool check_num_sample(u8 samp)
+{
+	if (bwprof_data->is_hist_enable)
+		if (samp <= MAX_HIST_SAMPLES && samp != 0)
+			return true;
+
+	if (samp == 0 || samp == 10 || samp == 50 || samp == MAX_NUM_SAMPLES)
+		return true;
 
 	return false;
 }
@@ -189,6 +200,7 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 	u32 bucket_list[MAX_USER_BUCKETS];
 	u8 bucket_cnt = 0;
 	u8 hist_enable = 0;
+	u8 num_samples = 0;
 	int ret;
 	struct sample_ms_info mode_info;
 	struct master_info info;
@@ -233,6 +245,11 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 				kfree(input);
 				return -EINVAL;
 			}
+		} else if (!strcmp(param_name, "num_samples")) {
+			if (kstrtou8(token, 0, &num_samples) < 0) {
+				kfree(input);
+				return -EINVAL;
+			}
 		}
 
 		if (hist_enable) {
@@ -253,6 +270,12 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 			master_cnt == 0)
 		return -EINVAL;
 
+	if (!check_num_sample(num_samples))
+		return -EINVAL;
+
+	num_samples = num_samples ? num_samples : (hist_enable ?
+				MAX_HIST_SAMPLES : MAX_NUM_SAMPLES);
+
 	ret = license_check_init();
 	if (ret) {
 		pr_err("bwprof_scmi: license_check_init failed\n");
@@ -263,14 +286,20 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 			ret = smci_bwprof_license_check(&bwprof_data->oic,
 					bwprof_data->bwprof_profiler,
 					BWMON_FEATURE_HIST, NULL, 0);
+			if (ret) {
+				pr_err("smci_bwprof_license_check failed for histogram sampling: %d\n",
+					ret);
+				return -EIO;
+			}
 		} else {
 			ret = smci_bwprof_license_check(&bwprof_data->oic,
 					bwprof_data->bwprof_profiler,
 					BWMON_FEATURE_1MS, NULL, 0);
-		}
-		if (ret) {
-			pr_err("smci_bwprof_license_check failed : %d\n", ret);
-			return -EIO;
+			if (ret) {
+				pr_err("smci_bwprof_license_check failed for 1ms sampling: %d\n",
+					ret);
+				return -EIO;
+			}
 		}
 	}
 	cfg_type = map_sampling_ms(sampling_ms);
@@ -286,12 +315,13 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 			is_multimedia_enable = true;
 	}
 
-	if (is_multimedia_enable) {
+	if (is_multimedia_enable && sampling_ms < SAMPLING_100MS) {
 		ret = smci_bwprof_license_check(&bwprof_data->oic,
 					bwprof_data->bwprof_profiler,
 					BWMON_FEATURE_MULTIMEDIA, NULL, 0);
 		if (ret) {
-			pr_err("smci_bwprof_license_check failed : %d\n", ret);
+			pr_err("smci_bwprof_license_check failed for multimedia masters : %d\n",
+				ret);
 			return -EIO;
 		}
 	}
@@ -306,6 +336,7 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 		}
 	}
 
+	mode_info.num_samples = num_samples;
 	mode_info.hist = hist_enable;
 	mode_info.sample_ms = sampling_ms;
 	ret = ops->set_param(bwprof_data->ph, &mode_info,
@@ -336,6 +367,7 @@ static ssize_t bwprof_set_config_store(struct config_item *item,
 	bwprof_data->sample_ms = sampling_ms;
 	bwprof_data->is_set_config = true;
 	bwprof_data->num_masters = master_cnt;
+	bwprof_data->num_samples = num_samples;
 
 	strscpy(bwprof_data->set_config_str, page,
 			sizeof(bwprof_data->set_config_str));
@@ -405,6 +437,7 @@ static ssize_t bwprof_enable_config_store(struct config_item *item,
 	const struct qcom_scmi_vendor_ops *ops = bwprof_data->bwprof_ops;
 	int ret;
 	u8 enable;
+	uint8_t start_ms = bwprof_data->num_samples * bwprof_data->sample_ms;
 
 	ret = kstrtou8(page, 10, &enable);
 	if (ret < 0)
@@ -427,7 +460,7 @@ static ssize_t bwprof_enable_config_store(struct config_item *item,
 		if (bwprof_data->is_sampling_enable) {
 			if (!hrtimer_active(&bwprof_data->bwprof_hrtimer))
 				hrtimer_start(&bwprof_data->bwprof_hrtimer,
-				ms_to_ktime(BUFFER_FILL_MS),
+				ms_to_ktime(start_ms),
 				HRTIMER_MODE_REL_PINNED);
 		} else {
 			hrtimer_cancel(&bwprof_data->bwprof_hrtimer);
@@ -447,21 +480,21 @@ static ssize_t monitor_data_show(char *page, int master_idx, u32 hw_type)
 	u32 bus_width = bwprof_data->hw_node[hw_type]->bus_width;
 	int cnt = 0;
 	int i;
-	int num_samples_to_read = (MAX_NUM_SAMPLES / bwprof_data->sample_ms);
+	int num_samples_to_read = bwprof_data->num_samples;
 	unsigned long flags;
-
-	if (bwprof_data->sample_ms >= SAMPLING_100MS)
-		num_samples_to_read = 1;
+	u32 mem_freq_to_use;
 
 	spin_lock_irqsave(&bwprof_data->rx_lock, flags);
 	for (i = 0; i < num_samples_to_read; i++) {
 		if (hw_type == BWPROF_LLCC)
-			monitor_data[i].mem_freq = LLCC_FREQ_ZERO;
+			mem_freq_to_use = LLCC_FREQ_ZERO;
+		else
+			mem_freq_to_use = monitor_data[i].mem_freq;
 		cnt += scnprintf(page + cnt, PAGE_SIZE - cnt, "%llu\t%u\t%u\t%u\n",
 				monitor_data[i].ts,
 				monitor_data[i].meas_mbps[master_idx],
-				(monitor_data[i].mem_freq * bus_width),
-				monitor_data[i].mem_freq);
+				mem_freq_to_use * bus_width,
+				mem_freq_to_use);
 	}
 	spin_unlock_irqrestore(&bwprof_data->rx_lock, flags);
 
@@ -475,7 +508,7 @@ static ssize_t hist_monitor_data(char *page, int master_idx)
 	unsigned long flags;
 
 	spin_lock_irqsave(&bwprof_data->rx_lock, flags);
-	for (i = 0; i < MAX_HIST_SAMPLES; i++) {
+	for (i = 0; i < bwprof_data->num_samples; i++) {
 		cnt += scnprintf(page + cnt, PAGE_SIZE - cnt, "%llu",
 				hist_data[i].ts);
 		for (j = 0; j < MAX_BUCKETS; j++) {
@@ -699,44 +732,48 @@ static const struct config_item_type ls_item_type = {
 
 static void trace_event(void)
 {
-	int i;
-	u32 bus_width = 0;
-	bool ddr_master_enabled = false;
-
-	for (i = 0; i < bwprof_data->num_masters; i++) {
-		if (bwprof_data->masters_list[i] >= DDR_CPU) {
-			ddr_master_enabled = true;
-			break;
-		}
-	}
-
-	if (ddr_master_enabled) {
-		if (bwprof_data->hw_node[BWPROF_DDR])
-			bus_width = bwprof_data->hw_node[BWPROF_DDR]->bus_width;
-	} else {
-		if (bwprof_data->hw_node[BWPROF_LLCC])
-			monitor_data[0].mem_freq = LLCC_FREQ_ZERO;
-	}
+	int i, j, idx;
+	u32 bus_width = bwprof_data->hw_node[BWPROF_DDR]->bus_width;
+	u32 mem_freq_to_use;
+	int num_samples_to_read = bwprof_data->num_samples;
 
 	if (!bwprof_data->is_hist_enable) {
-		trace_bwprof_last_sample_meas(dev_name(bwprof_data->dev),
-				monitor_data[0].ts,
-				monitor_data[0].meas_mbps[0],
-				monitor_data[0].meas_mbps[1],
-				monitor_data[0].meas_mbps[2],
-				(monitor_data[0].mem_freq * bus_width),
-				monitor_data[0].mem_freq);
+		for (i = 0; i < num_samples_to_read; i++) {
+			for (j = 0; j < bwprof_data->num_masters; j++) {
+				if (bwprof_data->masters_list[j] >= DDR_CPU)
+					mem_freq_to_use = monitor_data[i].mem_freq;
+				else
+					mem_freq_to_use = LLCC_FREQ_ZERO;
+
+				trace_bwprof_last_sample_meas(dev_name(bwprof_data->dev),
+					bwprof_data->masters_list[j],
+					monitor_data[i].ts,
+					monitor_data[i].meas_mbps[j],
+					(mem_freq_to_use * bus_width),
+					mem_freq_to_use);
+			}
+		}
+	} else {
+		for (i = 0; i < bwprof_data->num_samples; i++) {
+			for (j = 0; j < bwprof_data->num_masters; j++) {
+				idx = (j * MAX_BUCKETS);
+				trace_bwprof_hist_last_sample(dev_name(bwprof_data->dev),
+					bwprof_data->masters_list[j],
+					hist_data[i].ts,
+					hist_data[i].sample[idx + 0],
+					hist_data[i].sample[idx + 1],
+					hist_data[i].sample[idx + 2],
+					hist_data[i].sample[idx + 3]);
+			}
+		}
 	}
 }
 
 static void bwprof_mon_rx(struct mbox_client *client, void *msg)
 {
 	int i;
-	int num_samples_to_read  = MAX_NUM_SAMPLES / bwprof_data->sample_ms;
+	int num_samples_to_read  = bwprof_data->num_samples;
 	void __iomem *src;
-
-	if (bwprof_data->sample_ms >= SAMPLING_100MS)
-		num_samples_to_read = 1;
 
 	spin_lock(&bwprof_data->rx_lock);
 
@@ -747,7 +784,7 @@ static void bwprof_mon_rx(struct mbox_client *client, void *msg)
 					sizeof(struct bwprof_monitor_data));
 		}
 	} else {
-		for (i = 0; i < MAX_HIST_SAMPLES; i++) {
+		for (i = 0; i < num_samples_to_read; i++) {
 			src = base_src + i * sizeof(struct bwprof_hist_data);
 			memcpy_fromio(&hist_data[i], src,
 				sizeof(struct bwprof_hist_data));
@@ -892,6 +929,7 @@ int cpucp_bwprof_init(struct scmi_device *sdev)
 static enum hrtimer_restart bwprof_hrtimer_handler(struct hrtimer *timer)
 {
 	ktime_t now = ktime_get();
+	uint8_t start_ms = bwprof_data->num_samples * bwprof_data->sample_ms;
 
 	if (!atomic_read(&buffer_fill_status->state)) {
 		hrtimer_forward(timer, now, ms_to_ktime(1));
@@ -900,7 +938,7 @@ static enum hrtimer_restart bwprof_hrtimer_handler(struct hrtimer *timer)
 
 	bwprof_mon_rx_timer();
 	atomic_set(&buffer_fill_status->state, 0);
-	hrtimer_forward(timer, now, ms_to_ktime(BUFFER_FILL_MS));
+	hrtimer_forward(timer, now, ms_to_ktime(start_ms));
 
 	return HRTIMER_RESTART;
 }

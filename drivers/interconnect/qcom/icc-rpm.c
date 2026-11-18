@@ -12,6 +12,7 @@
 
 #include "icc-rpm.h"
 #include "qnoc-qos-rpm.h"
+#include "rpm-ids.h"
 
 static int qcom_icc_rpm_smd_send_msg(int ctx, int rsc_type, int rpm_id, u64 val)
 {
@@ -57,6 +58,7 @@ void qcom_icc_rpm_pre_aggregate(struct icc_node *node)
 	for (i = 0; i < RPM_NUM_CXT; i++) {
 		qn->sum_avg[i] = 0;
 		qn->max_peak[i] = 0;
+		qn->perf_mode[i] = false;
 	}
 }
 EXPORT_SYMBOL_GPL(qcom_icc_rpm_pre_aggregate);
@@ -76,18 +78,24 @@ int qcom_icc_rpm_aggregate(struct icc_node *node, u32 tag, u32 avg_bw,
 {
 	size_t i;
 	struct qcom_icc_node *qn;
+	u32 tag_cxt = tag;
 
 	qn = node->data;
 
 	if (tag && !(tag & QCOM_ICC_TAG_SLEEP))
-		tag = BIT(RPM_ACTIVE_CXT);
+		tag_cxt = BIT(RPM_ACTIVE_CXT);
 	else
-		tag = BIT(RPM_SLEEP_CXT) | BIT(RPM_ACTIVE_CXT);
+		tag_cxt = (BIT(RPM_SLEEP_CXT) | BIT(RPM_ACTIVE_CXT));
 
 	for (i = 0; i < RPM_NUM_CXT; i++) {
-		if (tag & BIT(i)) {
+		if (tag_cxt & BIT(i)) {
 			qn->sum_avg[i] += avg_bw;
 			qn->max_peak[i] = max_t(u32, qn->max_peak[i], peak_bw);
+
+			if (qn->perf_mode_mask && (avg_bw || peak_bw)) {
+				if (tag & QCOM_ICC_TAG_PERF_MODE)
+					qn->perf_mode[i] = true;
+			}
 		}
 	}
 
@@ -113,6 +121,8 @@ int qcom_icc_rpm_set(struct icc_node *src, struct icc_node *dst)
 	struct qcom_icc_node *qn;
 	struct icc_node *n, *node;
 	struct icc_provider *provider;
+	static u32 last_perf_mode[RPM_NUM_CXT] = {0, 0};
+	static u32 perf_mode[RPM_NUM_CXT] = {0, 0};
 	int ret, i;
 	int rpm_ctx;
 	u64 clk_rate, sum_avg, max_peak;
@@ -134,6 +144,12 @@ int qcom_icc_rpm_set(struct icc_node *src, struct icc_node *dst)
 	list_for_each_entry(n, &provider->nodes, node_list) {
 		qn = n->data;
 		for (i = 0; i < RPM_NUM_CXT; i++) {
+			if (qn->perf_mode_mask && i == RPM_ACTIVE_CXT) {
+				if (qn->perf_mode[i])
+					perf_mode[i] |= qn->perf_mode_mask;
+				else
+					perf_mode[i] &= ~qn->perf_mode_mask;
+			}
 			sum_avg = icc_units_to_bps(qn->sum_avg[i]);
 
 			sum_avg *= qp->util_factor;
@@ -185,6 +201,24 @@ int qcom_icc_rpm_set(struct icc_node *src, struct icc_node *dst)
 			continue;
 
 		qn->dirty = false;
+
+		if (qn->perf_mode_mask &&
+		    last_perf_mode[RPM_ACTIVE_CXT] != perf_mode[RPM_ACTIVE_CXT]) {
+			ret = qcom_icc_rpm_smd_send_msg(
+					RPM_ACTIVE_CXT,
+					RPM_BUS_SLAVE_REQ,
+					ICBID_SLAVE_ACV,
+					perf_mode[RPM_ACTIVE_CXT]);
+
+			if (ret) {
+				pr_err("qcom_icc_rpm_smd_send_msg slv %d error %d\n",
+						ICBID_SLAVE_ACV, ret);
+				return ret;
+			}
+
+			last_perf_mode[RPM_ACTIVE_CXT] = perf_mode[RPM_ACTIVE_CXT];
+		}
+
 		if ((qn->mas_rpm_id == -1) && (qn->slv_rpm_id == -1))
 			continue;
 

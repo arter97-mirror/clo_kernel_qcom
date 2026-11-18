@@ -5020,7 +5020,7 @@ static int ufs_qcom_system_thaw(struct device *dev)
 #endif
 
 static const struct of_device_id ufs_qcom_of_match[] = {
-	{ .compatible = "qcom,ufshc" },
+	{ .compatible = "qcom,sa8255p-ufshc" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, ufs_qcom_of_match);
@@ -5051,7 +5051,7 @@ static struct platform_driver ufs_qcom_pltform = {
 	.remove_new	= ufs_qcom_remove,
 	.shutdown = ufs_qcom_shutdown,
 	.driver	= {
-		.name	= "ufshcd-qcom",
+		.name	= "ufshcd-qcom-scmi",
 		.pm	= &ufs_qcom_pm_ops,
 		.of_match_table = of_match_ptr(ufs_qcom_of_match),
 		.acpi_match_table = ACPI_PTR(ufs_qcom_acpi_match),

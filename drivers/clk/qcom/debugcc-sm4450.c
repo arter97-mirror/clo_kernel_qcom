@@ -635,6 +635,64 @@ static struct clk_debug_mux gpu_cc_debug_mux = {
 	},
 };
 
+static const char *const gpu_cc_bourtzi_debug_mux_parent_names[] = {
+	"gpu_cc_crc_ahb_clk",
+	"gpu_cc_cx_accu_shift_clk",
+	"gpu_cc_cx_gfx3d_clk",
+	"gpu_cc_cx_gmu_clk",
+	"gpu_cc_cxo_clk",
+	"gpu_cc_gx_accu_shift_clk",
+	"gpu_cc_gx_gfx3d_clk",
+	"gpu_cc_gx_gmu_clk",
+	"gpu_cc_memnoc_gfx_clk",
+	"gpu_cc_rbcpr_ahb_clk",
+	"gpu_cc_rbcpr_clk",
+	"measure_only_gpu_cc_ahb_clk",
+	"measure_only_gpu_cc_cxo_aon_clk",
+	"measure_only_gpu_cc_demet_clk",
+	"measure_only_gpu_cc_gx_cxo_clk",
+	"measure_only_gpu_cc_sleep_clk",
+};
+
+static int gpu_cc_bourtzi_debug_mux_sels[] = {
+	0x11,		/* gpu_cc_crc_ahb_clk */
+	0x1F,		/* gpu_cc_cx_accu_shift_clk */
+	0x1A,		/* gpu_cc_cx_gfx3d_clk */
+	0x18,		/* gpu_cc_cx_gmu_clk */
+	0x19,		/* gpu_cc_cxo_clk */
+	0x1D,		/* gpu_cc_gx_accu_shift_clk */
+	0xB,		/* gpu_cc_gx_gfx3d_clk */
+	0x20,		/* gpu_cc_gx_gmu_clk */
+	0xF,		/* gpu_cc_memnoc_gfx_clk */
+	0x22,		/* gpu_cc_rbcpr_ahb_clk */
+	0x21,		/* gpu_cc_rbcpr_clk */
+	0x10,		/* measure_only_gpu_cc_ahb_clk */
+	0xA,		/* measure_only_gpu_cc_cxo_aon_clk */
+	0x9,		/* measure_only_gpu_cc_demet_clk */
+	0xE,		/* measure_only_gpu_cc_gx_cxo_clk */
+	0x16,		/* measure_only_gpu_cc_sleep_clk */
+};
+
+static struct clk_debug_mux gpu_cc_debug_mux_bourtzi = {
+	.priv = &debug_mux_priv,
+	.debug_offset = 0x91DC,
+	.post_div_offset = 0x913C,
+	.cbcr_offset = 0x9140,
+	.src_sel_mask = 0xFF,
+	.src_sel_shift = 0,
+	.post_div_mask = 0xF,
+	.post_div_shift = 0,
+	.post_div_val = 2,
+	.mux_sels = gpu_cc_bourtzi_debug_mux_sels,
+	.num_mux_sels = ARRAY_SIZE(gpu_cc_bourtzi_debug_mux_sels),
+	.hw.init = &(const struct clk_init_data){
+		.name = "gpu_cc_debug_mux",
+		.ops = &clk_debug_mux_ops,
+		.parent_names = gpu_cc_bourtzi_debug_mux_parent_names,
+		.num_parents = ARRAY_SIZE(gpu_cc_bourtzi_debug_mux_parent_names),
+	},
+};
+
 static const char *const mc_cc_debug_mux_parent_names[] = {
 	"measure_only_mccc_clk",
 };
@@ -652,6 +710,7 @@ static struct clk_debug_mux mc_cc_debug_mux = {
 static struct mux_regmap_names mux_list[] = {
 	{ .mux = &mc_cc_debug_mux, .regmap_name = "qcom,mccc" },
 	{ .mux = &gpu_cc_debug_mux, .regmap_name = "qcom,gpucc" },
+	{ .mux = &gpu_cc_debug_mux_bourtzi, .regmap_name = "qcom,gpuccgx" },
 	{ .mux = &disp_cc_debug_mux, .regmap_name = "qcom,dispcc" },
 	{ .mux = &cam_cc_debug_mux, .regmap_name = "qcom,camcc" },
 	{ .mux = &apss_cc_debug_mux, .regmap_name = "qcom,apsscc" },
@@ -1130,6 +1189,46 @@ static struct clk_dummy measure_only_gcc_video_xo_clk = {
 	},
 };
 
+static struct clk_dummy measure_only_gpu_cc_ahb_clk = {
+	.rrate = 1000,
+	.hw.init = &(const struct clk_init_data){
+		.name = "measure_only_gpu_cc_ahb_clk",
+		.ops = &clk_dummy_ops,
+	},
+};
+
+static struct clk_dummy measure_only_gpu_cc_cxo_aon_clk = {
+	.rrate = 1000,
+	.hw.init = &(const struct clk_init_data){
+		.name = "measure_only_gpu_cc_cxo_aon_clk",
+		.ops = &clk_dummy_ops,
+	},
+};
+
+static struct clk_dummy measure_only_gpu_cc_demet_clk = {
+	.rrate = 1000,
+	.hw.init = &(const struct clk_init_data){
+		.name = "measure_only_gpu_cc_demet_clk",
+		.ops = &clk_dummy_ops,
+	},
+};
+
+static struct clk_dummy measure_only_gpu_cc_gx_cxo_clk = {
+	.rrate = 1000,
+	.hw.init = &(const struct clk_init_data){
+		.name = "measure_only_gpu_cc_gx_cxo_clk",
+		.ops = &clk_dummy_ops,
+	},
+};
+
+static struct clk_dummy measure_only_gpu_cc_sleep_clk = {
+	.rrate = 1000,
+	.hw.init = &(const struct clk_init_data){
+		.name = "measure_only_gpu_cc_sleep_clk",
+		.ops = &clk_dummy_ops,
+	},
+};
+
 static struct clk_dummy measure_only_gcc_wcss_at_clk = {
 	.rrate = 1000,
 	.hw.init = &(const struct clk_init_data){
@@ -1302,6 +1401,11 @@ static struct clk_hw *debugcc_sm4450_hws[] = {
 	&measure_only_gcc_tme_trig_clk.hw,
 	&measure_only_gcc_video_ahb_clk.hw,
 	&measure_only_gcc_video_xo_clk.hw,
+	&measure_only_gpu_cc_ahb_clk.hw,
+	&measure_only_gpu_cc_cxo_aon_clk.hw,
+	&measure_only_gpu_cc_demet_clk.hw,
+	&measure_only_gpu_cc_gx_cxo_clk.hw,
+	&measure_only_gpu_cc_sleep_clk.hw,
 	&measure_only_gcc_wcss_at_clk.hw,
 	&measure_only_gcc_west_at_clk.hw,
 	&measure_only_gcc_west_trig_clk.hw,
@@ -1325,6 +1429,7 @@ static const struct of_device_id clk_debug_match_table[] = {
 
 static int clk_debug_sm4450_probe(struct platform_device *pdev)
 {
+	struct regmap *mux_regmap;
 	struct clk *clk;
 	int ret = 0, i;
 
@@ -1337,6 +1442,8 @@ static int clk_debug_sm4450_probe(struct platform_device *pdev)
 	BUILD_BUG_ON(ARRAY_SIZE(gcc_debug_mux_parent_names) != ARRAY_SIZE(gcc_debug_mux_sels));
 	BUILD_BUG_ON(ARRAY_SIZE(gpu_cc_debug_mux_parent_names) !=
 		ARRAY_SIZE(gpu_cc_debug_mux_sels));
+	BUILD_BUG_ON(ARRAY_SIZE(gpu_cc_bourtzi_debug_mux_parent_names) !=
+		ARRAY_SIZE(gpu_cc_bourtzi_debug_mux_sels));
 
 	clk = devm_clk_get(&pdev->dev, "xo_clk_src");
 	if (IS_ERR(clk)) {
@@ -1369,6 +1476,10 @@ static int clk_debug_sm4450_probe(struct platform_device *pdev)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(mux_list); i++) {
+		mux_regmap = mux_list[i].mux->regmap;
+		/* SKIP Mux registration if regmap is NULL or not defined */
+		if (!mux_regmap)
+			continue;
 		ret = devm_clk_register_debug_mux(&pdev->dev, mux_list[i].mux);
 		if (ret) {
 			dev_err(&pdev->dev, "Unable to register mux clk %s, err:(%d)\n",

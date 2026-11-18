@@ -491,6 +491,8 @@ int smblite_lib_get_prop_usb_voltage_now(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblite_lib_get_usb_prop_typec_mode(struct smb_charger *chg,
 				int *val);
+int smblite_lib_get_usb_prop_typec_accessory_mode(struct smb_charger *chg,
+				int *val);
 int smblite_lib_get_prop_typec_cc_orientation(struct smb_charger *chg,
 				int *val);
 int smblite_lib_get_prop_scope(struct smb_charger *chg,

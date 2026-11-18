@@ -548,7 +548,7 @@ static void mhi_pci_status_cb(struct mhi_controller *mhi_cntrl,
 	case MHI_CB_SYS_ERROR:
 		dev_warn(&pdev->dev, "firmware crashed (%u)\n", cb);
 		fallthrough;
-	case MHI_CB_EE_SBL:
+	case MHI_CB_EE_SBL_MODE:
 		dev_dbg(&pdev->dev, "EE SBL, forbid runtime suspend\n");
 		pm_runtime_forbid(&pdev->dev);
 		break;
@@ -997,7 +997,18 @@ static void mhi_pci_reset_prepare(struct pci_dev *pdev)
 	spin_unlock_bh(&mhi_pdev->lock);
 
 	del_timer_sync(&mhi_pdev->health_check_timer);
-	cancel_work_sync(&mhi_pdev->recovery_work);
+
+	/*
+	 * mhi_pci_recovery_work() can reach here via pci_reset_function()
+	 * on its own err_try_reset path. Canceling recovery_work from within
+	 * recovery_work itself would make cancel_work_sync() wait on the
+	 * work item it is currently executing, deadlocking the kworker
+	 * while holding the device lock taken by pci_reset_function(). Skip
+	 * the cancel in that case; external reset paths (sysfs, FLR) are
+	 * not running as recovery_work, so they still drain it normally.
+	 */
+	if (current_work() != &mhi_pdev->recovery_work)
+		cancel_work_sync(&mhi_pdev->recovery_work);
 
 	/* Clean up MHI state */
 	if (test_and_clear_bit(MHI_PCI_DEV_STARTED, &mhi_pdev->status)) {

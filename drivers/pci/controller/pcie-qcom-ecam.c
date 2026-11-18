@@ -5,6 +5,8 @@
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/interrupt.h>
+#include <linux/ipc_logging.h>
 #include <linux/irq.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
@@ -23,6 +25,80 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 
+#include "pci-host-common.h"
+#include "drivers/pci/pci.h"
+
+#define PCIE_ECAM_LOG_PAGES (50)
+#define PCIE_ECAM_LOG_NAME_LEN (32)
+
+/*
+ * PCIE_DBG/INFO/ERR take the per-controller-instance struct qcom_msi so
+ * every message is captured into that instance's own IPC log contexts
+ * (msi->ipc_log_long and msi->ipc_log). The RC device name is prefixed
+ * here for the IPC log only, since dev_dbg/dev_info/dev_err already
+ * print the device name themselves.
+ */
+#if IS_ENABLED(CONFIG_IPC_LOGGING)
+#define PCIE_DBG(msi, fmt, arg...) do {				\
+		if (msi) {						\
+			ipc_log_string((msi)->ipc_log_long, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			ipc_log_string((msi)->ipc_log, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			dev_dbg((msi)->dev, "%s: " fmt, __func__, ##arg); \
+		}							\
+	} while (0)
+
+#define PCIE_DBG2(msi, fmt, arg...) do {				\
+		if (msi) {						\
+			ipc_log_string((msi)->ipc_log, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			dev_dbg((msi)->dev, "%s: " fmt, __func__, ##arg); \
+		}							\
+	} while (0)
+
+#define PCIE_INFO(msi, fmt, arg...) do {				\
+		if (msi) {						\
+			ipc_log_string((msi)->ipc_log_long, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			ipc_log_string((msi)->ipc_log, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			dev_info((msi)->dev, "%s: " fmt, __func__, ##arg); \
+		}							\
+	} while (0)
+
+#define PCIE_ERR(msi, fmt, arg...) do {				\
+		if (msi) {						\
+			ipc_log_string((msi)->ipc_log_long, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			ipc_log_string((msi)->ipc_log, "%s: RC %s: " fmt, \
+					__func__, dev_name((msi)->dev), ##arg); \
+			dev_err((msi)->dev, "%s: " fmt, __func__, ##arg); \
+		}							\
+	} while (0)
+#else
+#define PCIE_DBG(msi, fmt, arg...) do {				\
+		if (msi)						\
+			dev_dbg((msi)->dev, "%s: " fmt, __func__, ##arg); \
+	} while (0)
+
+#define PCIE_DBG2(msi, fmt, arg...) do {				\
+		if (msi)						\
+			dev_dbg((msi)->dev, "%s: " fmt, __func__, ##arg); \
+	} while (0)
+
+#define PCIE_INFO(msi, fmt, arg...) do {				\
+		if (msi)						\
+			dev_info((msi)->dev, "%s: " fmt, __func__, ##arg); \
+	} while (0)
+
+#define PCIE_ERR(msi, fmt, arg...) do {				\
+		if (msi)						\
+			dev_err((msi)->dev, "%s: " fmt, __func__, ##arg); \
+	} while (0)
+
+#endif
+
 #define PCIE_MSI_CTRL_BASE			(0x820)
 #define PCIE_MSI_CTRL_SIZE			(0x68)
 #define PCIE_MSI_CTRL_ADDR_OFFS			(0x0)
@@ -33,6 +109,12 @@
 
 #define	MSI_DB_ADDR	0xa0000000
 #define MSI_IRQ_PER_GRP (32)
+
+#define PARF_INT_ALL_STATUS			0x224
+#define PARF_INT_ALL_CLEAR			0x228
+#define PARF_INT_ALL_MASK			0x22c
+#define PARF_INT_ALL_LINK_DOWN			BIT(1)
+#define PARF_INT_ALL_LINK_UP			BIT(13)
 
 /**
  * struct qcom_msi_irq - MSI IRQ information
@@ -54,6 +136,7 @@ struct qcom_msi_irq {
 
 /**
  * struct qcom_msi_grp - MSI group information
+ * @msi:		owning controller instance, for logging
  * @int_en_reg:		memory-mapped interrupt enable register address
  * @int_mask_reg:	memory-mapped interrupt mask register address
  * @int_status_reg:	memory-mapped interrupt status register address
@@ -61,6 +144,7 @@ struct qcom_msi_irq {
  * @irqs:		structure to MSI IRQ information
  */
 struct qcom_msi_grp {
+	struct qcom_msi *msi;
 	void __iomem *int_en_reg;
 	void __iomem *int_mask_reg;
 	void __iomem *int_status_reg;
@@ -83,6 +167,11 @@ struct qcom_msi_grp {
  * @msi_db_addr:	MSI doorbell address
  * @cfg_lock:		lock for configuring MSI controller registers
  * @pcie_msi_cfg:	memory-mapped MSI controller register space
+ * @ipc_log:		this controller instance's own short IPC log context,
+ *			captures every PCIE_DBG/DBG2/INFO/ERR call site
+ * @ipc_log_long:	this controller instance's own long IPC log context,
+ *			captures only PCIE_DBG/INFO/ERR call sites (excludes
+ *			the high-frequency MSI hot path logged via PCIE_DBG2)
  */
 struct qcom_msi {
 	struct list_head clients;
@@ -98,6 +187,8 @@ struct qcom_msi {
 	phys_addr_t msi_db_addr;
 	spinlock_t cfg_lock;
 	void __iomem *pcie_msi_cfg;
+	void *ipc_log;
+	void *ipc_log_long;
 };
 
 /**
@@ -116,6 +207,24 @@ struct qcom_msi_client {
 	phys_addr_t msi_addr;
 };
 
+/**
+ * struct qcom_pcie - PCIe root port information
+ * @dev:	pointer to the device node
+ * @pdev:	pointer to the Root Port pci_dev
+ * @parf:	parf address in memory map
+ * @global_irq:	multiplexed irq for error interrupts
+ * @global_irq_enabled: true once @global_irq has been successfully requested
+ * @msi:	pointer to the qcom_msi structure
+ */
+struct qcom_pcie {
+	struct device *dev;
+	struct pci_dev *pdev;
+	void __iomem *parf;
+	int global_irq;
+	bool global_irq_enabled;
+	struct qcom_msi *msi;
+};
+
 static void qcom_msi_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
@@ -126,6 +235,9 @@ static void qcom_msi_handler(struct irq_desc *desc)
 	chained_irq_enter(chip, desc);
 
 	msi_grp = irq_desc_get_handler_data(desc);
+
+	PCIE_DBG2(msi_grp->msi, "entry\n");
+
 	status = readl_relaxed(msi_grp->int_status_reg);
 	status ^= (msi_grp->mask & status);
 	writel(status, msi_grp->int_status_reg);
@@ -135,6 +247,7 @@ static void qcom_msi_handler(struct irq_desc *desc)
 			generic_handle_irq(msi_grp->irqs[i].virq);
 
 	chained_irq_exit(chip, desc);
+	PCIE_DBG2(msi_grp->msi, "exit\n");
 }
 
 static void qcom_msi_mask_irq(struct irq_data *data)
@@ -153,11 +266,15 @@ static void qcom_msi_mask_irq(struct irq_data *data)
 	msi = msi_irq->client->msi;
 	msi_grp = msi_irq->grp;
 
+	PCIE_DBG2(msi, "entry irq %u\n", data->irq);
+
 	spin_lock_irqsave(&msi->cfg_lock, flags);
 	pci_msi_mask_irq(data);
 	msi_grp->mask |= BIT(msi_irq->grp_index);
 	writel(msi_grp->mask, msi_grp->int_mask_reg);
 	spin_unlock_irqrestore(&msi->cfg_lock, flags);
+
+	PCIE_DBG2(msi, "exit\n");
 }
 
 static void qcom_msi_unmask_irq(struct irq_data *data)
@@ -176,11 +293,15 @@ static void qcom_msi_unmask_irq(struct irq_data *data)
 	msi = msi_irq->client->msi;
 	msi_grp = msi_irq->grp;
 
+	PCIE_DBG2(msi, "entry irq %u\n", data->irq);
+
 	spin_lock_irqsave(&msi->cfg_lock, flags);
 	msi_grp->mask &= ~BIT(msi_irq->grp_index);
 	writel(msi_grp->mask, msi_grp->int_mask_reg);
 	pci_msi_unmask_irq(data);
 	spin_unlock_irqrestore(&msi->cfg_lock, flags);
+
+	PCIE_DBG2(msi, "exit\n");
 }
 
 static struct irq_chip qcom_msi_irq_chip = {
@@ -197,9 +318,13 @@ static int qcom_msi_domain_prepare(struct irq_domain *domain, struct device *dev
 	struct qcom_msi *msi = domain->parent->host_data;
 	struct qcom_msi_client *client;
 
+	PCIE_DBG(msi, "entry nvec %d\n", nvec);
+
 	client = kzalloc(sizeof(*client), GFP_KERNEL);
-	if (!client)
+	if (!client) {
+		PCIE_DBG(msi, "failed to allocate client, exit ret %d\n", -ENOMEM);
 		return -ENOMEM;
+	}
 
 	client->msi = msi;
 	client->dev = dev;
@@ -210,6 +335,7 @@ static int qcom_msi_domain_prepare(struct irq_domain *domain, struct device *dev
 
 	/* zero out struct for pcie msi framework */
 	memset(arg, 0, sizeof(*arg));
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
@@ -228,15 +354,22 @@ static int qcom_msi_irq_set_affinity(struct irq_data *data,
 				const struct cpumask *mask, bool force)
 {
 	struct irq_data *parent_data = irq_get_irq_data(irqd_to_hwirq(data));
+	struct qcom_msi_irq *msi_irq = irq_data_get_irq_chip_data(data);
+	struct qcom_msi *msi = msi_irq->client->msi;
 	int ret = 0;
 
-	if (!parent_data)
+	PCIE_DBG2(msi, "entry irq %u\n", data->irq);
+
+	if (!parent_data) {
+		PCIE_DBG2(msi, "no parent_data, exit ret %d\n", -ENODEV);
 		return -ENODEV;
+	}
 
 	/* set affinity for MSI HW IRQ */
 	if (parent_data->chip->irq_set_affinity)
 		ret = parent_data->chip->irq_set_affinity(parent_data, mask, force);
 
+	PCIE_DBG2(msi, "exit ret %d\n", ret);
 	return ret;
 }
 
@@ -245,13 +378,20 @@ static void qcom_msi_irq_compose_msi_msg(struct irq_data *data, struct msi_msg *
 	struct irq_data *parent_data = irq_get_irq_data(irqd_to_hwirq(data));
 	struct qcom_msi_irq *msi_irq = irq_data_get_irq_chip_data(data);
 	struct qcom_msi_client *client = msi_irq->client;
+	struct qcom_msi *msi = client->msi;
 
-	if (!parent_data)
+	PCIE_DBG2(msi, "entry irq %u\n", data->irq);
+
+	if (!parent_data) {
+		PCIE_DBG2(msi, "no parent_data, msg not composed, exit\n");
 		return;
+	}
 
 	msg->address_lo = lower_32_bits(client->msi_addr);
 	msg->address_hi = upper_32_bits(client->msi_addr);
 	msg->data = msi_irq->pos;
+
+	PCIE_DBG2(msi, "exit\n");
 }
 
 static struct irq_chip qcom_msi_bottom_irq_chip = {
@@ -269,6 +409,8 @@ static int qcom_msi_irq_domain_alloc(struct irq_domain *domain, unsigned int vir
 	int i, ret = 0;
 	int pos;
 
+	PCIE_DBG(msi, "entry virq %u nr_irqs %u\n", virq, nr_irqs);
+
 	mutex_lock(&msi->mutex);
 	list_for_each_entry(tmp, &msi->clients, node) {
 		if (tmp->dev == dev) {
@@ -278,7 +420,7 @@ static int qcom_msi_irq_domain_alloc(struct irq_domain *domain, unsigned int vir
 	}
 
 	if (!client) {
-		dev_err(msi->dev, "failed to find MSI client dev\n");
+		PCIE_ERR(msi, "failed to find MSI client dev\n");
 		ret = -ENODEV;
 		goto out;
 	}
@@ -307,6 +449,7 @@ static int qcom_msi_irq_domain_alloc(struct irq_domain *domain, unsigned int vir
 	}
 out:
 	mutex_unlock(&msi->mutex);
+	PCIE_DBG(msi, "exit ret %d\n", ret);
 	return ret;
 }
 
@@ -325,6 +468,8 @@ static void qcom_msi_irq_domain_free(struct irq_domain *domain, unsigned int vir
 	client  = msi_irq->client;
 	msi = client->msi;
 
+	PCIE_DBG(msi, "entry virq %u nr_irqs %u\n", virq, nr_irqs);
+
 	mutex_lock(&msi->mutex);
 	bitmap_clear(msi->bitmap, msi_irq->pos, nr_irqs);
 
@@ -336,6 +481,7 @@ static void qcom_msi_irq_domain_free(struct irq_domain *domain, unsigned int vir
 	mutex_unlock(&msi->mutex);
 
 	irq_domain_free_irqs_parent(domain, virq, nr_irqs);
+	PCIE_DBG(msi, "exit\n");
 }
 
 static const struct irq_domain_ops msi_domain_ops = {
@@ -345,21 +491,24 @@ static const struct irq_domain_ops msi_domain_ops = {
 
 static int qcom_msi_alloc_domains(struct qcom_msi *msi)
 {
+	PCIE_DBG(msi, "entry\n");
+
 	msi->inner_domain = irq_domain_add_linear(NULL, msi->nr_virqs,
 						&msi_domain_ops, msi);
 	if (!msi->inner_domain) {
-		dev_err(msi->dev, "failed to create IRQ inner domain\n");
+		PCIE_ERR(msi, "failed to create IRQ inner domain, exit ret %d\n", -ENOMEM);
 		return -ENOMEM;
 	}
 
 	msi->msi_domain = pci_msi_create_irq_domain(of_node_to_fwnode(msi->dev->of_node),
 					&qcom_msi_domain_info, msi->inner_domain);
 	if (!msi->msi_domain) {
-		dev_err(msi->dev, "failed to create MSI domain\n");
+		PCIE_ERR(msi, "failed to create MSI domain, exit ret %d\n", -ENOMEM);
 		irq_domain_remove(msi->inner_domain);
 		return -ENOMEM;
 	}
 
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
@@ -370,17 +519,19 @@ static int qcom_msi_irq_setup(struct qcom_msi *msi)
 	int i, index, ret;
 	unsigned int irq;
 
+	PCIE_DBG(msi, "entry\n");
+
 	/* setup each MSI group. nr_hwirqs == nr_grps */
 	for (i = 0; i < msi->nr_hwirqs; i++) {
 		irq = irq_of_parse_and_map(msi->dev->of_node, i);
 		if (!irq) {
-			dev_err(msi->dev,
-				"MSI: failed to parse/map interrupt\n");
+			PCIE_ERR(msi, "MSI: failed to parse/map interrupt\n");
 			ret = -ENODEV;
 			goto free_irqs;
 		}
 
 		msi_grp = &msi->grps[i];
+		msi_grp->msi = msi;
 		msi_grp->int_en_reg = msi->pcie_msi_cfg +
 				PCIE_MSI_CTRL_INT_N_EN_OFFS(i);
 		msi_grp->int_mask_reg = msi->pcie_msi_cfg +
@@ -400,6 +551,7 @@ static int qcom_msi_irq_setup(struct qcom_msi *msi)
 		irq_set_chained_handler_and_data(irq, qcom_msi_handler, msi_grp);
 	}
 
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 
 free_irqs:
@@ -407,9 +559,12 @@ free_irqs:
 		irq = msi->grps[i].irqs[0].hwirq;
 
 		irq_set_chained_handler_and_data(irq, NULL, NULL);
+		synchronize_irq(irq);
 		irq_dispose_mapping(irq);
+		msi->grps[i].irqs[0].hwirq = 0;
 	}
 
+	PCIE_DBG(msi, "exit ret %d\n", ret);
 	return ret;
 }
 
@@ -419,6 +574,8 @@ static void qcom_msi_config(struct irq_domain *domain)
 	int i;
 
 	msi = domain->parent->host_data;
+
+	PCIE_DBG(msi, "entry\n");
 
 	/* program termination address */
 	writel(msi->msi_db_addr, msi->pcie_msi_cfg + PCIE_MSI_CTRL_ADDR_OFFS);
@@ -431,13 +588,44 @@ static void qcom_msi_config(struct irq_domain *domain)
 		writel(msi_grp->mask, msi_grp->int_mask_reg);
 		writel(~0, msi_grp->int_en_reg);
 	}
+
+	PCIE_DBG(msi, "exit\n");
 }
 
 static void qcom_msi_deinit(struct qcom_msi *msi)
 {
+	PCIE_DBG(msi, "entry\n");
+
 	irq_domain_remove(msi->msi_domain);
 	irq_domain_remove(msi->inner_domain);
+
+	PCIE_DBG(msi, "exit\n");
+
+	ipc_log_context_destroy(msi->ipc_log);
+	msi->ipc_log = NULL;
+	ipc_log_context_destroy(msi->ipc_log_long);
+	msi->ipc_log_long = NULL;
 }
+
+#if IS_ENABLED(CONFIG_IPC_LOGGING)
+static void qcom_msi_create_ipc_logs(struct qcom_msi *msi)
+{
+	char log_name[PCIE_ECAM_LOG_NAME_LEN];
+
+	scnprintf(log_name, PCIE_ECAM_LOG_NAME_LEN, "%s-short", dev_name(msi->dev));
+	msi->ipc_log = ipc_log_context_create(PCIE_ECAM_LOG_PAGES, log_name, 0);
+
+	scnprintf(log_name, PCIE_ECAM_LOG_NAME_LEN, "%s-long", dev_name(msi->dev));
+	msi->ipc_log_long = ipc_log_context_create(PCIE_ECAM_LOG_PAGES, log_name, 0);
+
+	if (!msi->ipc_log || !msi->ipc_log_long)
+		dev_err(msi->dev, "%s: RC %s: unable to create IPC log context\n",
+			__func__, dev_name(msi->dev));
+}
+#else
+static void qcom_msi_create_ipc_logs(struct qcom_msi *msi)
+{ }
+#endif
 
 static struct qcom_msi *qcom_msi_init(struct device *dev)
 {
@@ -446,12 +634,17 @@ static struct qcom_msi *qcom_msi_init(struct device *dev)
 	struct of_phandle_args irq;
 	int ret;
 	int nr = 0;
+	int global_idx;
+
+	dev_info(dev, "%s: RC %s: entry\n", __func__, dev_name(dev));
 
 	msi = devm_kzalloc(dev, sizeof(*msi), GFP_KERNEL);
 	if (!msi)
 		return ERR_PTR(-ENOMEM);
 
 	msi->dev = dev;
+	qcom_msi_create_ipc_logs(msi);
+
 	mutex_init(&msi->mutex);
 	spin_lock_init(&msi->cfg_lock);
 	INIT_LIST_HEAD(&msi->clients);
@@ -459,52 +652,127 @@ static struct qcom_msi *qcom_msi_init(struct device *dev)
 	msi->msi_db_addr = MSI_DB_ADDR;
 	while (of_irq_parse_one(dev->of_node, nr, &irq) == 0)
 		nr++;
+
+	/* global_int is optional and, if present, must be the last interrupt */
+	global_idx = of_property_match_string(dev->of_node, "interrupt-names",
+							"global_int");
+	if (global_idx >= 0) {
+		if (global_idx != nr - 1) {
+			PCIE_ERR(msi, "global_int must be the last interrupt (idx %d of %d)\n",
+							global_idx, nr);
+			ret = -EINVAL;
+			goto destroy_logs;
+		}
+		nr--;
+	}
 	msi->nr_hwirqs = nr;
+
 	if (!msi->nr_hwirqs) {
-		dev_err(msi->dev, "no hwirqs found\n");
-		return ERR_PTR(-ENODEV);
+		PCIE_ERR(msi, "no hwirqs found, exit ret %d\n", -ENODEV);
+		ret = -ENODEV;
+		goto destroy_logs;
 	}
 
 	ret = of_address_to_resource(dev->of_node, 0, &cfgres);
 	if (ret) {
-		dev_err(dev, "failed to get reg address\n");
-		return ERR_PTR(ret);
+		PCIE_ERR(msi, "failed to get reg address, exit ret %d\n", ret);
+		goto destroy_logs;
 	}
 
-	dev_dbg(msi->dev, "hwirq:%d pcie_msi_cfg:%llx\n", msi->nr_hwirqs, cfgres.start);
+	PCIE_DBG(msi, "hwirq:%d pcie_msi_cfg:%llx\n", msi->nr_hwirqs, cfgres.start);
 	msi->pcie_msi_cfg = devm_ioremap(dev, cfgres.start + PCIE_MSI_CTRL_BASE,
 								PCIE_MSI_CTRL_SIZE);
-	if (!msi->pcie_msi_cfg)
-		return ERR_PTR(-ENOMEM);
+	if (!msi->pcie_msi_cfg) {
+		PCIE_ERR(msi, "failed to ioremap pcie_msi_cfg, exit ret %d\n", -ENOMEM);
+		ret = -ENOMEM;
+		goto destroy_logs;
+	}
 
 	msi->nr_virqs = msi->nr_hwirqs * MSI_IRQ_PER_GRP;
 	msi->nr_grps = msi->nr_hwirqs;
 	msi->grps = devm_kcalloc(dev, msi->nr_grps, sizeof(*msi->grps), GFP_KERNEL);
-	if (!msi->grps)
-		return ERR_PTR(-ENOMEM);
+	if (!msi->grps) {
+		PCIE_DBG(msi, "failed to allocate grps, exit ret %d\n", -ENOMEM);
+		ret = -ENOMEM;
+		goto destroy_logs;
+	}
 
 	msi->bitmap = devm_kcalloc(dev, BITS_TO_LONGS(msi->nr_virqs),
 				sizeof(*msi->bitmap), GFP_KERNEL);
-	if (!msi->bitmap)
-		return ERR_PTR(-ENOMEM);
+	if (!msi->bitmap) {
+		PCIE_DBG(msi, "failed to allocate bitmap, exit ret %d\n", -ENOMEM);
+		ret = -ENOMEM;
+		goto destroy_logs;
+	}
 
 	ret = qcom_msi_alloc_domains(msi);
-	if (ret)
-		return ERR_PTR(ret);
+	if (ret) {
+		PCIE_DBG(msi, "qcom_msi_alloc_domains failed, exit ret %d\n", ret);
+		goto destroy_logs;
+	}
 
 	ret = qcom_msi_irq_setup(msi);
 	if (ret) {
+		PCIE_DBG(msi, "qcom_msi_irq_setup failed, exit ret %d\n", ret);
 		qcom_msi_deinit(msi);
 		return ERR_PTR(ret);
 	}
 
 	qcom_msi_config(msi->msi_domain);
+	PCIE_DBG(msi, "exit ret success\n");
 	return msi;
+
+destroy_logs:
+	ipc_log_context_destroy(msi->ipc_log);
+	ipc_log_context_destroy(msi->ipc_log_long);
+	return ERR_PTR(ret);
+}
+
+static void pcie_qcom_ecam_handle_link_down(struct pci_dev *port, struct qcom_msi *msi)
+{
+	PCIE_DBG(msi, "entry\n");
+#if IS_ENABLED(CONFIG_PCIEAER)
+	pcie_do_recovery(port, pci_channel_io_normal, NULL);
+#endif
+	PCIE_DBG(msi, "exit\n");
+}
+
+static irqreturn_t qcom_pcie_global_irq_thread(int irq, void *data)
+{
+	struct qcom_pcie *pcie = data;
+	u32 int_status;
+
+	if (!pcie->parf) {
+		PCIE_ERR(pcie->msi, "Global IRQ fired with no parf mapping, ignoring\n");
+		return IRQ_HANDLED;
+	}
+
+	int_status = readl_relaxed(pcie->parf + PARF_INT_ALL_STATUS);
+
+	PCIE_DBG(pcie->msi, "global_int triggered int_status:0x%x\n", int_status);
+
+	writel_relaxed(int_status, pcie->parf + PARF_INT_ALL_CLEAR);
+	if (PARF_INT_ALL_LINK_DOWN & int_status) {
+		PCIE_ERR(pcie->msi, "Received PCIe Linkdown IRQ\n");
+		if (pcie->pdev)
+			pcie_qcom_ecam_handle_link_down(pcie->pdev, pcie->msi);
+		else
+			PCIE_ERR(pcie->msi, "Root Port pci_dev unavailable, skipping recovery\n");
+	} else if (PARF_INT_ALL_LINK_UP & int_status) {
+		PCIE_DBG(pcie->msi, "Received PCIe Link up IRQ\n");
+	}
+
+	PCIE_DBG(pcie->msi, "exit\n");
+	return IRQ_HANDLED;
 }
 
 static int qcom_pcie_ecam_suspend(struct device *dev)
 {
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 	int ret;
+
+	PCIE_DBG(msi, "entry\n");
 
 	/*
 	 * Due to usage of single power domain with GenPd framework, there is
@@ -515,19 +783,23 @@ static int qcom_pcie_ecam_suspend(struct device *dev)
 	 */
 	ret = pm_runtime_put_sync(dev);
 	if (ret < 0)
-		dev_err(dev, "fail to suspend pcie controller: %d\n", ret);
+		PCIE_ERR(msi, "fail to suspend pcie controller: %d\n", ret);
 
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
 static int qcom_pcie_ecam_resume(struct device *dev)
 {
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 	int ret;
+
+	PCIE_DBG(msi, "entry\n");
 
 	ret = pm_runtime_get_sync(dev);
 	if (ret < 0)
-		dev_err(dev, "fail to resume pcie controller: %d\n", ret);
+		PCIE_ERR(msi, "fail to resume pcie controller: %d\n", ret);
 
 	if (msi)
 		qcom_msi_config(msi->msi_domain);
@@ -538,17 +810,35 @@ static int qcom_pcie_ecam_resume(struct device *dev)
 	 * driver based pm_runtime_get_sync() returning positive number, and will
 	 * till return success here.
 	 */
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
 static int qcom_pci_ecam_runtime_suspend(struct device *dev)
 {
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
+
+	PCIE_DBG(msi, "entry\n");
+
+	/*
+	 * Quiesce the global link IRQ before the PARF register block loses
+	 * power, so qcom_pcie_global_irq_thread() cannot race the power-down
+	 * transition and access a clock/power-collapsed pcie->parf.
+	 */
+	if (pcie && pcie->global_irq_enabled)
+		disable_irq(pcie->global_irq);
+
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
 static int qcom_pci_ecam_runtime_resume(struct device *dev)
 {
-	struct qcom_msi *msi = (struct qcom_msi *)dev_get_drvdata(dev);
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
+
+	PCIE_DBG(msi, "entry\n");
 
 	/*
 	 * During suspend msi address gets cleared,
@@ -557,14 +847,34 @@ static int qcom_pci_ecam_runtime_resume(struct device *dev)
 	if (msi)
 		qcom_msi_config(msi->msi_domain);
 
+	/*
+	 * PARF_INT_ALL_MASK is cleared across power collapse; re-arm the link
+	 * interrupts before re-enabling the IRQ so qcom_pcie_global_irq_thread()
+	 * cannot observe a stale masked state once it fires again.
+	 */
+	if (pcie && pcie->global_irq_enabled) {
+		if (pcie->parf) {
+			u32 val = readl_relaxed(pcie->parf + PARF_INT_ALL_MASK);
+
+			val |= PARF_INT_ALL_LINK_DOWN | PARF_INT_ALL_LINK_UP;
+			writel_relaxed(val, pcie->parf + PARF_INT_ALL_MASK);
+		}
+		enable_irq(pcie->global_irq);
+	}
+
+	PCIE_DBG(msi, "exit ret success\n");
 	return 0;
 }
 
 static void qcom_pcie_ecam_shutdown(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct qcom_pcie *pcie = (struct qcom_pcie *)dev_get_drvdata(dev);
+	struct qcom_msi *msi = pcie ? pcie->msi : NULL;
 	int ret;
 	int initial_usage_count = atomic_read(&dev->power.usage_count);
+
+	PCIE_DBG(msi, "entry\n");
 
 	/*
 	 * Check if kernel's device_shutdown() increased usage_count before
@@ -590,46 +900,130 @@ static void qcom_pcie_ecam_shutdown(struct platform_device *pdev)
 	/* Put PCIe into D3cold to avoid any access while rebooting device */
 	ret = qcom_pcie_ecam_suspend(dev);
 	if (ret)
-		dev_err(dev, "fail to shutdown pcie controller: %d\n", ret);
+		PCIE_ERR(msi, "fail to shutdown pcie controller: %d\n", ret);
 
 	/*
 	 * Restore ignore children flag to default state (though system is shutting down)
 	 * This is good practice for code clarity
 	 */
 	pm_suspend_ignore_children(dev, false);
+
+	PCIE_DBG(msi, "exit\n");
+}
+
+static void qcom_pcie_put_pdev(void *data)
+{
+	pci_dev_put((struct pci_dev *)data);
 }
 
 static int qcom_pcie_ecam_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct qcom_msi *msi;
-	int ret;
+	int ret = 0;
+	struct qcom_pcie *pcie;
+	struct pci_host_bridge *bridge;
+	struct pci_dev *rp;
+	u32 val;
+
+	dev_info(dev, "%s: RC %s: entry\n", __func__, dev_name(dev));
+	pcie = devm_kzalloc(dev, sizeof(*pcie), GFP_KERNEL);
+	if (!pcie)
+		return -ENOMEM;
+
+	pcie->dev = dev;
+
+	/* parf register space is optional */
+	pcie->parf = devm_platform_ioremap_resource_byname(pdev, "parf");
+	if (IS_ERR(pcie->parf)) {
+		dev_err(dev, "Failed to get parf address\n");
+		pcie->parf = NULL;
+	}
+
+	/* Global INT is optional */
+	pcie->global_irq = platform_get_irq_byname(pdev, "global_int");
+	if (pcie->global_irq < 0)
+		dev_err(dev, "Failed to get Global IRQ: %d\n", pcie->global_irq);
 
 	ret = devm_pm_runtime_enable(dev);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "%s: RC %s: devm_pm_runtime_enable failed, exit ret %d\n",
+			__func__, dev_name(dev), ret);
 		return ret;
+	}
 
 	ret = pm_runtime_resume_and_get(dev);
 	if (ret < 0) {
-		dev_err(dev, "fail to enable pcie controller: %d\n", ret);
+		dev_err(dev, "%s: RC %s: fail to enable pcie controller, exit ret %d\n",
+			__func__, dev_name(dev), ret);
 		return ret;
 	}
 
 	msi = qcom_msi_init(dev);
 	if (IS_ERR(msi)) {
+		dev_err(dev, "%s: RC %s: qcom_msi_init failed, exit ret %ld\n",
+			__func__, dev_name(dev), PTR_ERR(msi));
 		pm_runtime_put_sync(dev);
 		return PTR_ERR(msi);
+	}
+	pcie->msi = msi;
+
+	if (pcie->parf && pcie->global_irq >= 0) {
+		/* Ensure link interrupts are masked before the IRQ goes live. */
+		val = readl_relaxed(pcie->parf + PARF_INT_ALL_MASK);
+		val &= ~(PARF_INT_ALL_LINK_DOWN | PARF_INT_ALL_LINK_UP);
+		writel_relaxed(val, pcie->parf + PARF_INT_ALL_MASK);
+
+		ret = devm_request_threaded_irq(dev, pcie->global_irq, NULL,
+						qcom_pcie_global_irq_thread,
+						IRQF_ONESHOT,
+						"global_irq", pcie);
+		if (ret) {
+			PCIE_ERR(msi, "Failed to request global IRQ: %d\n", ret);
+			qcom_msi_deinit(msi);
+			pm_runtime_put_sync(dev);
+			return ret;
+		}
+		pcie->global_irq_enabled = true;
 	}
 
 	ret = pci_host_common_probe(pdev);
 	if (ret) {
-		dev_err(dev, "pci_host_common_probe() failed:%d\n", ret);
+		PCIE_ERR(msi, "pci_host_common_probe() failed:%d\n", ret);
 		qcom_msi_deinit(msi);
 		pm_runtime_put_sync(dev);
+		PCIE_DBG(msi, "pci_host_common_probe failed, exit ret %d\n", ret);
+		return ret;
 	}
 
-	dev_set_drvdata(&pdev->dev, msi);
-	return ret;
+	/*
+	 * pci_host_common_probe() sets platform drvdata to the host bridge.
+	 * Retrieve the Root Port pci_dev (bus 0, devfn 0) from it so we can
+	 * pass it to pcie_qcom_ecam_handle_link_down() on link-down events.
+	 */
+	bridge = platform_get_drvdata(pdev);
+	dev_set_drvdata(&pdev->dev, pcie);
+	rp = pci_get_slot(bridge->bus, PCI_DEVFN(0, 0));
+	if (rp) {
+		ret = devm_add_action_or_reset(dev, qcom_pcie_put_pdev, rp);
+		if (ret) {
+			dev_err(dev, "Failed to register pci_dev cleanup: %d\n",
+				ret);
+			rp = NULL;
+		}
+	} else
+		dev_warn(dev, "Failed to get Root Port pci_dev\n");
+
+	pcie->pdev = rp;
+
+	if (pcie->parf && pcie->global_irq_enabled) {
+		val = readl_relaxed(pcie->parf + PARF_INT_ALL_MASK);
+		val |= PARF_INT_ALL_LINK_DOWN | PARF_INT_ALL_LINK_UP;
+		writel(val, pcie->parf + PARF_INT_ALL_MASK);
+	}
+
+	PCIE_DBG(msi, "exit ret %d\n", ret);
+	return 0;
 }
 
 static const struct dev_pm_ops qcom_pcie_ecam_pm_ops = {

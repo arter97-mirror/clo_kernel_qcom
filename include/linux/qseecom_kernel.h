@@ -49,7 +49,6 @@ struct qseecom_drv_ops {
 };
 
 int provide_qseecom_kernel_fun_ops(const struct qseecom_drv_ops *ops);
-int get_qseecom_kernel_fun_ops(void);
 #endif
 
 #endif /* __QSEECOM_KERNEL_H_ */

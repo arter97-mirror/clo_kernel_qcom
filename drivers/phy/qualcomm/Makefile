@@ -30,6 +30,8 @@ obj-$(CONFIG_PHY_QCOM_QMP_COMBO) += phy-qcom-qmp-combo.o
 
 obj-$(CONFIG_PHY_QCOM_UFS_V4_WAIPIO) += phy-qcom-ufs-qmp-v4-waipio.o
 
+obj-$(CONFIG_PHY_QCOM_UFS_V4_DIWALI) += phy-qcom-ufs-qmp-v4-diwali.o
+
 obj-$(CONFIG_PHY_QCOM_UFS_V4_CROW) += phy-qcom-ufs-qmp-v4-crow.o
 
 obj-$(CONFIG_PHY_QCOM_QMP_USB) += phy-qcom-qmp-usb.o

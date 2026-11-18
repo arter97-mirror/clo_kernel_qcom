@@ -2,6 +2,8 @@
 
 ccflags-y += -I$(src)
 
+obj-$(CONFIG_CLK_GLYMUR_DEBUGCC) += debugcc-glymur.o
+
 obj-$(CONFIG_CLK_SHIKRA_DEBUGCC) += debugcc-shikra.o
 
 obj-$(CONFIG_CLK_SHIKRA_DISPCC) += dispcc-shikra.o
@@ -93,6 +95,8 @@ obj-$(CONFIG_SM_CAMCC_CANOE) += camcc-canoe.o
 
 obj-$(CONFIG_SM_CAMCC_CHORA) += camcc-chora.o
 
+obj-$(CONFIG_SM_CAMCC_DIWALI) += camcc-diwali.o
+
 obj-$(CONFIG_SM_CAMCC_SUN) += camcc-sun.o
 
 obj-$(CONFIG_SM_DEBUGCC_4450) += debugcc-sm4450.o
@@ -123,6 +127,8 @@ obj-$(CONFIG_SM_DISPCC_CANOE) += dispcc-canoe.o
 
 obj-$(CONFIG_SM_DISPCC_CHORA) += dispcc-chora.o
 
+obj-$(CONFIG_SM_DISPCC_DIWALI) += dispcc-diwali.o
+
 obj-$(CONFIG_SM_DISPCC_KHAJE) += dispcc-khaje.o
 
 obj-$(CONFIG_SM_DISPCC_MALABAR) += dispcc-malabar.o
@@ -145,6 +151,8 @@ obj-$(CONFIG_SM_GCC_CANOE) += gcc-canoe.o
 
 obj-$(CONFIG_SM_GCC_CHORA) += gcc-chora.o
 
+obj-$(CONFIG_SM_GCC_FILLMORE) += gcc-fillmore.o
+
 obj-$(CONFIG_SM_GCC_KHAJE) += gcc-khaje.o
 
 obj-$(CONFIG_SM_GCC_MALABAR) += gcc-malabar.o
@@ -160,6 +168,8 @@ obj-$(CONFIG_SM_GPUCC_8350) += gpucc-sm8350.o
 obj-$(CONFIG_SM_GPUCC_CANOE) += gpucc-canoe.o
 
 obj-$(CONFIG_SM_GPUCC_CHORA) += gpucc-chora.o
+
+obj-$(CONFIG_SM_GPUCC_DIWALI) += gpucc-diwali.o
 
 obj-$(CONFIG_SM_GPUCC_KHAJE) += gpucc-khaje.o
 
@@ -188,6 +198,8 @@ obj-$(CONFIG_SM_VIDEOCC_8550) += videocc-sm8550.o
 obj-$(CONFIG_SM_VIDEOCC_CANOE) += videocc-canoe.o
 
 obj-$(CONFIG_SM_VIDEOCC_CHORA) += videocc-chora.o
+
+obj-$(CONFIG_SM_VIDEOCC_DIWALI) += videocc-diwali.o
 
 obj-$(CONFIG_SM_VIDEOCC_SUN) += videocc-sun.o
 

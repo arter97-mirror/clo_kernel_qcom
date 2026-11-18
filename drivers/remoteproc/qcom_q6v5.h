@@ -1,9 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ */
 
 #ifndef __QCOM_Q6V5_H__
 #define __QCOM_Q6V5_H__
 
 #include <linux/kernel.h>
+#include <linux/atomic.h>
 #include <linux/completion.h>
 #include <linux/soc/qcom/qcom_aoss.h>
 
@@ -30,6 +34,7 @@ struct qcom_q6v5 {
 
 	struct icc_path *path;
 	struct icc_path *crypto_path;
+	struct icc_path *cnoc_path;
 
 	unsigned int stop_bit;
 	unsigned int ping_bit;
@@ -58,7 +63,7 @@ struct qcom_q6v5 {
 	int crash_stack;
 	unsigned int smem_host_id;
 
-	bool running;
+	atomic_t running;
 
 	const char *load_state;
 	void (*handover)(struct qcom_q6v5 *q6v5);
