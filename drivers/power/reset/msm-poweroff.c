@@ -36,11 +36,13 @@ static int do_msm_poweroff(struct sys_off_data *data)
 	 * emergency_restart() (SysRq 'b') skips reboot_notifier_list, so
 	 * qcom_dload_reboot() never clears download mode — firmware retains
 	 * FULLDUMP and enters dump mode instead of rebooting.  Set NODUMP here
-	 * for all non-panic restarts.  qcom_scm_disable_sdi() and
+	 * for non-panic, non-EDL restarts.  qcom_scm_disable_sdi() and
 	 * qcom_scm_set_download_mode() use the atomic SCM path (no
 	 * qcom_scm_lock), safe after smp_send_stop().
+	 * For EDL reboots, qcom_dload_reboot() has already set DOWNLOAD_EDL
+	 * via the reboot notifier chain — do not overwrite it here.
 	 */
-	if (!panic_in_progress) {
+	if (!panic_in_progress && !(data->cmd && !strcmp(data->cmd, "edl"))) {
 		qcom_scm_disable_sdi();
 		qcom_scm_set_download_mode(QCOM_DOWNLOAD_NODUMP);
 	}
